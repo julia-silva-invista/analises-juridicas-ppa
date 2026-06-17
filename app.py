@@ -13,7 +13,7 @@ import gradio as gr
 
 from design import CSS, HEADER_HTML, FOOTER_HTML
 from processos import proc_analisar, proc_gerar_word, proc_responder
-from rj import rj_analisar, rj_gerar_word, rj_responder
+from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores
 from matriculas import mat_gerar_excel, mat_responder
 from coleta import coleta_gerar
 
@@ -240,8 +240,11 @@ with gr.Blocks(
             rj_relatorio_state = gr.State("")
 
             with gr.Row():
-                rj_word_btn = gr.Button("Baixar Word", variant="secondary", elem_classes=["word-download-btn"])
-            rj_word_file = gr.File(label="", interactive=False, visible=False, elem_classes=["word-file-output"])
+                rj_word_btn          = gr.Button("Baixar Word",            variant="secondary", elem_classes=["word-download-btn"])
+                rj_excel_cred_btn    = gr.Button("Gerar Excel de Credores", variant="secondary", elem_classes=["word-download-btn"])
+            rj_word_file      = gr.File(label="",                  interactive=False, visible=False, elem_classes=["word-file-output"])
+            rj_excel_cred_file   = gr.File(label="Excel de Credores", interactive=False, visible=False, elem_classes=["word-file-output"])
+            rj_excel_cred_status = gr.Textbox(label="", interactive=False, lines=1, show_label=False)
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Column(elem_classes=["qa-section"]):
@@ -396,6 +399,11 @@ with gr.Blocks(
         outputs=[rj_log, rj_report, rj_relatorio_state],
     )
     rj_word_btn.click(fn=rj_gerar_word, inputs=[rj_relatorio_state], outputs=[rj_word_file])
+    rj_excel_cred_btn.click(
+        fn=rj_gerar_excel_credores,
+        inputs=[rj_relatorio_state],
+        outputs=[rj_excel_cred_file, rj_excel_cred_status],
+    )
     rj_perguntar_btn.click(
         fn=rj_responder, inputs=[rj_pergunta, rj_relatorio_state], outputs=[rj_resposta]
     )
@@ -419,4 +427,5 @@ with gr.Blocks(
     fb_enviar_btn.click(fn=salvar_feedback, inputs=[fb_nome, fb_email, fb_mensagem], outputs=[fb_status])
 
 
+demo.queue(max_size=10)
 demo.launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", 7860)), max_file_size="2gb", ssr_mode=False)

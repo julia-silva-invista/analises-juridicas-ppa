@@ -3,7 +3,9 @@ import os
 import re
 import time
 import tempfile
+from pathlib import Path
 
+import fitz
 from google import genai
 from google.genai import types
 from docx import Document as DocxDoc
@@ -138,6 +140,54 @@ def _responder_pergunta_generica(pergunta: str, relatorio: str, client, model: s
         return client.models.generate_content(model=model, contents=[prompt]).text
     return _retry(_fn)
 
+
+
+def _comprimir_pdf(path: str) -> tuple:
+    """
+    Re-renderiza páginas escaneadas a 110 DPI / JPEG quality 48 (moderado-alto).
+    Páginas de texto são copiadas sem perda. Retorna (path_comprimido, mb_original, mb_comprimido).
+    Se a compressão não trouxer ganho ou falhar, devolve o path original.
+    """
+    original_mb = Path(path).stat().st_size / 1_048_576
+    tmp_path = None
+    try:
+        doc = fitz.open(path)
+        new_doc = fitz.open()
+        for pn, page in enumerate(doc):
+            txt = page.get_text().strip()
+            alfa = sum(c.isalpha() for c in txt) if txt else 0
+            is_text = (
+                len(txt) >= 50
+                and alfa / max(len(txt), 1) >= 0.4
+                and len(txt.split()) >= 30
+            )
+            if is_text:
+                new_doc.insert_pdf(doc, from_page=pn, to_page=pn)
+            else:
+                mat = fitz.Matrix(110 / 72, 110 / 72)
+                pix = page.get_pixmap(matrix=mat)
+                img_bytes = pix.tobytes("jpeg", jpg_quality=48)
+                rect = page.rect
+                new_page = new_doc.new_page(width=rect.width, height=rect.height)
+                new_page.insert_image(rect, stream=img_bytes, keep_proportion=False)
+        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+        new_doc.save(tmp_path, garbage=4, deflate=True, clean=True)
+        new_doc.close()
+        doc.close()
+        compressed_mb = Path(tmp_path).stat().st_size / 1_048_576
+        if compressed_mb >= original_mb * 0.95:
+            os.remove(tmp_path)
+            return path, original_mb, original_mb
+        return tmp_path, original_mb, compressed_mb
+    except Exception:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        return path, original_mb, original_mb
 
 
 def _barra_progresso(atual: int, total: int) -> str:

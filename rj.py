@@ -1,5 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
 import os
+import re
+import json
 import math
 import time
 import tempfile
@@ -7,6 +9,7 @@ import threading
 import concurrent.futures
 from pathlib import Path
 from typing import Optional
+from collections import defaultdict
 
 import fitz
 import gradio as gr
@@ -14,20 +17,41 @@ from google import genai
 from google.genai import types
 
 from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
-from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _barra_progresso
+from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _barra_progresso, _comprimir_pdf
 
-CHUNK_MAX_PAGES_RJ    = 200
+CHUNK_MAX_PAGES_RJ    = 700
 MODEL_EXTRACAO_RJ     = os.getenv("GEMINI_MODEL_EXTRACAO", "gemini-2.5-flash")
 MODEL_RAPIDO_RJ       = os.getenv("GEMINI_MODEL_RAPIDO", "gemini-2.5-flash")
 MODEL_PRO_RJ          = os.getenv("GEMINI_MODEL_CONSOLIDACAO", "gemini-2.5-pro")
 MODEL_CONSOLIDACAO_RJ = MODEL_PRO_RJ
-AVG_MIN_POR_CHUNK_RJ  = 4
+AVG_MIN_POR_CHUNK_RJ  = 3
 MIN_CONSOLIDACAO_RJ   = 8
+COMPRESSAO_PRE_MB_RJ  = 50   # só pré-comprime se puder caber no modo direto
 # MÓDULO — ANÁLISE DE RECUPERAÇÃO JUDICIAL (Teste B)
 # ══════════════════════════════════════════════════════════════════════════════
 
 _rj_cache_nome: dict[str, str] = {}
 _rj_cache_lock = threading.Lock()
+
+PROMPT_RJ = (
+    "Voce esta analisando um trecho de um processo de Recuperacao Judicial brasileiro.\n"
+    "Extraia COM MAXIMO DETALHE todas as informacoes presentes nestas paginas.\n"
+    "Para paginas escaneadas: aplique OCR visual completo.\n\n"
+    "Cubra TODOS os itens encontrados:\n"
+    "- Recuperandos (nome, CPF/CNPJ, papel)\n"
+    "- Administrador Judicial\n"
+    "- Advogados e escritorios (nome, OAB)\n"
+    "- Datas relevantes: pedido, deferimento, AGC, PRJ, RMA\n"
+    "- Status do PRJ, AGC, RMA, QGC\n"
+    "- Stay period (prazo, prorrogacoes)\n"
+    "- Endividamento fiscal e tributario\n"
+    "- Imoveis, contratos, CCBs (numero, valor, garantia, avalistas, indices)\n"
+    "- Creditos extraconcursais\n"
+    "- Execucoes relacionadas (numero, partes, valor, status, andamentos)\n"
+    "- Divergencias, impugnacoes e habilitacoes de credito\n"
+    "- Andamentos processuais com datas (TODOS)\n"
+    "Nao omita nada. Nao invente. Se nao encontrar, diga explicitamente.\n"
+)
 
 
 def _rj_dividir_pdf(path: str) -> list:
@@ -82,25 +106,6 @@ def _rj_extrair_chunk(args) -> tuple:
         pass
 
     n_scan = len(imagens_pag)
-    PROMPT_RJ = (
-        "Voce esta analisando um trecho de um processo de Recuperacao Judicial brasileiro.\n"
-        "Extraia COM MAXIMO DETALHE todas as informacoes presentes nestas paginas.\n"
-        "Para paginas escaneadas: aplique OCR visual completo.\n\n"
-        "Cubra TODOS os itens encontrados:\n"
-        "- Recuperandos (nome, CPF/CNPJ, papel)\n"
-        "- Administrador Judicial\n"
-        "- Advogados e escritorios (nome, OAB)\n"
-        "- Datas relevantes: pedido, deferimento, AGC, PRJ, RMA\n"
-        "- Status do PRJ, AGC, RMA, QGC\n"
-        "- Stay period (prazo, prorrogacoes)\n"
-        "- Endividamento fiscal e tributario\n"
-        "- Imoveis, contratos, CCBs (numero, valor, garantia, avalistas, indices)\n"
-        "- Creditos extraconcursais\n"
-        "- Execucoes relacionadas (numero, partes, valor, status, andamentos)\n"
-        "- Divergencias, impugnacoes e habilitacoes de credito\n"
-        "- Andamentos processuais com datas (TODOS)\n"
-        "Nao omita nada. Nao invente. Se nao encontrar, diga explicitamente.\n"
-    )
 
     cabecalho = (
         f"[PARTE {idx+1}/{n_total} — paginas {pg_ini}-{pg_fim}]\n"
@@ -125,6 +130,71 @@ def _rj_extrair_chunk(args) -> tuple:
     resultado = _retry(_call)
     nota = f"{n_scan} pag. escaneadas via imagem" if n_scan else ""
     return idx, resultado, nota
+
+
+def _rj_extrair_chunk_fileapi(args) -> tuple:
+    """Comprime chunk, faz upload para o File API e extrai via leitura nativa de PDF."""
+    idx, chunk_path, offset, total_pg, n_total, client = args
+    pg_ini = offset + 1
+    pg_fim = min(offset + CHUNK_MAX_PAGES_RJ, total_pg) if total_pg else "?"
+
+    # Comprimir chunk antes do upload (acontece em paralelo nos workers)
+    comp_chunk, orig_mb, comp_mb = _comprimir_pdf(chunk_path)
+    source_for_upload = comp_chunk
+    if comp_chunk != chunk_path:
+        comp_nota = f"{orig_mb:.0f}→{comp_mb:.0f}MB"
+    else:
+        comp_nota = f"{orig_mb:.0f}MB"
+
+    ascii_tmp = None
+    try:
+        source_for_upload.encode("ascii")
+        upload_path = source_for_upload
+    except (UnicodeEncodeError, AttributeError):
+        import shutil as _shutil
+        t = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        t.close()
+        _shutil.copy2(source_for_upload, t.name)
+        upload_path = ascii_tmp = t.name
+
+    arq = client.files.upload(file=upload_path)
+    total_wait, wait_time = 0, 1
+    while total_wait < 120:
+        state_name = getattr(getattr(arq, "state", None), "name", "")
+        if state_name in ("ACTIVE", "FAILED"):
+            break
+        time.sleep(wait_time)
+        total_wait += wait_time
+        arq = client.files.get(name=arq.name)
+        wait_time = min(wait_time + 1, 4)
+
+    if ascii_tmp:
+        try: os.remove(ascii_tmp)
+        except: pass
+    if comp_chunk != chunk_path:
+        try: os.remove(comp_chunk)
+        except: pass
+
+    prompt = (
+        f"[PARTE {idx+1}/{n_total} — paginas {pg_ini}-{pg_fim}]\n"
+        "Nao omita nenhum dado mesmo que pareca repetitivo.\n\n"
+        + PROMPT_RJ
+    )
+    mime = getattr(arq, "mime_type", None) or "application/pdf"
+    contents = [types.Content(role="user", parts=[
+        types.Part(text=prompt),
+        types.Part(file_data=types.FileData(file_uri=arq.uri, mime_type=mime)),
+    ])]
+
+    def _call():
+        return client.models.generate_content(model=MODEL_EXTRACAO_RJ, contents=contents).text
+
+    resultado = _retry(_call)
+
+    try: client.files.delete(name=arq.name)
+    except: pass
+
+    return idx, resultado, f"File API | {comp_nota}"
 
 
 def _rj_obter_cache(client, model_cons: str) -> Optional[str]:
@@ -348,11 +418,31 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
     yield "\n".join(log), "", ""
 
     todos_chunks = []
+    _temp_comprimidos: list = []
     for path in pdf_paths:
         nome = Path(path).name
-        chunks = _rj_dividir_pdf(path)
+        mb_orig = Path(path).stat().st_size / 1_048_576
+
+        path_proc = path
+        if 10 <= mb_orig <= COMPRESSAO_PRE_MB_RJ:
+            # Arquivo pequeno: pré-comprime pois pode caber no modo direto
+            log.append(f"   Comprimindo {nome} ({mb_orig:.0f} MB)...")
+            yield "\n".join(log), "", ""
+            comp_path, orig_mb, comp_mb = _comprimir_pdf(path)
+            if comp_path != path:
+                reducao = (1 - comp_mb / orig_mb) * 100
+                log[-1] = f"   {nome}: {orig_mb:.0f} MB → {comp_mb:.0f} MB (-{reducao:.0f}%)"
+                yield "\n".join(log), "", ""
+                _temp_comprimidos.append(comp_path)
+                path_proc = comp_path
+        elif mb_orig > COMPRESSAO_PRE_MB_RJ:
+            # Arquivo grande: vai direto ao chunked; compressao por chunk em paralelo
+            log.append(f"   {nome} ({mb_orig:.0f} MB) — compressao por chunk (paralelo)")
+            yield "\n".join(log), "", ""
+
+        chunks = _rj_dividir_pdf(path_proc)
         total_pg = chunks[0][2] if chunks else 0
-        doc_tmp = fitz.open(path)
+        doc_tmp = fitz.open(path_proc)
         esc = []
         for i, p in enumerate(doc_tmp):
             txt = p.get_text().strip()
@@ -372,16 +462,16 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
             todos_chunks.append((chunk_path, offset, total, path))
 
     n = len(todos_chunks)
-    n_rodadas = math.ceil(n / 2)
+    n_rodadas = math.ceil(n / 4)
     tempo_est = n_rodadas * AVG_MIN_POR_CHUNK_RJ + MIN_CONSOLIDACAO_RJ
-    log.append(f"\nEstimativa: ~{tempo_est} min | {n} chunk(s) · 2 chaves paralelas · {model_cons}")
+    log.append(f"\nEstimativa: ~{tempo_est} min | {n} chunk(s) · 4 workers · File API · {model_cons}")
     yield "\n".join(log), "", ""
 
     t_inicio = time.time()
 
     try:
-        # Extracao paralela inline
-        log.append(f"\nExtraindo {n} chunk(s) em paralelo (Flash 2.5 · inline)...")
+        # Extração paralela via File API — 4 workers
+        log.append(f"\nExtraindo {n} chunk(s) em paralelo (4 workers · File API)...")
         log.append(_barra_progresso(0, n))
         yield "\n".join(log), "", ""
 
@@ -390,10 +480,10 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         def _worker_rj(idx):
             cp, offset, total_pg, _ = todos_chunks[idx]
             cli = client1 if idx % 2 == 0 else client2
-            return _rj_extrair_chunk((idx, cp, offset, total_pg, n, cli))
+            return _rj_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli))
 
         t_extr = time.time()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
             futures = {ex.submit(_worker_rj, i): i for i in range(n)}
             for future in concurrent.futures.as_completed(futures):
                 try:
@@ -401,7 +491,8 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
                     parciais[idx] = res
                     c = len(parciais)
                     log[-1] = _barra_progresso(c, n)
-                    est_rest = (n - c) * AVG_MIN_POR_CHUNK_RJ
+                    rounds_left = math.ceil((n - c) / 4)
+                    est_rest = rounds_left * AVG_MIN_POR_CHUNK_RJ
                     log.append(
                         f"   Chunk {idx+1}/{n} extraido"
                         + (f" [{nota}]" if nota else "")
@@ -469,6 +560,9 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
             if cp != orig:
                 try: os.remove(cp)
                 except: pass
+        for cp in _temp_comprimidos:
+            try: os.remove(cp)
+            except: pass
 
 
 def rj_gerar_word(relatorio: str):
@@ -484,6 +578,240 @@ def rj_responder(pergunta: str, relatorio: str):
         return _responder_pergunta_generica(pergunta, relatorio, client, MODEL_CONSOLIDACAO_RJ)
     except Exception as e:
         return f"Erro: {e}"
+
+
+# ── Excel de Credores ─────────────────────────────────────────────────────────
+
+_CLASSE_ORDER = [
+    "I - Trabalhista",
+    "II - Garantia Real",
+    "III - Quirografário",
+    "IV - ME/EPP",
+    "Extraconcursal",
+]
+
+_CLASSE_FILL = {
+    "I - Trabalhista":     "FFF2CC",
+    "II - Garantia Real":  "D9E1F2",
+    "III - Quirografário": "E2EFDA",
+    "IV - ME/EPP":         "FCE4D6",
+    "Extraconcursal":      "F2F2F2",
+}
+
+
+def _normalizar_classe(raw: str) -> str:
+    c = (raw or "").upper()
+    if re.search(r'\bCLASSE\s*I\b', c) or any(x in c for x in ("TRABALH", "ACIDENT")):
+        return "I - Trabalhista"
+    if re.search(r'\bCLASSE\s*II\b', c) or "GARANTIA REAL" in c:
+        return "II - Garantia Real"
+    if re.search(r'\bCLASSE\s*III\b', c) or "QUIROGRAF" in c:
+        return "III - Quirografário"
+    if re.search(r'\bCLASSE\s*IV\b', c) or any(x in c for x in ("ME/EPP", "MICROEMPRES", "PEQUENO")):
+        return "IV - ME/EPP"
+    if "EXTRACONCURSAL" in c:
+        return "Extraconcursal"
+    return raw.strip() if raw else "Não classificado"
+
+
+def _extrair_credores_json(relatorio: str, client, model: str) -> list:
+    prompt = (
+        "Com base no relatório de Recuperação Judicial abaixo, extraia a ÚLTIMA lista de credores "
+        "divulgada (QGC - Quadro Geral de Credores ou lista de habilitações mais recente).\n\n"
+        "Retorne um JSON com campo 'credores' contendo array de objetos, cada um com:\n"
+        "- nome: string (nome/razão social)\n"
+        "- cpf_cnpj: string ou null\n"
+        "- classe: 'I - Trabalhista' | 'II - Garantia Real' | 'III - Quirografário' | 'IV - ME/EPP' | 'Extraconcursal'\n"
+        "- natureza: string ou null (trabalhista, bancário, fornecedor, tributário, debenturista, CRI, CRA, CCB, etc.)\n"
+        "- instrumento: string ou null (ex: CCB nº 12345, Contrato nº X, NP, duplicata, etc.)\n"
+        "- garantia_tipo: string ou null (ex: alienação fiduciária de imóvel, hipoteca, penhor de ações, etc.)\n"
+        "- bem_garantia: string ou null (descrição do bem dado em garantia)\n"
+        "- valor_original: number ou null (em reais, sem formatação)\n"
+        "- data_base: string ou null (DD/MM/AAAA)\n"
+        "- valor_atualizado: number ou null (valor habilitado/atualizado em reais)\n"
+        "- status: string ou null ('Habilitado' | 'Impugnado' | 'Divergente' | 'Extraconcursal' | 'Incluído')\n"
+        "- processo_habilitacao: string ou null (nº do incidente de habilitação ou impugnação)\n"
+        "- observacoes: string ou null\n\n"
+        "Retorne APENAS JSON válido, sem markdown, sem texto adicional.\n\n"
+        f"RELATÓRIO:\n{relatorio[:120_000]}"
+    )
+    config = types.GenerateContentConfig(response_mime_type="application/json")
+
+    def _fn():
+        return client.models.generate_content(model=model, contents=[prompt], config=config).text
+
+    raw = _retry(_fn)
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"```(?:json)?\n?", "", raw).strip().rstrip("`").strip()
+    try:
+        data = json.loads(raw)
+        credores = data.get("credores", data if isinstance(data, list) else [])
+        return credores
+    except json.JSONDecodeError:
+        return []
+
+
+def _gerar_excel_credores(credores: list) -> str:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    COR_HEADER = "1F4E79"
+    COR_SUB    = "BDD7EE"
+    COR_TOTAL  = "2E75B6"
+
+    thin  = Side(style="thin", color="D0D0D0")
+    borda = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    COLS = [
+        ("Nome do Credor",                  48),
+        ("CPF/CNPJ",                        18),
+        ("Classe",                           22),
+        ("Natureza do Crédito",              22),
+        ("Instrumento / Lastro",             32),
+        ("Garantia (tipo)",                  26),
+        ("Bem dado em Garantia",             36),
+        ("Valor Original (R$)",              18),
+        ("Data Base",                        12),
+        ("Valor Atualizado (R$)",            18),
+        ("Status",                           16),
+        ("Proc. Habilitação / Impugnação",   30),
+        ("% do Total",                       11),
+        ("% da Classe",                      11),
+        ("Observações",                      42),
+    ]
+    N = len(COLS)
+    last_col = get_column_letter(N)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "QGC"
+
+    # Título
+    ws.merge_cells(f"A1:{last_col}1")
+    t = ws["A1"]
+    t.value = "QUADRO GERAL DE CREDORES — RECUPERAÇÃO JUDICIAL"
+    t.font      = Font(name="Calibri", bold=True, size=14, color="FFFFFF")
+    t.fill      = PatternFill("solid", fgColor=COR_HEADER)
+    t.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 32
+
+    # Cabeçalho
+    HR = 2
+    for ci, (h, w) in enumerate(COLS, 1):
+        cell = ws.cell(row=HR, column=ci, value=h)
+        cell.font      = Font(name="Calibri", bold=True, color="FFFFFF", size=10)
+        cell.fill      = PatternFill("solid", fgColor=COR_HEADER)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border    = borda
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    ws.row_dimensions[HR].height = 34
+    ws.freeze_panes = ws.cell(row=HR + 1, column=1)
+
+    # Total geral para calcular %
+    total_geral = sum(float(c.get("valor_atualizado") or 0) for c in credores)
+
+    # Agrupa por classe
+    grupos: dict = defaultdict(list)
+    for c in credores:
+        grupos[_normalizar_classe(c.get("classe", ""))].append(c)
+
+    def fv(v):
+        try: return float(v) if v not in (None, "") else None
+        except: return None
+
+    cur = HR + 1
+
+    classes_ord   = [cl for cl in _CLASSE_ORDER if cl in grupos]
+    classes_extra = [cl for cl in grupos if cl not in _CLASSE_ORDER]
+
+    for classe in classes_ord + classes_extra:
+        lista        = grupos[classe]
+        fill_cl      = PatternFill("solid", fgColor=_CLASSE_FILL.get(classe, "FFFFFF"))
+        total_classe = sum(float(c.get("valor_atualizado") or 0) for c in lista)
+
+        for credor in lista:
+            va = fv(credor.get("valor_atualizado"))
+            vo = fv(credor.get("valor_original"))
+            pct_tot = (va / total_geral)  if (va and total_geral)  else None
+            pct_cl  = (va / total_classe) if (va and total_classe) else None
+
+            row_vals = [
+                credor.get("nome"),
+                credor.get("cpf_cnpj"),
+                classe,
+                credor.get("natureza"),
+                credor.get("instrumento"),
+                credor.get("garantia_tipo"),
+                credor.get("bem_garantia"),
+                vo,
+                credor.get("data_base"),
+                va,
+                credor.get("status"),
+                credor.get("processo_habilitacao"),
+                pct_tot,
+                pct_cl,
+                credor.get("observacoes"),
+            ]
+
+            for ci, val in enumerate(row_vals, 1):
+                cell = ws.cell(row=cur, column=ci, value=val)
+                cell.fill      = fill_cl
+                cell.font      = Font(name="Calibri", size=10)
+                cell.border    = borda
+                cell.alignment = Alignment(vertical="center", wrap_text=(ci in (1, 5, 7, 15)))
+                if ci in (8, 10):
+                    cell.number_format = '#,##0.00'
+                elif ci in (13, 14):
+                    cell.number_format = '0.00%'
+            cur += 1
+
+        # Subtotal da classe
+        sf = PatternFill("solid", fgColor=COR_SUB)
+        sb = Font(name="Calibri", bold=True, size=10)
+        for ci in range(1, N + 1):
+            c = ws.cell(row=cur, column=ci)
+            c.fill = sf; c.font = sb; c.border = borda
+        ws.cell(row=cur, column=1).value = f"Subtotal — {classe}  ({len(lista)} credores)"
+        c10 = ws.cell(row=cur, column=10, value=total_classe)
+        c10.number_format = '#,##0.00'
+        if total_geral:
+            c13 = ws.cell(row=cur, column=13, value=total_classe / total_geral)
+            c13.number_format = '0.00%'
+        cur += 1
+
+    # Total geral
+    tf   = PatternFill("solid", fgColor=COR_TOTAL)
+    tfnt = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
+    for ci in range(1, N + 1):
+        c = ws.cell(row=cur, column=ci)
+        c.fill = tf; c.font = tfnt; c.border = borda
+    ws.cell(row=cur, column=1).value  = f"TOTAL GERAL  ({len(credores)} credores)"
+    c10 = ws.cell(row=cur, column=10, value=total_geral)
+    c10.number_format = '#,##0.00'
+    ws.row_dimensions[cur].height = 22
+
+    ws.auto_filter.ref = f"A{HR}:{last_col}{cur - 1}"
+
+    out = os.path.join(tempfile.gettempdir(), "qgc_credores_rj.xlsx")
+    wb.save(out)
+    return out
+
+
+def rj_gerar_excel_credores(relatorio: str):
+    if not relatorio.strip():
+        return gr.update(value=None, visible=False), "Gere uma análise primeiro."
+    try:
+        k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
+        client = genai.Client(api_key=k1)
+        credores = _extrair_credores_json(relatorio, client, MODEL_CONSOLIDACAO_RJ)
+        if not credores:
+            return gr.update(value=None, visible=False), "Nenhum credor identificado no relatório."
+        path = _gerar_excel_credores(credores)
+        return gr.update(value=path, visible=True), f"{len(credores)} credor(es) exportados."
+    except Exception as e:
+        return gr.update(value=None, visible=False), f"Erro: {e}"
 
 
 
