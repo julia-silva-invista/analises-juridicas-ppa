@@ -272,10 +272,37 @@ with gr.Blocks(
                     gr.Markdown(
                         "**Como usar:**\n\n"
                         "1. Faça upload das matrículas (uma ou mais)\n"
-                        "2. Clique em **Gerar Excel**\n"
-                        "3. Baixe o arquivo gerado\n\n"
+                        "2. Preencha os dados da execução (opcional) para colorir alertas\n"
+                        "3. Clique em **Gerar Excel**\n"
+                        "4. Baixe o arquivo gerado\n\n"
                         "_Suporta matrículas escaneadas ou digitais._"
                     )
+
+            with gr.Accordion("Dados da execução — alertas de coloração (opcional)", open=False):
+                with gr.Row():
+                    mat_data_ajuizamento = gr.Textbox(
+                        label="Data do ajuizamento",
+                        placeholder="DD/MM/AAAA",
+                        lines=1,
+                        scale=1,
+                    )
+                with gr.Row():
+                    mat_devedores = gr.Textbox(
+                        label="Devedores (um por linha: CPF/CNPJ — Nome)",
+                        placeholder="123.456.789-00 — João da Silva\n12.345.678/0001-90 — Empresa XYZ Ltda",
+                        lines=4,
+                        scale=1,
+                    )
+                    mat_relacionados = gr.Textbox(
+                        label="Pessoas do grupo econômico (um por linha: CPF/CNPJ — Nome)",
+                        placeholder="111.222.333-44 — Maria Oliveira\n55.666.777/0001-88 — Holdings XYZ S/A",
+                        lines=4,
+                        scale=1,
+                    )
+                gr.Markdown(
+                    "🟡 **Amarelo claro** — transmissão envolvendo devedor ou pessoa do grupo  \n"
+                    "🔴 **Vermelho claro** — transmissão após data de ajuizamento"
+                )
 
             mat_gerar_btn = gr.Button("Gerar Excel", variant="primary", size="lg")
 
@@ -412,7 +439,9 @@ with gr.Blocks(
 
     # Matrículas
     mat_gerar_btn.click(
-        fn=mat_gerar_excel, inputs=[mat_arquivos], outputs=[mat_log, mat_status, mat_excel],
+        fn=mat_gerar_excel,
+        inputs=[mat_arquivos, mat_data_ajuizamento, mat_devedores, mat_relacionados],
+        outputs=[mat_log, mat_status, mat_excel],
         concurrency_limit=2,
     )
     mat_perguntar_btn.click(

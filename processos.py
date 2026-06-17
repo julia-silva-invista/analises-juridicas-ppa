@@ -32,6 +32,10 @@ _proc_cache_lock = threading.Lock()
 
 PROMPT_EXTR_PROC = (
     "Voce esta analisando uma parte de um processo judicial brasileiro.\n"
+    "IMPORTANTE: este arquivo pode ser um fragmento de um processo maior dividido em multiplos PDFs "
+    "pelo tribunal, OU pode ser um processo independente. Extraia o numero do processo se disponivel — "
+    "isso sera usado para detectar continuidade na consolidacao. Trate cada fragmento como parte de "
+    "um documento continuo; a consolidacao final verificara se sao o mesmo processo ou processos distintos.\n"
     "Extraia e registre COM MAXIMO DETALHE todas as informacoes presentes nestas paginas:\n"
     "- Partes (nomes, CPF/CNPJ, qualidade: exequente, executado, avalista, etc.)\n"
     "- Advogados e OABs\n"
@@ -256,15 +260,20 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
             ).text
         return _retry(_fn)
 
+    _instrucoes_extra = f"INSTRUCOES ADICIONAIS: {instrucoes.strip()}\n\n" if instrucoes.strip() else ""
+    _aviso_multiplos = (
+        f"ATENCAO: foram carregados {len(parciais)} fragmentos de arquivo(s). "
+        "Verifique se compartilham o mesmo numero de processo — se sim, trate como UM UNICO PROCESSO CONTINUO. "
+        "Se forem processos distintos, gere secoes separadas para cada um.\n\n"
+    ) if len(parciais) > 1 else ""
     prompt = (
         "A seguir estao as extracoes brutas de cada parte do processo. "
         "Com base nelas, produza o relatorio juridico final seguindo rigorosamente "
         "o modelo de formatacao.\n\n"
-        f"INSTRUCOES ADICIONAIS: {instrucoes.strip()}\n\n" if instrucoes.strip() else
-        "A seguir estao as extracoes brutas de cada parte do processo. "
-        "Com base nelas, produza o relatorio juridico final seguindo rigorosamente "
-        "o modelo de formatacao.\n\n"
-    ) + blocos
+        + _aviso_multiplos
+        + _instrucoes_extra
+        + blocos
+    )
 
     if cache_name:
         contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
@@ -427,9 +436,13 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
         yield f"Erro de configuracao: {e}", "", ""
         return
 
+    def _nat_key(p):
+        return [int(x) if x.isdigit() else x.lower()
+                for x in re.split(r"(\d+)", Path(p).name)]
+
     pdf_paths = sorted(
         [f.name if hasattr(f, "name") else str(f) for f in pdf_files],
-        key=lambda p: Path(p).name.lower()
+        key=_nat_key
     )
     log = []
     relatorio_state = ""
@@ -439,6 +452,8 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
     for p in pdf_paths:
         mb = Path(p).stat().st_size / 1_048_576
         log.append(f"   · {Path(p).name} ({mb:.1f} MB)")
+    if len(pdf_paths) > 1:
+        log.append(f"   → {len(pdf_paths)} arquivos — o modelo verificara se sao fragmentos do mesmo processo ou processos distintos")
     if instrucoes.strip():
         log.append("Instrucoes adicionais recebidas.")
     log.append(f"Modelo de consolidacao: {model_cons}")

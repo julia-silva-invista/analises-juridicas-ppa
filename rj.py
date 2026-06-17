@@ -35,6 +35,10 @@ _rj_cache_lock = threading.Lock()
 
 PROMPT_RJ = (
     "Voce esta analisando um trecho de um processo de Recuperacao Judicial brasileiro.\n"
+    "IMPORTANTE: este arquivo pode ser um fragmento de um processo maior dividido em multiplos PDFs "
+    "pelo tribunal, OU pode ser um processo independente. Extraia o numero do processo se disponivel — "
+    "isso sera usado para detectar continuidade na consolidacao. Trate cada fragmento como parte de "
+    "um documento continuo; a consolidacao final verificara se sao o mesmo processo ou processos distintos.\n"
     "Extraia COM MAXIMO DETALHE todas as informacoes presentes nestas paginas.\n"
     "Para paginas escaneadas: aplique OCR visual completo.\n\n"
     "Cubra TODOS os itens encontrados:\n"
@@ -290,12 +294,20 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
             ).text
         return _retry(_fn)
 
+    n_partes_cons = texto_merged.count("PARTE ") if texto_merged else 0
+    _aviso_multiplos_rj = (
+        f"ATENCAO: foram carregados fragmentos de {n_partes_cons} parte(s). "
+        "Verifique se compartilham o mesmo numero de processo de Recuperacao Judicial — "
+        "se sim, trate como UM UNICO PROCESSO CONTINUO. "
+        "Se forem processos distintos, gere secoes separadas para cada um.\n\n"
+    ) if n_partes_cons > 1 else ""
     prompt = (
         "Com base nas informacoes extraidas abaixo (de multiplas partes do processo), "
         "gere APENAS a Secao A do relatorio de Recuperacao Judicial, "
         "seguindo RIGOROSAMENTE o template fornecido.\n\n"
-        "Consolide informacoes duplicadas — priorize a mais completa e recente.\n\n"
-        f"INFORMACOES EXTRAIDAS:\n{texto_merged}\n\n"
+        + _aviso_multiplos_rj
+        + "Consolide informacoes duplicadas — priorize a mais completa e recente.\n\n"
+        + f"INFORMACOES EXTRAIDAS:\n{texto_merged}\n\n"
     )
     if instrucoes.strip():
         prompt += f"INSTRUCOES ADICIONAIS: {instrucoes.strip()}\n\n"
@@ -407,9 +419,13 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         yield f"Erro de configuracao: {e}", "", ""
         return
 
+    def _nat_key(p):
+        return [int(x) if x.isdigit() else x.lower()
+                for x in re.split(r"(\d+)", Path(p).name)]
+
     pdf_paths = sorted(
         [f.name if hasattr(f, "name") else str(f) for f in pdf_files],
-        key=lambda p: Path(p).name.lower()
+        key=_nat_key
     )
     log = []
     model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
@@ -418,6 +434,8 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
     for p in pdf_paths:
         mb = Path(p).stat().st_size / 1_048_576
         log.append(f"   · {Path(p).name} ({mb:.1f} MB)")
+    if len(pdf_paths) > 1:
+        log.append(f"   → {len(pdf_paths)} arquivos — o modelo verificara se sao fragmentos do mesmo processo ou processos distintos")
     log.append(f"Modelo de consolidacao: {model_cons}")
     yield "\n".join(log), "", ""
 
