@@ -37,6 +37,8 @@ def _mat_get_clients():
 class OnusFinanceiro(BaseModel):
     codigo: Optional[str] = None
     tipo: Optional[str] = None          # penhora, hipoteca, alienacao fiduciaria, CCB, etc.
+    numero_processo: Optional[str] = None   # nº do processo judicial (penhora, arresto, execucao)
+    numero_instrumento: Optional[str] = None  # nº da CCB, contrato, operacao bancaria
     valor_principal: Optional[float] = None
     data_celebracao: Optional[str] = None
     parcela_mensal: Optional[float] = None
@@ -137,6 +139,11 @@ PROMPT_MATRICULA = (
     " CCB, confissao de divida ou qualquer titulo de credito), preencha onus_financeiros com:\n"
     "   - codigo: codigo do ato (ex: R.5, AV.9)\n"
     "   - tipo: tipo do onus (ex: penhora, hipoteca, alienacao fiduciaria, CCB)\n"
+    "   - numero_processo: OBRIGATORIO para penhora, arresto, execucao e qualquer ato judicial."
+    " Informe o numero completo do processo (ex: 0001234-56.2023.8.26.0100). Null se nao for ato judicial.\n"
+    "   - numero_instrumento: OBRIGATORIO para CCB, contrato bancario, operacao de credito, cedula."
+    " Informe o numero da CCB, do contrato ou da operacao (ex: CCB 12345, Contrato 67890, Op. 00123)."
+    " Null se nao for instrumento de credito.\n"
     "   - valor_principal: valor em reais (numero puro, sem R$ ou pontos)\n"
     "   - data_celebracao: data do ato em DD/MM/AAAA\n"
     "   - parcela_mensal: valor da parcela mensal se explicitamente indicada. Null se nao houver.\n"
@@ -295,11 +302,13 @@ def _mat_calcular_valor_onus(onus_list: list, data_referencia: date = None) -> s
         if cancelado:
             continue
 
-        codigo   = _get("codigo")
-        tipo     = _get("tipo") or ""
-        valor    = _get("valor_principal")
-        data_str = _get("data_celebracao")
-        parcela  = _get("parcela_mensal")
+        codigo             = _get("codigo")
+        tipo               = _get("tipo") or ""
+        numero_processo    = _get("numero_processo")
+        numero_instrumento = _get("numero_instrumento")
+        valor              = _get("valor_principal")
+        data_str           = _get("data_celebracao")
+        parcela            = _get("parcela_mensal")
 
         # Ignora tipos não financeiros (indisponibilidade, premonitória, etc.)
         tipo_lower = tipo.lower()
@@ -322,8 +331,20 @@ def _mat_calcular_valor_onus(onus_list: list, data_referencia: date = None) -> s
         valor_atualizado = valor * (1 + 0.01 * meses)
         total += valor_atualizado
 
-        prefixo = f"∘ {codigo}: " if codigo else "∘ "
+        prefixo = f"∘ {codigo}" if codigo else "∘"
+        if tipo:
+            prefixo += f" ({tipo})"
+        prefixo += ": "
+
         linha = prefixo + _fmt_brl(valor_atualizado)
+
+        # Número do processo (penhoras, arrestos, execuções)
+        if numero_processo:
+            linha += f"\n   Proc. {numero_processo}"
+
+        # Número do instrumento (CCB, contrato, operação)
+        if numero_instrumento:
+            linha += f"\n   {numero_instrumento}"
 
         if parcela and parcela > 0:
             saldo = valor_atualizado - parcela * meses
