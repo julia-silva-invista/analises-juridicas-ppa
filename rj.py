@@ -510,7 +510,7 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
             cli = client1 if idx % 2 == 0 else client2
             return _retry(
                 lambda: _rj_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
-                n=2, wait=15
+                tentativas=2, espera_base=15
             )
 
         t_extr = time.time()

@@ -573,7 +573,7 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
                 cli = client1 if idx % 2 == 0 else client2
                 return _retry(
                     lambda: _proc_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
-                    n=2, wait=15
+                    tentativas=2, espera_base=15
                 )
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
