@@ -238,6 +238,7 @@ with gr.Blocks(
                     )
 
             rj_relatorio_state = gr.State("")
+            rj_extracao_state  = gr.State("")   # texto bruto das extrações (fonte para o Excel de credores)
 
             with gr.Row():
                 rj_word_btn          = gr.Button("Baixar Word",            variant="secondary", elem_classes=["word-download-btn"])
@@ -424,13 +425,13 @@ with gr.Blocks(
     rj_analisar_btn.click(
         fn=rj_analisar,
         inputs=[rj_pdf_principal, rj_pdf_relacionados, rj_instrucoes, rj_usar_pro, rj_versao_resumida],
-        outputs=[rj_log, rj_report, rj_relatorio_state],
+        outputs=[rj_log, rj_report, rj_relatorio_state, rj_extracao_state],
         concurrency_limit=2,
     )
     rj_word_btn.click(fn=rj_gerar_word, inputs=[rj_relatorio_state], outputs=[rj_word_file])
     rj_excel_cred_btn.click(
         fn=rj_gerar_excel_credores,
-        inputs=[rj_relatorio_state],
+        inputs=[rj_relatorio_state, rj_extracao_state],
         outputs=[rj_excel_cred_file, rj_excel_cred_status],
     )
     rj_perguntar_btn.click(

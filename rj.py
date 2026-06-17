@@ -494,6 +494,8 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
 
     t_inicio = time.time()
 
+    texto_merged = ""  # disponivel no finally para o Excel de credores
+
     try:
         # Extração paralela via File API — 4 workers
         log.append(f"\nExtraindo {n} chunk(s) em paralelo (4 workers · File API)...")
@@ -574,11 +576,11 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         relatorio = "\n\n".join(s for s in secoes if s)
         t_total = int(time.time() - t_inicio)
         log.append(f"\nAnalise concluida em {t_total//60}min{t_total%60:02d}s | {len(relatorio):,} chars")
-        yield "\n".join(log), relatorio, relatorio
+        yield "\n".join(log), relatorio, relatorio, texto_merged
 
     except Exception as exc:
         log.append(f"\nErro: {exc}")
-        yield "\n".join(log), f"Erro:\n{exc}", ""
+        yield "\n".join(log), f"Erro:\n{exc}", "", ""
 
     finally:
         for cp, _, _, orig in todos_chunks:
@@ -824,17 +826,27 @@ def _gerar_excel_credores(credores: list) -> str:
     return out
 
 
-def rj_gerar_excel_credores(relatorio: str):
-    if not relatorio.strip():
+def rj_gerar_excel_credores(relatorio: str, texto_bruto: str = ""):
+    """
+    Extrai credores preferencialmente do texto bruto da extração (que contém
+    o QGC na íntegra), caindo para o relatório consolidado se não disponível.
+    """
+    fonte = texto_bruto.strip() if texto_bruto and texto_bruto.strip() else relatorio.strip()
+    if not fonte:
         return gr.update(value=None, visible=False), "Gere uma análise primeiro."
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
-        credores = _extrair_credores_json(relatorio, client, MODEL_CONSOLIDACAO_RJ)
+        credores = _extrair_credores_json(fonte, client, MODEL_CONSOLIDACAO_RJ)
         if not credores:
-            return gr.update(value=None, visible=False), "Nenhum credor identificado no relatório."
+            # Fallback: tenta com o relatório consolidado se não achou no bruto
+            if texto_bruto and relatorio.strip() and fonte != relatorio.strip():
+                credores = _extrair_credores_json(relatorio, client, MODEL_CONSOLIDACAO_RJ)
+        if not credores:
+            return gr.update(value=None, visible=False), "Nenhum credor identificado. Verifique se o QGC consta no PDF."
         path = _gerar_excel_credores(credores)
-        return gr.update(value=path, visible=True), f"{len(credores)} credor(es) exportados."
+        origem = "extração bruta" if (texto_bruto and texto_bruto.strip()) else "relatório"
+        return gr.update(value=path, visible=True), f"{len(credores)} credor(es) exportados (fonte: {origem})."
     except Exception as e:
         return gr.update(value=None, visible=False), f"Erro: {e}"
 
