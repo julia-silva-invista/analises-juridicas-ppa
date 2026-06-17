@@ -19,7 +19,7 @@ from google.genai import types
 from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
 from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _barra_progresso, _comprimir_pdf
 
-CHUNK_MAX_PAGES_RJ    = 700
+CHUNK_MAX_PAGES_RJ    = 400
 MODEL_EXTRACAO_RJ     = os.getenv("GEMINI_MODEL_EXTRACAO", "gemini-2.5-flash")
 MODEL_RAPIDO_RJ       = os.getenv("GEMINI_MODEL_RAPIDO", "gemini-2.5-flash")
 MODEL_PRO_RJ          = os.getenv("GEMINI_MODEL_CONSOLIDACAO", "gemini-2.5-pro")
@@ -124,7 +124,10 @@ def _rj_extrair_chunk(args) -> tuple:
 
     def _call():
         contents = [types.Content(role="user", parts=all_parts)]
-        resp = client.models.generate_content(model=MODEL_EXTRACAO_RJ, contents=contents)
+        cfg = types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=0)
+        )
+        resp = client.models.generate_content(model=MODEL_EXTRACAO_RJ, contents=contents, config=cfg)
         return resp.text
 
     resultado = _retry(_call)
@@ -186,8 +189,12 @@ def _rj_extrair_chunk_fileapi(args) -> tuple:
         types.Part(file_data=types.FileData(file_uri=arq.uri, mime_type=mime)),
     ])]
 
+    _cfg_extr = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_budget=0)
+    )
+
     def _call():
-        return client.models.generate_content(model=MODEL_EXTRACAO_RJ, contents=contents).text
+        return client.models.generate_content(model=MODEL_EXTRACAO_RJ, contents=contents, config=_cfg_extr).text
 
     resultado = _retry(_call)
 

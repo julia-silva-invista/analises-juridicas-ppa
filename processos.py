@@ -15,7 +15,7 @@ from google.genai import types
 from report_template_processos import REPORT_TEMPLATE_INSTRUCTIONS, SYSTEM_PROMPT as SYSTEM_PROMPT_PROC
 from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_proc, _barra_progresso, _comprimir_pdf
 
-CHUNK_MAX_PAGES_PROC    = 700
+CHUNK_MAX_PAGES_PROC    = 400
 MODO_DIRETO_MAX_PROC    = 700
 MODO_DIRETO_MAX_MB_PROC = 45
 COMPRESSAO_PRE_MB_PROC  = 50   # só pré-comprime se puder caber no modo direto
@@ -119,7 +119,10 @@ def _proc_extrair_chunk(args) -> tuple:
 
     def _call():
         contents = [types.Content(role="user", parts=all_parts)]
-        resp = client.models.generate_content(model=MODEL_PROC_EXTR, contents=contents)
+        cfg = types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=0)
+        )
+        resp = client.models.generate_content(model=MODEL_PROC_EXTR, contents=contents, config=cfg)
         return resp.text
 
     resultado = _retry(_call)
@@ -181,8 +184,12 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
         types.Part(file_data=types.FileData(file_uri=arq.uri, mime_type=mime)),
     ])]
 
+    _cfg_extr = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_budget=0)
+    )
+
     def _call():
-        return client.models.generate_content(model=MODEL_PROC_EXTR, contents=contents).text
+        return client.models.generate_content(model=MODEL_PROC_EXTR, contents=contents, config=_cfg_extr).text
 
     resultado = _retry(_call)
 
