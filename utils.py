@@ -34,7 +34,10 @@ def _retry(fn, tentativas=5, espera_base=20):
             return fn()
         except Exception as e:
             msg = str(e)
-            if any(c in msg for c in ["503", "500", "UNAVAILABLE", "overloaded"]) and t < tentativas:
+            retryable = any(c in msg for c in [
+                "503", "500", "UNAVAILABLE", "overloaded", "INVALID_ARGUMENT",
+            ])
+            if retryable and t < tentativas:
                 time.sleep(espera_base * t)
             else:
                 raise

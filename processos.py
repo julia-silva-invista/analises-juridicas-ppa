@@ -181,6 +181,9 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
     if state_name == "FAILED":
         raise RuntimeError(f"File API: upload do chunk {idx+1} falhou (FAILED)")
 
+    # Pequeno intervalo para o File API propagar o arquivo após ACTIVE
+    time.sleep(2)
+
     prompt = (
         f"[PARTE {idx+1}/{n_total} — paginas {pg_ini}-{pg_fim}]\n"
         "Nao omita nenhum dado mesmo que pareca repetitivo.\n\n"
