@@ -410,13 +410,13 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
 
 def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False, versao_resumida: bool = False):
     if not pdf_files:
-        yield "Nenhum arquivo enviado.", "", ""
+        yield "Nenhum arquivo enviado.", "", "", ""
         return
 
     try:
         client1, client2 = _get_clients_rj()
     except Exception as e:
-        yield f"Erro de configuracao: {e}", "", ""
+        yield f"Erro de configuracao: {e}", "", "", ""
         return
 
     def _nat_key(p):
@@ -452,18 +452,18 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         if 10 <= mb_orig <= COMPRESSAO_PRE_MB_RJ:
             # Arquivo pequeno: pré-comprime pois pode caber no modo direto
             log.append(f"   Comprimindo {nome} ({mb_orig:.0f} MB)...")
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
             comp_path, orig_mb, comp_mb = _comprimir_pdf(path)
             if comp_path != path:
                 reducao = (1 - comp_mb / orig_mb) * 100
                 log[-1] = f"   {nome}: {orig_mb:.0f} MB → {comp_mb:.0f} MB (-{reducao:.0f}%)"
-                yield "\n".join(log), "", ""
+                yield "\n".join(log), "", "", ""
                 _temp_comprimidos.append(comp_path)
                 path_proc = comp_path
         elif mb_orig > COMPRESSAO_PRE_MB_RJ:
             # Arquivo grande: vai direto ao chunked; compressao por chunk em paralelo
             log.append(f"   {nome} ({mb_orig:.0f} MB) — compressao por chunk (paralelo)")
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
 
         chunks = _rj_dividir_pdf(path_proc)
         total_pg = chunks[0][2] if chunks else 0
@@ -500,7 +500,7 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         # Extração paralela via File API — 4 workers
         log.append(f"\nExtraindo {n} chunk(s) em paralelo (4 workers · File API)...")
         log.append(_barra_progresso(0, n))
-        yield "\n".join(log), "", ""
+        yield "\n".join(log), "", "", ""
 
         parciais: dict = {}
 
@@ -528,50 +528,50 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
                 except Exception as e:
                     i_f = futures[future]
                     log.append(f"   Erro no chunk {i_f+1}: {e}")
-                yield "\n".join(log), "", ""
+                yield "\n".join(log), "", "", ""
 
         t_extr_s = int(time.time() - t_extr)
         log.append(f"   Extracao total: {t_extr_s//60}min{t_extr_s%60:02d}s")
-        yield "\n".join(log), "", ""
+        yield "\n".join(log), "", "", ""
 
         # Merge
         log.append("\nConsolidando textos extraidos...")
-        yield "\n".join(log), "", ""
+        yield "\n".join(log), "", "", ""
         lista = [parciais.get(i, "") for i in range(n)]
         texto_merged = _rj_merge_textos(lista)
         log.append(f"   {len(texto_merged):,} caracteres de informacao extraida")
-        yield "\n".join(log), "", ""
+        yield "\n".join(log), "", "", ""
 
         # Cache
         log.append(f"\nConfigurando context cache ({model_cons})...")
-        yield "\n".join(log), "", ""
+        yield "\n".join(log), "", "", ""
         cache = _rj_obter_cache(client1, model_cons)
         log[-1] = "Cache configurado." if cache else "Cache nao disponivel — usando prompt completo."
-        yield "\n".join(log), "", ""
+        yield "\n".join(log), "", "", ""
 
         # Secao A
         secoes = []
         log.append(f"\nGerando Secao A — Recuperacao Judicial ({model_cons})...")
         log.append(f"   Aguardando {model_cons}... (pode levar alguns minutos)")
-        yield "\n".join(log), "", ""
+        yield "\n".join(log), "", "", ""
 
         secao_a = _rj_consolidar_secao_a(client1, texto_merged, instrucoes, cache, model_cons, versao_resumida)
         log[-1] = "   Secao A gerada."
         secoes.append(secao_a)
-        yield "\n".join(log), "", ""
+        yield "\n".join(log), "", "", ""
 
         # Processos relacionados
         if pdf_relacionados:
             pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
             log.append(f"\nProcessando {len(pdf_paths_rel)} processo(s) relacionado(s)...")
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
             secao_rel = _rj_processar_relacionados(pdf_paths_rel, client1, client2, instrucoes, cache, model_cons)
             if secao_rel and "nenhum" not in secao_rel.lower():
                 log[-1] = "   Processos relacionados analisados."
                 secoes.append(secao_rel)
             else:
                 log[-1] = "   Nenhuma informacao relevante nos processos relacionados."
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
 
         relatorio = "\n\n".join(s for s in secoes if s)
         t_total = int(time.time() - t_inicio)
