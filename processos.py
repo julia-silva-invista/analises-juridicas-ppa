@@ -198,7 +198,7 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
     def _call():
         return client.models.generate_content(model=MODEL_PROC_EXTR, contents=contents).text
 
-    resultado = _retry(_call)
+    resultado = _retry(_call, tentativas=2, espera_base=5)
 
     try: client.files.delete(name=arq.name)
     except: pass
