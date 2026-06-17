@@ -17,6 +17,7 @@ from report_template_processos import REPORT_TEMPLATE_INSTRUCTIONS, SYSTEM_PROMP
 from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_proc, _barra_progresso, _comprimir_pdf
 
 CHUNK_MAX_PAGES_PROC    = 400
+CHUNK_MAX_MB_PROC       = 45   # limite de tamanho por chunk para o File API generate_content
 MODO_DIRETO_MAX_PROC    = 700
 MODO_DIRETO_MAX_MB_PROC = 45
 COMPRESSAO_PRE_MB_PROC  = 50   # só pré-comprime se puder caber no modo direto
@@ -58,12 +59,17 @@ def _proc_dividir_pdf(pdf_path: str) -> list:
     try:
         doc = fitz.open(pdf_path)
         total = len(doc)
-        if total <= CHUNK_MAX_PAGES_PROC:
+        mb_orig = Path(pdf_path).stat().st_size / 1_048_576
+        # Limita páginas por chunk também por tamanho (evita rejeição do File API)
+        mb_por_pag = mb_orig / total if total else 0
+        max_por_mb = int(CHUNK_MAX_MB_PROC / mb_por_pag) if mb_por_pag > 0 else CHUNK_MAX_PAGES_PROC
+        pag_max = max(30, min(CHUNK_MAX_PAGES_PROC, max_por_mb))
+        if total <= pag_max:
             doc.close()
             return [(pdf_path, 0, total)]
         chunks = []
-        for start in range(0, total, CHUNK_MAX_PAGES_PROC):
-            end = min(start + CHUNK_MAX_PAGES_PROC, total)
+        for start in range(0, total, pag_max):
+            end = min(start + pag_max, total)
             sub = fitz.open()
             sub.insert_pdf(doc, from_page=start, to_page=end - 1)
             tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -508,7 +514,8 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
         chunks = _proc_dividir_pdf(path_proc)
         log.append(f"   · {nome}: {total_pg} pag. — {info_scan}")
         if len(chunks) > 1:
-            log.append(f"     Dividido em {len(chunks)} partes de {CHUNK_MAX_PAGES_PROC} pag.")
+            pag_por_chunk = chunks[1][1] if len(chunks) > 1 else CHUNK_MAX_PAGES_PROC
+            log.append(f"     Dividido em {len(chunks)} partes de ate {pag_por_chunk} pag.")
         for chunk_path, offset, total in chunks:
             todos_chunks.append((chunk_path, offset, total, path))
 
