@@ -386,6 +386,7 @@ with gr.Blocks(
         fn=proc_analisar,
         inputs=[proc_pdf_principal, proc_pdf_relacionados, proc_instrucoes, proc_usar_pro, proc_versao_resumida],
         outputs=[proc_log, proc_report, proc_relatorio_state],
+        concurrency_limit=2,
     )
     proc_word_btn.click(fn=proc_gerar_word, inputs=[proc_relatorio_state], outputs=[proc_word_file])
     proc_perguntar_btn.click(
@@ -397,6 +398,7 @@ with gr.Blocks(
         fn=rj_analisar,
         inputs=[rj_pdf_principal, rj_pdf_relacionados, rj_instrucoes, rj_usar_pro, rj_versao_resumida],
         outputs=[rj_log, rj_report, rj_relatorio_state],
+        concurrency_limit=2,
     )
     rj_word_btn.click(fn=rj_gerar_word, inputs=[rj_relatorio_state], outputs=[rj_word_file])
     rj_excel_cred_btn.click(
@@ -410,7 +412,8 @@ with gr.Blocks(
 
     # Matrículas
     mat_gerar_btn.click(
-        fn=mat_gerar_excel, inputs=[mat_arquivos], outputs=[mat_log, mat_status, mat_excel]
+        fn=mat_gerar_excel, inputs=[mat_arquivos], outputs=[mat_log, mat_status, mat_excel],
+        concurrency_limit=2,
     )
     mat_perguntar_btn.click(
         fn=mat_responder, inputs=[mat_pergunta, mat_log], outputs=[mat_resposta]
@@ -427,5 +430,5 @@ with gr.Blocks(
     fb_enviar_btn.click(fn=salvar_feedback, inputs=[fb_nome, fb_email, fb_mensagem], outputs=[fb_status])
 
 
-demo.queue(max_size=10)
+demo.queue(max_size=20)
 demo.launch(server_name="0.0.0.0", server_port=int(os.getenv("PORT", 7860)), max_file_size="2gb", ssr_mode=False)
