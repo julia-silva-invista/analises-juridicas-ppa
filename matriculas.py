@@ -41,6 +41,7 @@ class OnusFinanceiro(BaseModel):
     data_celebracao: Optional[str] = None
     parcela_mensal: Optional[float] = None
     vencimento_final: Optional[str] = None
+    cancelado: Optional[bool] = False   # True se o ato foi baixado/cancelado por AV/R posterior
 
 
 class Transmissao(BaseModel):
@@ -132,7 +133,7 @@ PROMPT_MATRICULA = (
     " referencias como conforme R.5 sao parte da frase e NAO devem ter quebra de linha.\n\n"
     "17. Apos a analise, verifique todos os AVs/Rs para ver se algum ficou faltando.\n"
     "    Caso falte algum, indique em observacoes qual registro ou averbaçao nao pode ser identificado.\n\n"
-    "18. Para cada onus vigente de natureza financeira (penhora ativa, hipoteca, alienacao fiduciaria,"
+    "18. Para cada onus de natureza financeira encontrado (penhora, hipoteca, alienacao fiduciaria,"
     " CCB, confissao de divida ou qualquer titulo de credito), preencha onus_financeiros com:\n"
     "   - codigo: codigo do ato (ex: R.5, AV.9)\n"
     "   - tipo: tipo do onus (ex: penhora, hipoteca, alienacao fiduciaria, CCB)\n"
@@ -140,6 +141,8 @@ PROMPT_MATRICULA = (
     "   - data_celebracao: data do ato em DD/MM/AAAA\n"
     "   - parcela_mensal: valor da parcela mensal se explicitamente indicada. Null se nao houver.\n"
     "   - vencimento_final: data de vencimento final em DD/MM/AAAA. Null se nao houver.\n"
+    "   - cancelado: true se houver AV/R posterior que baixou, cancelou ou levantou este onus."
+    " false se ainda vigente.\n"
     "   NAO inclua: indisponibilidade, averbacao premonitoria, averbacao de ajuizamento, protesto.\n"
     "   NAO inclua onus sem valor principal identificavel. Nao invente dados.\n\n"
     "19. VARREDURA OBRIGATORIA AV/R POR AV/R:\n"
@@ -285,14 +288,21 @@ def _mat_calcular_valor_onus(onus_list: list, data_referencia: date = None) -> s
     total = 0.0
 
     for onus in onus_list:
-        codigo = onus.get("codigo") if isinstance(onus, dict) else getattr(onus, "codigo", None)
-        tipo   = (onus.get("tipo") if isinstance(onus, dict) else getattr(onus, "tipo", None) or "")
-        valor  = onus.get("valor_principal") if isinstance(onus, dict) else getattr(onus, "valor_principal", None)
-        data_str = onus.get("data_celebracao") if isinstance(onus, dict) else getattr(onus, "data_celebracao", None)
-        parcela  = onus.get("parcela_mensal") if isinstance(onus, dict) else getattr(onus, "parcela_mensal", None)
+        def _get(key):
+            return onus.get(key) if isinstance(onus, dict) else getattr(onus, key, None)
 
-        # Ignora tipos não financeiros
-        tipo_lower = (tipo or "").lower()
+        cancelado = _get("cancelado")
+        if cancelado:
+            continue
+
+        codigo   = _get("codigo")
+        tipo     = _get("tipo") or ""
+        valor    = _get("valor_principal")
+        data_str = _get("data_celebracao")
+        parcela  = _get("parcela_mensal")
+
+        # Ignora tipos não financeiros (indisponibilidade, premonitória, etc.)
+        tipo_lower = tipo.lower()
         if any(t in tipo_lower for t in _TIPOS_NAO_FINANCEIROS):
             continue
 

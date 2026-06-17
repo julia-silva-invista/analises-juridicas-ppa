@@ -1611,6 +1611,38 @@ button[title*="copy"] {
     white-space: normal !important;
 }
 
+/* ── Accordion de dados da execução (matrículas) ────────────────────────── */
+/* Botão do accordion: fundo laranja bem claro, texto laranja */
+.mat-accordion > .label-wrap,
+.mat-accordion > button,
+.mat-accordion > .block > button,
+.mat-accordion .gradio-accordion > button,
+.mat-accordion [data-testid="accordion-header"],
+.mat-accordion > div > button {
+    background: #FFF0E6 !important;
+    color: var(--invista-orange) !important;
+    border: 1px solid #FFD8B8 !important;
+    border-radius: 10px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.06em !important;
+    text-transform: uppercase !important;
+}
+.mat-accordion > .label-wrap:hover,
+.mat-accordion > button:hover,
+.mat-accordion > .block > button:hover,
+.mat-accordion .gradio-accordion > button:hover,
+.mat-accordion [data-testid="accordion-header"]:hover,
+.mat-accordion > div > button:hover {
+    background: #FFE4CC !important;
+}
+/* Remove scrollbar horizontal dentro do accordion */
+.mat-accordion,
+.mat-accordion .gap,
+.mat-accordion-row,
+.mat-accordion .gradio-row {
+    overflow-x: hidden !important;
+}
+
 /* Subabas internas: remove definitivamente o sublinhado quando o formato é arredondado */
 .tab-nav,
 .gradio-container [role="tablist"] {

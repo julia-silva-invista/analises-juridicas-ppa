@@ -279,7 +279,7 @@ with gr.Blocks(
                         "_Suporta matrículas escaneadas ou digitais._"
                     )
 
-            with gr.Accordion("Dados da execução — alertas de coloração (opcional)", open=False):
+            with gr.Accordion("Inserir dados da execução (opcional)", open=False, elem_classes=["mat-accordion"]):
                 with gr.Row():
                     mat_data_ajuizamento = gr.Textbox(
                         label="Data do ajuizamento",
@@ -287,7 +287,7 @@ with gr.Blocks(
                         lines=1,
                         scale=1,
                     )
-                with gr.Row():
+                with gr.Row(elem_classes=["mat-accordion-row"]):
                     mat_devedores = gr.Textbox(
                         label="Devedores (um por linha: CPF/CNPJ — Nome)",
                         placeholder="123.456.789-00 — João da Silva\n12.345.678/0001-90 — Empresa XYZ Ltda",
@@ -305,7 +305,8 @@ with gr.Blocks(
                     "🔴 **Vermelho claro** — transmissão após data de ajuizamento"
                 )
 
-            mat_gerar_btn = gr.Button("Gerar Excel", variant="primary", size="lg")
+            with gr.Row(elem_classes=["analysis-action-row"]):
+                mat_gerar_btn = gr.Button("Gerar Excel", variant="primary", size="lg", elem_classes=["analysis-run-btn"])
 
             with gr.Tabs():
                 with gr.Tab("Progresso"):
