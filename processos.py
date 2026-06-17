@@ -431,6 +431,8 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
         yield "Nenhum arquivo enviado.", "", ""
         return
 
+    yield "Iniciando analise de processo judicial...", "", ""
+
     try:
         client1, client2 = _get_clients_proc()
     except Exception as e:

@@ -413,6 +413,8 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         yield "Nenhum arquivo enviado.", "", "", ""
         return
 
+    yield "Iniciando analise de Recuperacao Judicial...", "", "", ""
+
     try:
         client1, client2 = _get_clients_rj()
     except Exception as e:
