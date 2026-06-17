@@ -437,10 +437,10 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
     if len(pdf_paths) > 1:
         log.append(f"   → {len(pdf_paths)} arquivos — o modelo verificara se sao fragmentos do mesmo processo ou processos distintos")
     log.append(f"Modelo de consolidacao: {model_cons}")
-    yield "\n".join(log), "", ""
+    yield "\n".join(log), "", "", ""
 
     log.append("\nInspecionando e dividindo PDFs...")
-    yield "\n".join(log), "", ""
+    yield "\n".join(log), "", "", ""
 
     todos_chunks = []
     _temp_comprimidos: list = []
@@ -490,7 +490,7 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
     n_rodadas = math.ceil(n / 4)
     tempo_est = n_rodadas * AVG_MIN_POR_CHUNK_RJ + MIN_CONSOLIDACAO_RJ
     log.append(f"\nEstimativa: ~{tempo_est} min | {n} chunk(s) · 4 workers · File API · {model_cons}")
-    yield "\n".join(log), "", ""
+    yield "\n".join(log), "", "", ""
 
     t_inicio = time.time()
 
