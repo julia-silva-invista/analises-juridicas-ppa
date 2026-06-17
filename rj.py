@@ -643,26 +643,62 @@ def _normalizar_classe(raw: str) -> str:
     return raw.strip() if raw else "Não classificado"
 
 
-def _extrair_credores_json(relatorio: str, client, model: str) -> list:
+def _extrair_credores_json(texto: str, client, model: str) -> dict:
     prompt = (
-        "Com base no relatório de Recuperação Judicial abaixo, extraia a ÚLTIMA lista de credores "
-        "divulgada (QGC - Quadro Geral de Credores ou lista de habilitações mais recente).\n\n"
-        "Retorne um JSON com campo 'credores' contendo array de objetos, cada um com:\n"
-        "- nome: string (nome/razão social)\n"
-        "- cpf_cnpj: string ou null\n"
+        "Você está analisando o texto extraído de um processo de Recuperação Judicial. "
+        "Sua tarefa é montar o Quadro Geral de Credores (QGC) mais completo e preciso possível.\n\n"
+
+        "═══ REGRA DE PRIORIDADE DE FONTE ═══\n"
+        "1. PRIORIDADE MÁXIMA — Edital do Art. 18 (edital consolidado/definitivo, publicado APÓS a "
+        "apreciação das divergências e impugnações pelo AJ e pelo juízo). Nomes comuns: 'Edital Art. 18', "
+        "'Edital Consolidado', 'Edital de Habilitação Definitivo', 'Quadro Geral Consolidado'.\n"
+        "   → Se encontrar, use-o como lista base.\n"
+        "2. PRIORIDADE SECUNDÁRIA — Se NÃO houver Edital Art. 18: use o primeiro edital (Art. 7-A ou "
+        "edital inicial do AJ) como lista base e COMPLEMENTE com:\n"
+        "   a) Manifestação do AJ sobre divergências/impugnações (ajusta valores, classe ou garantias)\n"
+        "   b) Decisões judiciais sobre habilitações/impugnações\n"
+        "3. FALLBACK — Se não houver nenhum edital formal, extraia da lista de credores que aparecer "
+        "no texto (QGC provisório, planilha, tabela, etc.)\n\n"
+
+        "═══ PARA CADA CREDOR, EXTRAIA ═══\n"
+        "- nome: nome/razão social completo\n"
+        "- cpf_cnpj: apenas dígitos (sem pontuação), ou null\n"
         "- classe: 'I - Trabalhista' | 'II - Garantia Real' | 'III - Quirografário' | 'IV - ME/EPP' | 'Extraconcursal'\n"
-        "- natureza: string ou null (trabalhista, bancário, fornecedor, tributário, debenturista, CRI, CRA, CCB, etc.)\n"
-        "- instrumento: string ou null (ex: CCB nº 12345, Contrato nº X, NP, duplicata, etc.)\n"
-        "- garantia_tipo: string ou null (ex: alienação fiduciária de imóvel, hipoteca, penhor de ações, etc.)\n"
-        "- bem_garantia: string ou null (descrição do bem dado em garantia)\n"
-        "- valor_original: number ou null (em reais, sem formatação)\n"
-        "- data_base: string ou null (DD/MM/AAAA)\n"
-        "- valor_atualizado: number ou null (valor habilitado/atualizado em reais)\n"
-        "- status: string ou null ('Habilitado' | 'Impugnado' | 'Divergente' | 'Extraconcursal' | 'Incluído')\n"
-        "- processo_habilitacao: string ou null (nº do incidente de habilitação ou impugnação)\n"
-        "- observacoes: string ou null\n\n"
-        "Retorne APENAS JSON válido, sem markdown, sem texto adicional.\n\n"
-        f"RELATÓRIO:\n{relatorio[:120_000]}"
+        "- natureza: trabalhista, bancário, fornecedor, tributário, debenturista, CRI, CRA, CCB, etc.\n"
+        "- instrumento: CCB nº X, Contrato nº Y, NP, duplicata, etc.\n"
+        "- garantia_tipo: alienação fiduciária de imóvel, hipoteca, penhor de ações, fiança, etc.\n"
+        "- bem_garantia: descrição do bem ou imóvel dado em garantia\n"
+        "- valor_original: número sem formatação (reais), ou null\n"
+        "- data_base: DD/MM/AAAA, ou null\n"
+        "- valor_atualizado: valor habilitado/atualizado em reais, ou null\n"
+        "- status: 'Habilitado' | 'Impugnado' | 'Divergente' | 'Extraconcursal' | 'Incluído' | 'Excluído'\n"
+        "- processo_habilitacao: nº do incidente de habilitação ou impugnação, ou null\n"
+        "- pagina_referencia: página(s) onde a informação aparece, ex: 'p. 234', 'p. 45-46'\n"
+        "- conflitos: descreva divergências entre AJ e credor, ou entre credores, sobre valor, classe "
+        "ou garantia (com referência de página). null se não houver.\n"
+        "- questoes_controversas: impugnações pendentes, questões não decididas, pontos que ainda "
+        "dependem de decisão judicial (com página). null se não houver.\n"
+        "- observacoes: outras informações relevantes\n\n"
+
+        "═══ REGRAS CRÍTICAS ═══\n"
+        "- TABELAS ESCANEADAS: mesmo que a OCR seja imperfeita, extraia TODOS os campos visíveis. "
+        "Não omita nenhuma linha da tabela, mesmo que incompleta. Informe 'dados parciais (pág. X)' "
+        "em observacoes quando a leitura for incerta.\n"
+        "- Não omita nenhum credor, mesmo que incompleto.\n"
+        "- Se o valor no edital divergir da manifestação do AJ, registre AMBOS em conflitos.\n"
+        "- Se houver impugnação pendente (credor ou recuperando impugnou o crédito de outro), "
+        "registre em questoes_controversas.\n"
+        "- Informações de garantia e instrumento podem vir de manifestações do AJ ou das impugnações — "
+        "complemente o que estiver no edital.\n\n"
+
+        "Retorne APENAS JSON válido (sem markdown) com esta estrutura:\n"
+        "{\n"
+        "  \"edital_utilizado\": \"Art. 18 (definitivo)\" | \"Primeiro edital + manifestação AJ\" | \"Primeiro edital\" | \"Lista informal\",\n"
+        "  \"paginas_edital\": \"ex: p. 234-267\" ou null,\n"
+        "  \"observacao_fontes\": \"explique quais seções/páginas foram usadas e se há lacunas\",\n"
+        "  \"credores\": [...]\n"
+        "}\n\n"
+        f"TEXTO EXTRAÍDO:\n{texto[:150_000]}"
     )
     config = types.GenerateContentConfig(response_mime_type="application/json")
 
@@ -675,20 +711,31 @@ def _extrair_credores_json(relatorio: str, client, model: str) -> list:
         raw = re.sub(r"```(?:json)?\n?", "", raw).strip().rstrip("`").strip()
     try:
         data = json.loads(raw)
-        credores = data.get("credores", data if isinstance(data, list) else [])
-        return credores
+        if isinstance(data, list):
+            return {"edital_utilizado": "desconhecido", "paginas_edital": None,
+                    "observacao_fontes": None, "credores": data}
+        return data
     except json.JSONDecodeError:
-        return []
+        return {"edital_utilizado": "erro", "paginas_edital": None,
+                "observacao_fontes": None, "credores": []}
 
 
-def _gerar_excel_credores(credores: list) -> str:
+def _gerar_excel_credores(resultado: dict) -> str:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
-    COR_HEADER = "1F4E79"
-    COR_SUB    = "BDD7EE"
-    COR_TOTAL  = "2E75B6"
+    credores           = resultado.get("credores", [])
+    edital_utilizado   = resultado.get("edital_utilizado", "")
+    paginas_edital     = resultado.get("paginas_edital", "")
+    observacao_fontes  = resultado.get("observacao_fontes", "")
+
+    COR_HEADER    = "1F4E79"
+    COR_SUB       = "BDD7EE"
+    COR_TOTAL     = "2E75B6"
+    COR_CONFLITO  = "FFD0D0"   # vermelho claro — conflito identificado
+    COR_CONTROVER = "FFF3CD"   # amarelo claro — questão controversa pendente
+    COR_META      = "EBF3FB"   # azul muito claro — linha de metadados
 
     thin  = Side(style="thin", color="D0D0D0")
     borda = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -706,6 +753,9 @@ def _gerar_excel_credores(credores: list) -> str:
         ("Valor Atualizado (R$)",            18),
         ("Status",                           16),
         ("Proc. Habilitação / Impugnação",   30),
+        ("Página(s)",                        14),
+        ("Conflitos (divergências)",         44),
+        ("Questões Controversas",            44),
         ("% do Total",                       11),
         ("% da Classe",                      11),
         ("Observações",                      42),
@@ -717,7 +767,7 @@ def _gerar_excel_credores(credores: list) -> str:
     ws = wb.active
     ws.title = "QGC"
 
-    # Título
+    # ── Linha 1: título ────────────────────────────────────────────────────────
     ws.merge_cells(f"A1:{last_col}1")
     t = ws["A1"]
     t.value = "QUADRO GERAL DE CREDORES — RECUPERAÇÃO JUDICIAL"
@@ -726,8 +776,31 @@ def _gerar_excel_credores(credores: list) -> str:
     t.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 32
 
-    # Cabeçalho
-    HR = 2
+    # ── Linha 2: metadados de fonte ───────────────────────────────────────────
+    ws.merge_cells(f"A2:{last_col}2")
+    meta_txt = f"Edital base: {edital_utilizado}"
+    if paginas_edital:
+        meta_txt += f"  |  Páginas: {paginas_edital}"
+    if observacao_fontes:
+        meta_txt += f"  |  {observacao_fontes}"
+    m = ws["A2"]
+    m.value     = meta_txt
+    m.font      = Font(name="Calibri", italic=True, size=9, color="1F4E79")
+    m.fill      = PatternFill("solid", fgColor=COR_META)
+    m.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    ws.row_dimensions[2].height = 28
+
+    # ── Linha 3: legenda de cores ─────────────────────────────────────────────
+    ws.merge_cells(f"A3:{last_col}3")
+    leg = ws["A3"]
+    leg.value     = "Legenda:   Fundo vermelho = conflito identificado entre partes   |   Fundo amarelo = questão controversa pendente de decisão"
+    leg.font      = Font(name="Calibri", italic=True, size=8, color="555555")
+    leg.fill      = PatternFill("solid", fgColor="F8F8F8")
+    leg.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[3].height = 18
+
+    # ── Linha 4: cabeçalho de colunas ─────────────────────────────────────────
+    HR = 4
     for ci, (h, w) in enumerate(COLS, 1):
         cell = ws.cell(row=HR, column=ci, value=h)
         cell.font      = Font(name="Calibri", bold=True, color="FFFFFF", size=10)
@@ -738,10 +811,8 @@ def _gerar_excel_credores(credores: list) -> str:
     ws.row_dimensions[HR].height = 34
     ws.freeze_panes = ws.cell(row=HR + 1, column=1)
 
-    # Total geral para calcular %
     total_geral = sum(float(c.get("valor_atualizado") or 0) for c in credores)
 
-    # Agrupa por classe
     grupos: dict = defaultdict(list)
     for c in credores:
         grupos[_normalizar_classe(c.get("classe", ""))].append(c)
@@ -751,7 +822,6 @@ def _gerar_excel_credores(credores: list) -> str:
         except: return None
 
     cur = HR + 1
-
     classes_ord   = [cl for cl in _CLASSE_ORDER if cl in grupos]
     classes_extra = [cl for cl in grupos if cl not in _CLASSE_ORDER]
 
@@ -766,6 +836,16 @@ def _gerar_excel_credores(credores: list) -> str:
             pct_tot = (va / total_geral)  if (va and total_geral)  else None
             pct_cl  = (va / total_classe) if (va and total_classe) else None
 
+            tem_conflito  = bool(credor.get("conflitos"))
+            tem_controver = bool(credor.get("questoes_controversas"))
+
+            if tem_conflito:
+                fill_row = PatternFill("solid", fgColor=COR_CONFLITO)
+            elif tem_controver:
+                fill_row = PatternFill("solid", fgColor=COR_CONTROVER)
+            else:
+                fill_row = fill_cl
+
             row_vals = [
                 credor.get("nome"),
                 credor.get("cpf_cnpj"),
@@ -779,20 +859,24 @@ def _gerar_excel_credores(credores: list) -> str:
                 va,
                 credor.get("status"),
                 credor.get("processo_habilitacao"),
+                credor.get("pagina_referencia"),
+                credor.get("conflitos"),
+                credor.get("questoes_controversas"),
                 pct_tot,
                 pct_cl,
                 credor.get("observacoes"),
             ]
 
+            WRAP_COLS = {1, 5, 7, 13, 14, 15, 18}
             for ci, val in enumerate(row_vals, 1):
                 cell = ws.cell(row=cur, column=ci, value=val)
-                cell.fill      = fill_cl
+                cell.fill      = fill_row
                 cell.font      = Font(name="Calibri", size=10)
                 cell.border    = borda
-                cell.alignment = Alignment(vertical="center", wrap_text=(ci in (1, 5, 7, 15)))
+                cell.alignment = Alignment(vertical="center", wrap_text=(ci in WRAP_COLS))
                 if ci in (8, 10):
                     cell.number_format = '#,##0.00'
-                elif ci in (13, 14):
+                elif ci in (16, 17):
                     cell.number_format = '0.00%'
             cur += 1
 
@@ -806,8 +890,8 @@ def _gerar_excel_credores(credores: list) -> str:
         c10 = ws.cell(row=cur, column=10, value=total_classe)
         c10.number_format = '#,##0.00'
         if total_geral:
-            c13 = ws.cell(row=cur, column=13, value=total_classe / total_geral)
-            c13.number_format = '0.00%'
+            c16 = ws.cell(row=cur, column=16, value=total_classe / total_geral)
+            c16.number_format = '0.00%'
         cur += 1
 
     # Total geral
@@ -816,7 +900,7 @@ def _gerar_excel_credores(credores: list) -> str:
     for ci in range(1, N + 1):
         c = ws.cell(row=cur, column=ci)
         c.fill = tf; c.font = tfnt; c.border = borda
-    ws.cell(row=cur, column=1).value  = f"TOTAL GERAL  ({len(credores)} credores)"
+    ws.cell(row=cur, column=1).value = f"TOTAL GERAL  ({len(credores)} credores)"
     c10 = ws.cell(row=cur, column=10, value=total_geral)
     c10.number_format = '#,##0.00'
     ws.row_dimensions[cur].height = 22
@@ -829,26 +913,31 @@ def _gerar_excel_credores(credores: list) -> str:
 
 
 def rj_gerar_excel_credores(relatorio: str, texto_bruto: str = ""):
-    """
-    Extrai credores preferencialmente do texto bruto da extração (que contém
-    o QGC na íntegra), caindo para o relatório consolidado se não disponível.
-    """
     fonte = texto_bruto.strip() if texto_bruto and texto_bruto.strip() else relatorio.strip()
     if not fonte:
         return gr.update(value=None, visible=False), "Gere uma análise primeiro."
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
-        credores = _extrair_credores_json(fonte, client, MODEL_CONSOLIDACAO_RJ)
-        if not credores:
-            # Fallback: tenta com o relatório consolidado se não achou no bruto
-            if texto_bruto and relatorio.strip() and fonte != relatorio.strip():
-                credores = _extrair_credores_json(relatorio, client, MODEL_CONSOLIDACAO_RJ)
+        resultado = _extrair_credores_json(fonte, client, MODEL_CONSOLIDACAO_RJ)
+        credores = resultado.get("credores", [])
+        if not credores and texto_bruto and relatorio.strip() and fonte != relatorio.strip():
+            resultado = _extrair_credores_json(relatorio, client, MODEL_CONSOLIDACAO_RJ)
+            credores = resultado.get("credores", [])
         if not credores:
             return gr.update(value=None, visible=False), "Nenhum credor identificado. Verifique se o QGC consta no PDF."
-        path = _gerar_excel_credores(credores)
-        origem = "extração bruta" if (texto_bruto and texto_bruto.strip()) else "relatório"
-        return gr.update(value=path, visible=True), f"{len(credores)} credor(es) exportados (fonte: {origem})."
+        path = _gerar_excel_credores(resultado)
+        edital = resultado.get("edital_utilizado", "")
+        conflitos = sum(1 for c in credores if c.get("conflitos"))
+        controver = sum(1 for c in credores if c.get("questoes_controversas"))
+        msg = f"{len(credores)} credor(es) exportados"
+        if edital:
+            msg += f" | Edital base: {edital}"
+        if conflitos:
+            msg += f" | {conflitos} com conflito"
+        if controver:
+            msg += f" | {controver} com questão controversa"
+        return gr.update(value=path, visible=True), msg
     except Exception as e:
         return gr.update(value=None, visible=False), f"Erro: {e}"
 
