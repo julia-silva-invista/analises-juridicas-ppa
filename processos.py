@@ -574,10 +574,16 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
             def _worker_proc(idx):
                 cp, offset, total_pg, _ = todos_chunks[idx]
                 cli = client1 if idx % 2 == 0 else client2
-                return _retry(
-                    lambda: _proc_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
-                    tentativas=2, espera_base=15
-                )
+                try:
+                    return _retry(
+                        lambda: _proc_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
+                        tentativas=2, espera_base=15
+                    )
+                except Exception as e:
+                    if "400" in str(e) or "INVALID_ARGUMENT" in str(e):
+                        ri, res, nota = _proc_extrair_chunk((idx, cp, offset, total_pg, n, cli))
+                        return ri, res, (nota + " | " if nota else "") + "fallback inline"
+                    raise
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
                 futures = {ex.submit(_worker_proc, i): i for i in range(n)}
