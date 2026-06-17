@@ -124,10 +124,7 @@ def _proc_extrair_chunk(args) -> tuple:
 
     def _call():
         contents = [types.Content(role="user", parts=all_parts)]
-        cfg = types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(thinking_budget=0)
-        )
-        resp = client.models.generate_content(model=MODEL_PROC_EXTR, contents=contents, config=cfg)
+        resp = client.models.generate_content(model=MODEL_PROC_EXTR, contents=contents)
         return resp.text
 
     resultado = _retry(_call)
@@ -163,7 +160,8 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
     arq = client.files.upload(file=upload_path)
     total_wait, wait_time = 0, 1
     while total_wait < 120:
-        state_name = getattr(getattr(arq, "state", None), "name", "")
+        _st = getattr(arq, "state", None)
+        state_name = getattr(_st, "name", None) or str(_st or "")
         if state_name in ("ACTIVE", "FAILED"):
             break
         time.sleep(wait_time)
@@ -178,6 +176,11 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
         try: os.remove(comp_chunk)
         except: pass
 
+    _st = getattr(arq, "state", None)
+    state_name = getattr(_st, "name", None) or str(_st or "")
+    if state_name == "FAILED":
+        raise RuntimeError(f"File API: upload do chunk {idx+1} falhou (FAILED)")
+
     prompt = (
         f"[PARTE {idx+1}/{n_total} — paginas {pg_ini}-{pg_fim}]\n"
         "Nao omita nenhum dado mesmo que pareca repetitivo.\n\n"
@@ -189,12 +192,8 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
         types.Part(file_data=types.FileData(file_uri=arq.uri, mime_type=mime)),
     ])]
 
-    _cfg_extr = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_budget=0)
-    )
-
     def _call():
-        return client.models.generate_content(model=MODEL_PROC_EXTR, contents=contents, config=_cfg_extr).text
+        return client.models.generate_content(model=MODEL_PROC_EXTR, contents=contents).text
 
     resultado = _retry(_call)
 
@@ -572,7 +571,10 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
             def _worker_proc(idx):
                 cp, offset, total_pg, _ = todos_chunks[idx]
                 cli = client1 if idx % 2 == 0 else client2
-                return _proc_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli))
+                return _retry(
+                    lambda: _proc_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
+                    n=2, wait=15
+                )
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
                 futures = {ex.submit(_worker_proc, i): i for i in range(n)}
