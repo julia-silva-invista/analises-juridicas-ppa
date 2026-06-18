@@ -17,10 +17,9 @@ from google import genai
 from google.genai import types
 
 from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
-from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _barra_progresso, _comprimir_pdf
+from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite
 
 CHUNK_MAX_PAGES_RJ    = 400
-CHUNK_MAX_MB_RJ       = 45   # limite de tamanho por chunk para o File API generate_content
 MODEL_EXTRACAO_RJ     = os.getenv("GEMINI_MODEL_EXTRACAO", "gemini-2.5-flash")
 MODEL_RAPIDO_RJ       = os.getenv("GEMINI_MODEL_RAPIDO", "gemini-2.5-flash")
 MODEL_PRO_RJ          = os.getenv("GEMINI_MODEL_CONSOLIDACAO", "gemini-2.5-pro")
@@ -63,16 +62,12 @@ def _rj_dividir_pdf(path: str) -> list:
     try:
         doc = fitz.open(path)
         total = len(doc)
-        mb_orig = Path(path).stat().st_size / 1_048_576
-        mb_por_pag = mb_orig / total if total else 0
-        max_por_mb = int(CHUNK_MAX_MB_RJ / mb_por_pag) if mb_por_pag > 0 else CHUNK_MAX_PAGES_RJ
-        pag_max = max(30, min(CHUNK_MAX_PAGES_RJ, max_por_mb))
-        if total <= pag_max:
+        if total <= CHUNK_MAX_PAGES_RJ:
             doc.close()
             return [(path, 0, total)]
         chunks = []
-        for start in range(0, total, pag_max):
-            end = min(start + pag_max, total)
+        for start in range(0, total, CHUNK_MAX_PAGES_RJ):
+            end = min(start + CHUNK_MAX_PAGES_RJ, total)
             sub = fitz.open()
             sub.insert_pdf(doc, from_page=start, to_page=end - 1)
             tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -148,7 +143,7 @@ def _rj_extrair_chunk_fileapi(args) -> tuple:
     pg_fim = min(offset + CHUNK_MAX_PAGES_RJ, total_pg) if total_pg else "?"
 
     # Comprimir chunk antes do upload (acontece em paralelo nos workers)
-    comp_chunk, orig_mb, comp_mb = _comprimir_pdf(chunk_path)
+    comp_chunk, orig_mb, comp_mb = _comprimir_pdf_limite(chunk_path, max_mb=40.0)
     source_for_upload = comp_chunk
     if comp_chunk != chunk_path:
         comp_nota = f"{orig_mb:.0f}→{comp_mb:.0f}MB"
@@ -491,8 +486,7 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         info_scan = f"{len(esc)} pag. escaneadas ({pct}%)" if esc else "todas pesquisaveis"
         log.append(f"   · {nome}: {total_pg} pag. — {info_scan}")
         if len(chunks) > 1:
-            pag_por_chunk = chunks[1][1] if len(chunks) > 1 else CHUNK_MAX_PAGES_RJ
-            log.append(f"     Dividido em {len(chunks)} partes de ate {pag_por_chunk} pag.")
+            log.append(f"     Dividido em {len(chunks)} partes ({CHUNK_MAX_PAGES_RJ} pag. cada)")
         for chunk_path, offset, total in chunks:
             todos_chunks.append((chunk_path, offset, total, path))
 

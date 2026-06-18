@@ -145,6 +145,52 @@ def _responder_pergunta_generica(pergunta: str, relatorio: str, client, model: s
 
 
 
+def _comprimir_pdf_limite(path: str, max_mb: float = 40.0) -> tuple:
+    """
+    Garante que o PDF resultante fique abaixo de max_mb.
+    Tenta compressão normal primeiro; se ainda acima do limite,
+    re-renderiza TODAS as páginas (inclusive texto) como JPEG,
+    iterando DPI/qualidade para baixo até caber.
+    """
+    orig_mb = Path(path).stat().st_size / 1_048_576
+    comp, _, comp_mb = _comprimir_pdf(path)
+    if comp_mb <= max_mb:
+        return comp, orig_mb, comp_mb
+
+    if comp != path:
+        try: os.remove(comp)
+        except: pass
+
+    for dpi, quality in [(150, 50), (130, 45), (110, 42), (96, 40)]:
+        tmp_path = None
+        try:
+            doc = fitz.open(path)
+            new_doc = fitz.open()
+            for page in doc:
+                mat = fitz.Matrix(dpi / 72, dpi / 72)
+                pix = page.get_pixmap(matrix=mat)
+                img_bytes = pix.tobytes("jpeg", jpg_quality=quality)
+                rect = page.rect
+                new_page = new_doc.new_page(width=rect.width, height=rect.height)
+                new_page.insert_image(rect, stream=img_bytes, keep_proportion=False)
+            tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+            new_doc.save(tmp_path, garbage=4, deflate=True)
+            new_doc.close()
+            doc.close()
+            result_mb = Path(tmp_path).stat().st_size / 1_048_576
+            if result_mb <= max_mb:
+                return tmp_path, orig_mb, result_mb
+            os.remove(tmp_path)
+        except Exception:
+            if tmp_path and os.path.exists(tmp_path):
+                try: os.remove(tmp_path)
+                except: pass
+
+    return path, orig_mb, orig_mb
+
+
 def _comprimir_pdf(path: str) -> tuple:
     """
     Re-renderiza páginas escaneadas a 110 DPI / JPEG quality 48 (moderado-alto).
