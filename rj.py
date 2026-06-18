@@ -517,7 +517,8 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
                     tentativas=2, espera_base=15
                 )
             except Exception as e:
-                if "400" in str(e) or "INVALID_ARGUMENT" in str(e):
+                msg_e = str(e)
+                if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
                     ri, res, nota = _rj_extrair_chunk((idx, cp, offset, total_pg, n, cli))
                     return ri, res, (nota + " | " if nota else "") + "fallback inline"
                 raise
