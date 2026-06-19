@@ -150,9 +150,14 @@ def _comprimir_pdf_limite(path: str, max_mb: float = 40.0) -> tuple:
     Garante que o PDF resultante fique abaixo de max_mb.
     Tenta compressão normal primeiro; se ainda acima do limite,
     re-renderiza TODAS as páginas (inclusive texto) como JPEG,
-    iterando DPI/qualidade para baixo até caber.
+    começando em 110 DPI (suficiente para leitura por IA).
     """
     orig_mb = Path(path).stat().st_size / 1_048_576
+
+    # Fast path — já está dentro do limite, não faz nada
+    if orig_mb <= max_mb:
+        return path, orig_mb, orig_mb
+
     comp, _, comp_mb = _comprimir_pdf(path)
     if comp_mb <= max_mb:
         return comp, orig_mb, comp_mb
@@ -161,7 +166,9 @@ def _comprimir_pdf_limite(path: str, max_mb: float = 40.0) -> tuple:
         try: os.remove(comp)
         except: pass
 
-    for dpi, quality in [(150, 50), (130, 45), (110, 42), (96, 40)]:
+    # 110 DPI é o ponto de partida — evita passes desnecessários em 150/130 DPI
+    # que para PDFs de texto raramente cabem no limite
+    for dpi, quality in [(110, 42), (96, 40), (80, 38)]:
         tmp_path = None
         try:
             doc = fitz.open(path)
