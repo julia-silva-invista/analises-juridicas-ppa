@@ -129,6 +129,16 @@ Sempre que indicar movimentação, escreva normalmente sem nenhuma formatação.
 • Valor da causa:
   ∘ R$ X.XXX.XXX,XX (Mov.X/Evento nº X /Fls. XX/XX/ID XXXX/etc | fls. XXX/XXX) 
 
+--- 5a. Última planilha de débito juntada (se houver) ---
+• Última planilha de débito:
+  ∘ Juntada em DD/MM/AAAA ([Mov. X/Evento nº X /Fls. XX/XX/ID XXXX/etc | fls. XXX/XXX])
+    ▪ Total atualizado: R$ X.XXX.XXX,XX
+    ▪ Data-base do cálculo: DD/MM/AAAA
+    ▪ Índices aplicados: [correção monetária, juros moratórios, multa — conforme constam na planilha]
+    ▪ Observações: [divergências em relação aos índices contratuais, valores contestados ou qualquer peculiaridade relevante]
+
+  Se não houver planilha atualizada além da inicial, omitir esta seção.
+
 --- 6. Honorários ---
 • Honorários:
   ∘ [Percentual e base de cálculo, fixados na decisão de DD/MM/AAAA — (Mov.X/Evento nº X /Fls. XX/XX/ID XXXX/etc | fls. XXX/XXX)]
@@ -151,7 +161,7 @@ Use "Lastro constante da inicial" e "Lastro em execução" quando houver título
      ▪ Inadimplemento: DD/MM/AAAA (parcela XX/XX)
      ▪ Amortização: [Price / SAC / etc.]
 
-• Garantia: (todas as garantias deverão ser descritas. caso haja duas hipotecas, cada hipoteca será descrita num ítem. caso haja Aval além das hipotécas, por exemplo, também será descrito em ítem próprio. as penhoras realizadas nos autos não serão indicadas aqui, mas no item 'Constrições')
+• Garantia: (APENAS garantias CONTRATUAIS — constituídas antes ou no momento da contratação do crédito/título executivo, como hipoteca, alienação fiduciária, cessão fiduciária, aval, penhor, fiança. Descreva cada garantia em item separado. NUNCA incluir aqui penhoras, arrestos ou bloqueios realizados no curso da execução — esses vão exclusivamente em 'Constrições'.)
   ∘ [Descrição da garantia, da natureza e do instrumento — ex: Instrumento Particular de Cessão Fiduciária de Títulos em Cobrança/ Escritura Pública de Hipoteca (Mov.X/Evento nº X /Fls. XX/XX/ID XXXX/etc | fls. XXX/XXX)]
     ▪ Data de celebração: DD/MM/AAAA
     ▪ Valor: R$ X.XXX.XXX,XX (valor da garantia ou valor do bem)
@@ -274,15 +284,23 @@ Use "Lastro constante da inicial" e "Lastro em execução" quando houver título
     ▪ Status: [status da penhora - por exemplo: Pendente de intimação do executado X sobre a penhora/Penhora averbada na matrícula do Imóvel/Arresto deferido/Valores bloqueados já levantados pelo exequente] [em DD/MM/AAAA] [Mov. X/Evento nº X /Fls. XX/XX/ID XXXX/etc | fls. XXX/XXX]
     ▪ Pedidos indeferidos: (inserir pedidos de penhora ou arresto indeferidos ou bloqueio de valores via sisbajud cujo desbloqueio foi determinado, etc) ([pedido (indicar o objeto, caso seja imóvel, descrever matrícula e CRI)] [DD/MM/AAAA (data da negativa)] [] [fundamento da negativa - exemplo: pedido de penhora indeferido visto que a intimação do executado está pendente/pedido de arresto indeferido por não estarem configurados os requisitos] [Mov. X/Evento nº X /Fls. XX/XX/ID XXXX/etc | fls. XXX/XXX])
 
+--- 12a. Penhoras no Rosto dos Autos (somente se houver referência nos autos) ---
+• Penhoras no Rosto dos Autos: (Se não houver: omitir seção inteiramente. São requerimentos de OUTROS credores — distintos do exequente principal — pedindo reserva de valores ou bens penhorados nesta execução para satisfação de seus próprios créditos. Não confundir com as constrições do exequente principal.)
+  ∘ [Nome do credor requerente] — [CPF/CNPJ] ([Mov. X/Evento nº X /Fls. XX/XX/ID XXXX/etc | fls. XXX/XXX])
+    ▪ Data do requerimento: DD/MM/AAAA
+    ▪ Valor requerido: R$ X.XXX.XXX,XX
+    ▪ Origem do crédito: [processo de origem, título ou descrição]
+    ▪ Status: [Deferida / Indeferida / Pendente de análise] em DD/MM/AAAA ([Mov. X | fls. XX/XX])
+
 --- 13. Principais andamentos ---
-• Principais andamentos: (listar as movimentações relevantes no bojo do processo principal e realizar breve descrição objetiva. quanto mais relevante for a movimentação, a descrição pode ser mais extensa - mas não muito longa)
+• Principais andamentos: (lista cronológica dos atos relevantes para compreensão da linha do tempo do processo. Em processos com múltiplos PDFs/chunks, contemplar andamentos de TODOS os fragmentos — não omitir períodos.)
   DD/MM/AAAA  – [Descrição objetiva do ato processual] ([Mov. X/Evento nº X /Fls. XX/XX/ID XXXX/etc | fls. XXX/XXX])
   DD/MM/AAAA  – [Próximo ato]
   ...
 
-  Liste em ordem cronológica crescente. Inclua todos os atos relevantes: distribuição, decisões, citações, acordos, homologações, penhoras, leilões, manifestações de terceiros (incluir nome e CPF/CNPJ), recursos ajuizados, embargos opostos.
-  A descrição deve ser concisa mas informativa — incluir partes envolvidas,valores e consequências processuais quando relevante.
-  Não precisa incluir tipo "citação negativa" ou atos ordinatórios irrelevantes.
+  INCLUIR: distribuição, todas as decisões e despachos (mesmo interlocutórios), citações positivas, petições relevantes das partes (impugnações, pedidos de penhora/constrição, acordos, requerimentos de leilão, etc.), homologações e inadimplementos de acordos, constrições deferidas e indeferidas, planilhas de atualização de débito juntadas, leilões (designação, realização, resultado), manifestações e habilitações de terceiros (nome e CPF/CNPJ), pedidos de penhora no rosto dos autos, recursos e embargos ajuizados, trânsito em julgado.
+  OMITIR: certidões de mero expediente, citações negativas, juntadas de documentos sem conteúdo decisório próprio, publicações de pauta de rotina.
+  A descrição deve ser concisa mas informativa — incluir partes envolvidas, valores e consequências processuais quando relevante.
 
 ======================================================================
 REGRAS GERAIS DE FORMATAÇÃO

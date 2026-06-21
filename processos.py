@@ -49,7 +49,15 @@ PROMPT_EXTR_PROC = (
     "- Citacoes, intimacoes e suas modalidades\n"
     "- Excecoes, embargos e recursos: teses e status\n"
     "- Decisoes e despachos\n"
-    "- Todos os andamentos processuais com data e referencia (Mov./fls.)\n\n"
+    "- Andamentos processuais: registre todos os atos relevantes com data e referencia (Mov./fls./Evento/ID).\n"
+    "  Incluir: decisoes e despachos (mesmo interlocutorios), citacoes positivas, peticoes relevantes\n"
+    "  das partes, acordos e homologacoes/inadimplementos, constricoes deferidas e indeferidas,\n"
+    "  planilhas de debito juntadas, penhoras no rosto dos autos, recursos, embargos, leiloes,\n"
+    "  transito em julgado. Omitir apenas certidoes de expediente, citacoes negativas e juntadas\n"
+    "  sem conteudo decisorio. NAO omita periodos — a consolidacao precisa de todos os fragmentos.\n\n"
+    "- Penhoras no rosto dos autos: se houver requerimento de OUTROS credores (distintos do exequente)\n"
+    "  pedindo reserva de valores/bens nesta execucao, registre separadamente com nome, CPF/CNPJ,\n"
+    "  valor, origem do credito e status (deferido/indeferido/pendente).\n\n"
     "NAO formate como relatorio final ainda. Apenas extraia tudo com fidelidade."
 )
 

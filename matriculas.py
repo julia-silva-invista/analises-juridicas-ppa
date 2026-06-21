@@ -97,8 +97,8 @@ PROMPT_MATRICULA = (
     "   R.5 - **Doação**: Carlos Guimaraes doou para Murilo Menezes (CPF 111.222.333-44) em 03/06/1988.\n\n"
     "   Sempre que trouxer a natureza das transmissões, coloque em negrito apenas o tipo (ex: **Compra e Venda**).\n\n"
     "5. onus_vigentes_registrados_averbados: apenas gravames vigentes de natureza financeira.\n"
-    "   NAO inclua aqui: indisponibilidade de bens, averbacao premonitoria, averbacao de ajuizamento"
-    " de execucao, protesto, restricao administrativa. Estes vao em observacoes.\n"
+    "   NAO inclua aqui: indisponibilidade de bens, averbacao premonitoria, averbacao de ajuizamento,"
+    " averbacao de execucao, protesto, restricao administrativa. Estes vao em observacoes.\n"
     "   Se nao houver onus vigentes financeiros, preencha exatamente: Sem onus vigentes identificados.\n\n"
     "6. Formato de cada onus vigente:\n"
     "   [Codigo]: [Tipo], [n. cedula se disponivel], [dd/mm/aaaa], [partes — sem CPF/CNPJ],\n"
@@ -152,7 +152,10 @@ PROMPT_MATRICULA = (
     "   - vencimento_final: data de vencimento final em DD/MM/AAAA. Null se nao houver.\n"
     "   - cancelado: true se houver AV/R posterior que baixou, cancelou ou levantou este onus."
     " false se ainda vigente.\n"
-    "   NAO inclua: indisponibilidade, averbacao premonitoria, averbacao de ajuizamento, protesto.\n"
+    "   NAO inclua: indisponibilidade, averbacao premonitoria, averbacao de ajuizamento,"
+    " averbacao de execucao, protesto.\n"
+    "   Averbacao de execucao e averbacao premonitoria sao NOTACOES PROCESSUAIS, nao gravames financeiros"
+    " — ignorar no calculo mesmo que tenham valor indicado.\n"
     "   NAO inclua onus sem valor principal identificavel. Nao invente dados.\n\n"
     "19. VARREDURA OBRIGATORIA AV/R POR AV/R:\n"
     "    a) Identifique a numeracao maxima de R e de AV no documento.\n"
@@ -160,8 +163,8 @@ PROMPT_MATRICULA = (
     "    c) Para CADA item, classifique em EXATAMENTE uma destas categorias:\n"
     "       - ONUS VIGENTE FINANCEIRO: penhora ativa, hipoteca, alienacao fiduciaria, CCB, arresto"
     " vigente, confissao de divida, titulo de credito nao cancelado -> onus_vigentes\n"
-    "       - ONUS NAO FINANCEIRO (vai em observacoes, NAO em onus_vigentes): indisponibilidade de"
-    " bens, averbacao premonitoria, averbacao de ajuizamento de execucao, protesto\n"
+    "       - ONUS NAO FINANCEIRO (vai em observacoes, NAO em onus_vigentes nem em onus_financeiros):"
+    " indisponibilidade de bens, averbacao premonitoria, averbacao de ajuizamento, averbacao de execucao, protesto\n"
     "       - ONUS CANCELADO: onus cuja AV/R posterior cancelou/baixou -> onus_cancelados\n"
     "       - OBSERVACAO/TRANSMISSAO: compra e venda, doacao, partilha, integralizacao, divorcio,"
     " retificacao, georreferenciamento, encerramento, etc.\n"
@@ -284,6 +287,8 @@ def _mat_pos_processar(resultado):
 _TIPOS_NAO_FINANCEIROS = {
     "indisponibilidade", "premonitoria", "premonitório", "premonotoria",
     "ajuizamento", "protesto", "restricao administrativa",
+    "averbacao de execucao", "averbação de execução",
+    "averbacao execucao", "averbação execução",
 }
 
 
