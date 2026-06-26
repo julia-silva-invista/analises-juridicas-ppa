@@ -15,6 +15,7 @@ from google.genai import types
 
 from report_template_processos import REPORT_TEMPLATE_INSTRUCTIONS, SYSTEM_PROMPT as SYSTEM_PROMPT_PROC
 from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_proc, _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite
+from dossie_ppa import gerar_dossie_word
 
 CHUNK_MAX_PAGES_PROC    = 400
 MODO_DIRETO_MAX_PROC    = 700
@@ -666,6 +667,21 @@ def proc_gerar_word(relatorio: str):
     if not relatorio.strip():
         return gr.update(value=None, visible=False)
     return gr.update(value=_gerar_docx(relatorio, "Analise de Processo Judicial"), visible=True)
+
+
+def proc_gerar_dossie(relatorio: str):
+    if not relatorio.strip():
+        return gr.update(value=None, visible=False)
+    try:
+        k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
+        client = genai.Client(api_key=k1)
+        caminho = gerar_dossie_word(relatorio, client, MODEL_PROC_FAST)
+        return gr.update(value=caminho, visible=True)
+    except Exception as e:
+        import tempfile, pathlib
+        err_path = str(pathlib.Path(tempfile.gettempdir()) / "dossie_erro.txt")
+        pathlib.Path(err_path).write_text(f"Erro ao gerar dossiê: {e}", encoding="utf-8")
+        return gr.update(value=err_path, visible=True)
 
 
 def proc_responder(pergunta: str, relatorio: str):

@@ -180,7 +180,17 @@ PROMPT_MATRICULA = (
     "   - de_doc: CPF ou CNPJ do transmitente, APENAS DIGITOS sem formatacao (ex: '12345678901')."
     " Null se nao disponivel.\n"
     "   - para_doc: CPF ou CNPJ do adquirente, APENAS DIGITOS. Null se nao disponivel.\n"
-    "   Nao invente. Deixe null qualquer campo nao identificavel.\n"
+    "   Nao invente. Deixe null qualquer campo nao identificavel.\n\n"
+    "21. CONSISTENCIA OBRIGATORIA entre onus_financeiros e onus_vigentes_registrados_averbados:\n"
+    "   Antes de finalizar, verifique: para cada item em onus_financeiros com cancelado=false,\n"
+    "   ele DEVE estar descrito em onus_vigentes_registrados_averbados.\n"
+    "   Se voce nao o incluiu em onus_vigentes, defina cancelado=true para ele.\n"
+    "   A inconsistencia (ativo no JSON mas ausente no texto, ou vice-versa) e ERRO GRAVE.\n\n"
+    "22. VALORES EM MOEDA PRE-REAL (anterior a julho/1994): qualquer onus cujo valor esteja expresso\n"
+    "   em Cruzeiros, Cruzados, NCz$, Cr$, URV ou qualquer moeda anterior ao Real NAO deve ser\n"
+    "   incluido em onus_financeiros. Registre-o APENAS em observacoes, indicando a moeda original.\n"
+    "   Se nao houver informacao sobre a moeda mas o valor parecer incompativel com imóveis brasileiros\n"
+    "   (ex: valores acima de R$ 500.000.000 para credito rural dos anos 80-90), trate como moeda antiga.\n"
 )
 
 
@@ -292,8 +302,14 @@ _TIPOS_NAO_FINANCEIROS = {
 }
 
 
-def _mat_calcular_valor_onus(onus_list: list, data_referencia: date = None) -> str:
+def _mat_calcular_valor_onus(onus_list: list, onus_vigentes_texto: str = "",
+                              data_referencia: date = None) -> str:
     if not onus_list:
+        return ""
+    # Se o campo textual já diz "sem ônus vigentes", o modelo concluiu que
+    # não há gravames ativos — não computar valor (evita valores em moeda antiga
+    # ou itens que o modelo identificou como sem efeito prático serem somados).
+    if onus_vigentes_texto and "sem onus vigentes" in onus_vigentes_texto.lower():
         return ""
     if data_referencia is None:
         data_referencia = date.today()
@@ -712,7 +728,10 @@ def mat_gerar_excel(arquivos,
     for pos, idx in enumerate(indices_ok):
         r = resultados_dict[idx]
         onus_list = r.pop("onus_financeiros", None) or []
-        r["valor_total_onus_calculado"] = _mat_calcular_valor_onus(onus_list, hoje)
+        onus_vigentes_txt = r.get("onus_vigentes_registrados_averbados", "") or ""
+        r["valor_total_onus_calculado"] = _mat_calcular_valor_onus(
+            onus_list, onus_vigentes_texto=onus_vigentes_txt, data_referencia=hoje
+        )
 
         if usar_alertas:
             alertas = _mat_detectar_alertas(r, devedores_docs, relacionados_docs, data_ajuiz)
