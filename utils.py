@@ -50,11 +50,12 @@ def _retry(fn, tentativas=5, espera_base=20):
             msg = str(e)
             msg_low = msg.lower()
             retryable = (
-                any(c in msg for c in ["503", "500", "504", "UNAVAILABLE", "overloaded"])
+                any(c in msg for c in ["503", "500", "504", "429", "UNAVAILABLE", "overloaded"])
                 or any(c in msg_low for c in [
                     "timeout", "timed out", "deadline", "deadlineexceeded",
                     "connection reset", "connection error", "connecterror",
                     "read timed out", "readtimeout",
+                    "resource_exhausted", "rate limit", "quota",
                 ])
             )
             if retryable and t < tentativas:
