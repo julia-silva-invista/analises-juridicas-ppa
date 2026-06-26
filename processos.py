@@ -14,7 +14,7 @@ from google import genai
 from google.genai import types
 
 from report_template_processos import REPORT_TEMPLATE_INSTRUCTIONS, SYSTEM_PROMPT as SYSTEM_PROMPT_PROC
-from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_proc, _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite
+from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_proc, _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite, GEMINI_TIMEOUT_MS
 from dossie_ppa import gerar_dossie_word
 
 CHUNK_MAX_PAGES_PROC    = 400
@@ -674,7 +674,7 @@ def proc_gerar_dossie(relatorio: str):
         return gr.update(value=None, visible=False)
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
-        client = genai.Client(api_key=k1)
+        client = genai.Client(api_key=k1, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
         caminho = gerar_dossie_word(relatorio, client, MODEL_PROC_FAST)
         return gr.update(value=caminho, visible=True)
     except Exception as e:
@@ -687,7 +687,7 @@ def proc_gerar_dossie(relatorio: str):
 def proc_responder(pergunta: str, relatorio: str):
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
-        client = genai.Client(api_key=k1)
+        client = genai.Client(api_key=k1, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
         return _responder_pergunta_generica(pergunta, relatorio, client, MODEL_PROC_CONS)
     except Exception as e:
         return f"Erro: {e}"

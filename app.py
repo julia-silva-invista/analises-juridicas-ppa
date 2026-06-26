@@ -417,7 +417,7 @@ with gr.Blocks(
         fn=proc_analisar,
         inputs=[proc_pdf_principal, proc_pdf_relacionados, proc_instrucoes, proc_usar_pro, proc_versao_resumida],
         outputs=[proc_log, proc_report, proc_relatorio_state],
-        concurrency_limit=2,
+        concurrency_limit=3,
     )
     proc_word_btn.click(fn=proc_gerar_word, inputs=[proc_relatorio_state], outputs=[proc_word_file])
     proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state], outputs=[proc_dossie_file])
@@ -430,7 +430,7 @@ with gr.Blocks(
         fn=rj_analisar,
         inputs=[rj_pdf_principal, rj_pdf_relacionados, rj_instrucoes, rj_usar_pro, rj_versao_resumida],
         outputs=[rj_log, rj_report, rj_relatorio_state, rj_extracao_state],
-        concurrency_limit=2,
+        concurrency_limit=3,
     )
     rj_word_btn.click(fn=rj_gerar_word, inputs=[rj_relatorio_state], outputs=[rj_word_file])
     rj_excel_cred_btn.click(
@@ -447,7 +447,7 @@ with gr.Blocks(
         fn=mat_gerar_excel,
         inputs=[mat_arquivos, mat_data_ajuizamento, mat_devedores, mat_relacionados],
         outputs=[mat_log, mat_status, mat_excel],
-        concurrency_limit=2,
+        concurrency_limit=3,
     )
     mat_perguntar_btn.click(
         fn=mat_responder, inputs=[mat_pergunta, mat_log], outputs=[mat_resposta]

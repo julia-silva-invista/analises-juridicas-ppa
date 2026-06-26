@@ -13,12 +13,22 @@ from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 
+# Timeout (ms) por requisicao HTTP ao Gemini. Converte travamento de socket
+# (conexao viva mas sem resposta) em excecao, permitindo que o _retry atue.
+# 10 min cobre folgado ate a consolidacao; acima disso e hang de verdade.
+GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "600000"))
+
+
 def _get_clients_rj():
     k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
     k2 = os.getenv("GEMINI_API_KEY_2") or k1
     if not k1:
         raise RuntimeError("GEMINI_API_KEY_1 não configurada.")
-    return genai.Client(api_key=k1), genai.Client(api_key=k2)
+    http_opts = types.HttpOptions(timeout=GEMINI_TIMEOUT_MS)
+    return (
+        genai.Client(api_key=k1, http_options=http_opts),
+        genai.Client(api_key=k2, http_options=http_opts),
+    )
 
 
 def _get_clients_proc():
@@ -26,7 +36,11 @@ def _get_clients_proc():
     k2 = os.getenv("GEMINI_API_KEY_2") or k1
     if not k1:
         raise RuntimeError("GEMINI_API_KEY_1 não configurada.")
-    return genai.Client(api_key=k1), genai.Client(api_key=k2)
+    http_opts = types.HttpOptions(timeout=GEMINI_TIMEOUT_MS)
+    return (
+        genai.Client(api_key=k1, http_options=http_opts),
+        genai.Client(api_key=k2, http_options=http_opts),
+    )
 
 def _retry(fn, tentativas=5, espera_base=20):
     for t in range(1, tentativas + 1):
@@ -34,9 +48,15 @@ def _retry(fn, tentativas=5, espera_base=20):
             return fn()
         except Exception as e:
             msg = str(e)
-            retryable = any(c in msg for c in [
-                "503", "500", "UNAVAILABLE", "overloaded",
-            ])
+            msg_low = msg.lower()
+            retryable = (
+                any(c in msg for c in ["503", "500", "504", "UNAVAILABLE", "overloaded"])
+                or any(c in msg_low for c in [
+                    "timeout", "timed out", "deadline", "deadlineexceeded",
+                    "connection reset", "connection error", "connecterror",
+                    "read timed out", "readtimeout",
+                ])
+            )
             if retryable and t < tentativas:
                 time.sleep(espera_base * t)
             else:
