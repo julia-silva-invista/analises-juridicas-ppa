@@ -31,6 +31,9 @@ _LOGO_PATH = Path(__file__).parent / "assets" / "invista_logo.png"
 
 def _set_bg(cell, hex6: str):
     tcp = cell._tc.get_or_add_tcPr()
+    # remove shd existente — schema permite no maximo 1, duplicar corrompe o docx
+    for old in tcp.findall(qn("w:shd")):
+        tcp.remove(old)
     shd = OxmlElement("w:shd")
     shd.set(qn("w:val"), "clear")
     shd.set(qn("w:color"), "auto")
@@ -78,11 +81,12 @@ def _write(cell, text: str, bold=False, pt=9, white=False, italic=False, align=N
         r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 
 
-def _label(cell, text: str):
+def _label(cell, text=None):
     _set_bg(cell, _LARANJA)
     _set_borders(cell)
     _cell_pad(cell)
-    _write(cell, text, bold=True, white=True)
+    if text is not None:
+        _write(cell, text, bold=True, white=True)
 
 
 def _value(cell, text: str, cream=False):
@@ -118,12 +122,7 @@ def _two_col_table(doc, rows_data: list, header: str | None = None,
         _full_span_row(t, header)
     for label, value in rows_data:
         row = t.add_row()
-        _label(row.cells[0])
-        # set label text
-        _set_bg(row.cells[0], _LARANJA)
-        _set_borders(row.cells[0])
-        _cell_pad(row.cells[0])
-        _write(row.cells[0], label, bold=True, white=True)
+        _label(row.cells[0], label)
         _value(row.cells[1], value)
     # widths
     for row in t.rows:

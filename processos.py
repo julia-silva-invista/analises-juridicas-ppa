@@ -671,17 +671,16 @@ def proc_gerar_word(relatorio: str):
 
 def proc_gerar_dossie(relatorio: str):
     if not relatorio.strip():
-        return gr.update(value=None, visible=False)
+        yield gr.update(value=None, visible=False), "Gere uma análise primeiro."
+        return
+    yield gr.update(visible=False), "⏳ Gerando dossiê PPA (extraindo dados via IA)..."
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
         caminho = gerar_dossie_word(relatorio, client, MODEL_PROC_FAST)
-        return gr.update(value=caminho, visible=True)
+        yield gr.update(value=caminho, visible=True), "✅ Dossiê gerado — clique no arquivo para baixar."
     except Exception as e:
-        import tempfile, pathlib
-        err_path = str(pathlib.Path(tempfile.gettempdir()) / "dossie_erro.txt")
-        pathlib.Path(err_path).write_text(f"Erro ao gerar dossiê: {e}", encoding="utf-8")
-        return gr.update(value=err_path, visible=True)
+        yield gr.update(value=None, visible=False), f"❌ Erro ao gerar dossiê: {e}"
 
 
 def proc_responder(pergunta: str, relatorio: str):

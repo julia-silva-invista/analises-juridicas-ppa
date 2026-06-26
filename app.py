@@ -169,6 +169,7 @@ with gr.Blocks(
                 proc_dossie_btn = gr.Button("Dossiê PPA",   variant="secondary", elem_classes=["word-download-btn"])
             proc_word_file   = gr.File(label="",          interactive=False, visible=False, elem_classes=["word-file-output"])
             proc_dossie_file = gr.File(label="Dossiê PPA", interactive=False, visible=False, elem_classes=["word-file-output"])
+            proc_dossie_status = gr.Markdown("")
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Column(elem_classes=["qa-section"]):
@@ -420,7 +421,7 @@ with gr.Blocks(
         concurrency_limit=3,
     )
     proc_word_btn.click(fn=proc_gerar_word, inputs=[proc_relatorio_state], outputs=[proc_word_file])
-    proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state], outputs=[proc_dossie_file])
+    proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state], outputs=[proc_dossie_file, proc_dossie_status])
     proc_perguntar_btn.click(
         fn=proc_responder, inputs=[proc_pergunta, proc_relatorio_state], outputs=[proc_resposta]
     )
