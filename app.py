@@ -13,7 +13,7 @@ import gradio as gr
 
 from design import CSS, HEADER_HTML, FOOTER_HTML
 from processos import proc_analisar, proc_gerar_word, proc_gerar_dossie, proc_responder
-from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores
+from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores, rj_gerar_checklist, rj_gerar_checklist_creditos
 from matriculas import mat_gerar_excel, mat_responder
 from coleta import coleta_gerar
 
@@ -163,6 +163,7 @@ with gr.Blocks(
                     )
 
             proc_relatorio_state = gr.State("")
+            proc_extracao_state  = gr.State("")   # texto OCR completo (fonte para o dossiê PPA)
 
             with gr.Row():
                 proc_word_btn   = gr.Button("Baixar Word",  variant="secondary", elem_classes=["word-download-btn"])
@@ -246,9 +247,15 @@ with gr.Blocks(
             with gr.Row():
                 rj_word_btn          = gr.Button("Baixar Word",            variant="secondary", elem_classes=["word-download-btn"])
                 rj_excel_cred_btn    = gr.Button("Gerar Excel de Credores", variant="secondary", elem_classes=["word-download-btn"])
+            with gr.Row():
+                rj_checklist_btn     = gr.Button("Checklist RJ",            variant="secondary", elem_classes=["word-download-btn"])
+                rj_checklist_cred_btn = gr.Button("Checklist de Créditos RJ", variant="secondary", elem_classes=["word-download-btn"])
             rj_word_file      = gr.File(label="",                  interactive=False, visible=False, elem_classes=["word-file-output"])
             rj_excel_cred_file   = gr.File(label="Excel de Credores", interactive=False, visible=False, elem_classes=["word-file-output"])
             rj_excel_cred_status = gr.Textbox(label="", interactive=False, lines=1, show_label=False)
+            rj_checklist_file      = gr.File(label="Checklist RJ",        interactive=False, visible=False, elem_classes=["word-file-output"])
+            rj_checklist_cred_file = gr.File(label="Checklist de Créditos RJ", interactive=False, visible=False, elem_classes=["word-file-output"])
+            rj_checklist_status    = gr.Markdown("")
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Column(elem_classes=["qa-section"]):
@@ -417,11 +424,11 @@ with gr.Blocks(
     proc_analisar_btn.click(
         fn=proc_analisar,
         inputs=[proc_pdf_principal, proc_pdf_relacionados, proc_instrucoes, proc_usar_pro, proc_versao_resumida],
-        outputs=[proc_log, proc_report, proc_relatorio_state],
+        outputs=[proc_log, proc_report, proc_relatorio_state, proc_extracao_state],
         concurrency_limit=3,
     )
     proc_word_btn.click(fn=proc_gerar_word, inputs=[proc_relatorio_state], outputs=[proc_word_file])
-    proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state], outputs=[proc_dossie_file, proc_dossie_status])
+    proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state, proc_extracao_state], outputs=[proc_dossie_file, proc_dossie_status])
     proc_perguntar_btn.click(
         fn=proc_responder, inputs=[proc_pergunta, proc_relatorio_state], outputs=[proc_resposta]
     )
@@ -438,6 +445,16 @@ with gr.Blocks(
         fn=rj_gerar_excel_credores,
         inputs=[rj_relatorio_state, rj_extracao_state],
         outputs=[rj_excel_cred_file, rj_excel_cred_status],
+    )
+    rj_checklist_btn.click(
+        fn=rj_gerar_checklist,
+        inputs=[rj_relatorio_state, rj_extracao_state],
+        outputs=[rj_checklist_file, rj_checklist_status],
+    )
+    rj_checklist_cred_btn.click(
+        fn=rj_gerar_checklist_creditos,
+        inputs=[rj_relatorio_state, rj_extracao_state],
+        outputs=[rj_checklist_cred_file, rj_checklist_status],
     )
     rj_perguntar_btn.click(
         fn=rj_responder, inputs=[rj_pergunta, rj_relatorio_state], outputs=[rj_resposta]

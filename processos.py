@@ -438,15 +438,15 @@ def _proc_analisar_direto(client, arquivos_gemini: list, instrucoes: str, model_
 
 def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False, versao_resumida: bool = False):
     if not pdf_files:
-        yield "Nenhum arquivo enviado.", "", ""
+        yield "Nenhum arquivo enviado.", "", "", ""
         return
 
-    yield "Iniciando analise de processo judicial...", "", ""
+    yield "Iniciando analise de processo judicial...", "", "", ""
 
     try:
         client1, client2 = _get_clients_proc()
     except Exception as e:
-        yield f"Erro de configuracao: {e}", "", ""
+        yield f"Erro de configuracao: {e}", "", "", ""
         return
 
     def _nat_key(p):
@@ -470,11 +470,11 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
     if instrucoes.strip():
         log.append("Instrucoes adicionais recebidas.")
     log.append(f"Modelo de consolidacao: {model_cons}")
-    yield "\n".join(log), "", ""
+    yield "\n".join(log), "", "", ""
 
     # Inspecionar e dividir
     log.append("\nInspecionando e dividindo PDFs...")
-    yield "\n".join(log), "", ""
+    yield "\n".join(log), "", "", ""
 
     todos_chunks = []
     _temp_comprimidos: list = []
@@ -486,18 +486,18 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
         if 10 <= mb_orig <= COMPRESSAO_PRE_MB_PROC:
             # Arquivo pequeno: pré-comprime pois pode caber no modo direto
             log.append(f"   Comprimindo {nome} ({mb_orig:.0f} MB)...")
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
             comp_path, orig_mb, comp_mb = _comprimir_pdf(path)
             if comp_path != path:
                 reducao = (1 - comp_mb / orig_mb) * 100
                 log[-1] = f"   {nome}: {orig_mb:.0f} MB → {comp_mb:.0f} MB (-{reducao:.0f}%)"
-                yield "\n".join(log), "", ""
+                yield "\n".join(log), "", "", ""
                 _temp_comprimidos.append(comp_path)
                 path_proc = comp_path
         elif mb_orig > COMPRESSAO_PRE_MB_PROC:
             # Arquivo grande: vai direto ao modo chunked; compressao ocorre por chunk em paralelo
             log.append(f"   {nome} ({mb_orig:.0f} MB) — compressao por chunk (paralelo)")
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
 
         doc_tmp = fitz.open(path_proc)
         total_pg = len(doc_tmp)
@@ -523,22 +523,23 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
     n = len(todos_chunks)
     total_paginas = sum(c[2] for c in todos_chunks if c[2])
     compressed_total_mb = sum(Path(c[0]).stat().st_size for c in todos_chunks) / 1_048_576
-    yield "\n".join(log), "", ""
+    yield "\n".join(log), "", "", ""
 
     t_inicio = time.time()
     cache = None
+    texto_merged = ""  # texto OCR completo (modo chunked) — fonte para o dossiê PPA
 
     try:
         # Modo direto (1 chamada) para documentos pequenos
         if total_paginas <= MODO_DIRETO_MAX_PROC and compressed_total_mb <= MODO_DIRETO_MAX_MB_PROC:
             log.append(f"\nModo direto ({total_paginas} pag. · {compressed_total_mb:.0f} MB — 1 chamada ao {model_cons})")
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
 
             arquivos_gemini = []
             for idx, (chunk_path, offset, total_pg, pdf_orig) in enumerate(todos_chunks, 1):
                 tam = Path(chunk_path).stat().st_size / 1_048_576
                 log.append(f"   Enviando {idx}/{len(todos_chunks)} ({tam:.1f} MB)...")
-                yield "\n".join(log), "", ""
+                yield "\n".join(log), "", "", ""
 
                 try:
                     chunk_path.encode("ascii")
@@ -565,17 +566,17 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
                     wait_time = min(wait_time + 1, 4)
                 arquivos_gemini.append(arq)
                 log[-1] = f"   Arquivo {idx}/{len(todos_chunks)} pronto."
-                yield "\n".join(log), "", ""
+                yield "\n".join(log), "", "", ""
 
             log.append("\nGerando relatorio...")
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
             relatorio = _proc_analisar_direto(client1, arquivos_gemini, instrucoes, model_cons, versao_resumida)
 
         else:
             # Modo chunked via File API — 4 workers, leitura nativa de PDF
             log.append(f"\nModo chunked ({n} chunk(s) · {compressed_total_mb:.0f} MB · 4 workers · File API)...")
             log.append(_barra_progresso(0, n))
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
 
             parciais: dict = {}
 
@@ -610,11 +611,11 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
                     except Exception as e:
                         i_f = futures[future]
                         log.append(f"   Erro no chunk {i_f+1}: {e}")
-                    yield "\n".join(log), "", ""
+                    yield "\n".join(log), "", "", ""
 
             t_extr = int(time.time() - t_inicio)
             log.append(f"   Extracao: {t_extr//60}min{t_extr%60:02d}s")
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
 
             # Configurar cache (apenas para versao normal — resumida nao usa)
             if versao_resumida:
@@ -622,36 +623,37 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
                 log.append("\nModo resumo — cache nao necessario.")
             else:
                 log.append("\nConfigurando cache para consolidacao...")
-                yield "\n".join(log), "", ""
+                yield "\n".join(log), "", "", ""
                 cache = _proc_obter_cache(client1, model_cons)
                 log[-1] = "Cache configurado." if cache else "Cache nao disponivel — usando prompt completo."
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
 
             # Consolidar
             log.append(f"\nConsolidando relatorio ({model_cons})...")
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
             lista = [parciais.get(i, "") for i in range(n)]
+            texto_merged = "\n\n".join(f"[PARTE {i+1}]\n{t}" for i, t in enumerate(lista) if t and t.strip())
             relatorio = _proc_consolidar(client1, lista, instrucoes, cache, model_cons, versao_resumida)
 
         # Processos relacionados
         if pdf_relacionados:
             pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
             log.append(f"\nProcessando {len(pdf_paths_rel)} processo(s) relacionado(s)...")
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
             secao_rel = _proc_processar_relacionados(pdf_paths_rel, client1, client2, instrucoes, cache, model_cons)
             if secao_rel:
                 relatorio = relatorio + "\n\n" + secao_rel
             log[-1] = "   Processos relacionados analisados." if secao_rel else "   Nenhuma informacao relevante nos processos relacionados."
-            yield "\n".join(log), "", ""
+            yield "\n".join(log), "", "", ""
 
         t_total = int(time.time() - t_inicio)
         log.append(f"\nAnalise concluida em {t_total//60}min{t_total%60:02d}s | {len(relatorio):,} chars")
         relatorio_state = relatorio
-        yield "\n".join(log), relatorio, relatorio_state
+        yield "\n".join(log), relatorio, relatorio_state, texto_merged
 
     except Exception as exc:
         log.append(f"\nErro: {exc}")
-        yield "\n".join(log), f"Erro:\n{exc}", ""
+        yield "\n".join(log), f"Erro:\n{exc}", "", ""
 
     finally:
         for cp, _, _, orig in todos_chunks:
@@ -669,15 +671,17 @@ def proc_gerar_word(relatorio: str):
     return gr.update(value=_gerar_docx(relatorio, "Analise de Processo Judicial"), visible=True)
 
 
-def proc_gerar_dossie(relatorio: str):
-    if not relatorio.strip():
+def proc_gerar_dossie(relatorio: str, extracao: str = ""):
+    # Prioriza o texto OCR completo; o relatório resumido omite campos do dossiê
+    fonte = extracao.strip() if extracao and extracao.strip() else (relatorio or "").strip()
+    if not fonte:
         yield gr.update(value=None, visible=False), "Gere uma análise primeiro."
         return
     yield gr.update(visible=False), "⏳ Gerando dossiê PPA (extraindo dados via IA)..."
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
-        caminho = gerar_dossie_word(relatorio, client, MODEL_PROC_FAST)
+        caminho = gerar_dossie_word(fonte, client, MODEL_PROC_FAST)
         yield gr.update(value=caminho, visible=True), "✅ Dossiê gerado — clique no arquivo para baixar."
     except Exception as e:
         yield gr.update(value=None, visible=False), f"❌ Erro ao gerar dossiê: {e}"

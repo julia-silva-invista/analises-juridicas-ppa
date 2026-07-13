@@ -18,6 +18,7 @@ from google.genai import types
 
 from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
 from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite
+from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos
 
 CHUNK_MAX_PAGES_RJ    = 400
 MODEL_EXTRACAO_RJ     = os.getenv("GEMINI_MODEL_EXTRACAO", "gemini-2.5-flash")
@@ -618,6 +619,34 @@ def rj_responder(pergunta: str, relatorio: str):
         return _responder_pergunta_generica(pergunta, relatorio, client, MODEL_CONSOLIDACAO_RJ)
     except Exception as e:
         return f"Erro: {e}"
+
+
+def rj_gerar_checklist(relatorio: str, texto_bruto: str = ""):
+    # Prioriza o texto OCR completo; o relatório resumido omite campos do checklist
+    fonte = texto_bruto.strip() if texto_bruto and texto_bruto.strip() else (relatorio or "").strip()
+    if not fonte:
+        return gr.update(value=None, visible=False), "Gere uma análise primeiro."
+    try:
+        k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
+        client = genai.Client(api_key=k1)
+        path = gerar_checklist_rj(fonte, client, MODEL_RAPIDO_RJ)
+        return gr.update(value=path, visible=True), "✅ Checklist RJ gerado — clique no arquivo para baixar."
+    except Exception as e:
+        return gr.update(value=None, visible=False), f"❌ Erro: {e}"
+
+
+def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = ""):
+    # Prioriza o texto OCR completo (RJ + execuções); o relatório resumido omite campos
+    fonte = texto_bruto.strip() if texto_bruto and texto_bruto.strip() else (relatorio or "").strip()
+    if not fonte:
+        return gr.update(value=None, visible=False), "Gere uma análise primeiro."
+    try:
+        k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
+        client = genai.Client(api_key=k1)
+        path = gerar_checklist_creditos(fonte, client, MODEL_RAPIDO_RJ)
+        return gr.update(value=path, visible=True), "✅ Análise de créditos RJ gerada — clique no arquivo para baixar."
+    except Exception as e:
+        return gr.update(value=None, visible=False), f"❌ Erro: {e}"
 
 
 # ── Excel de Credores ─────────────────────────────────────────────────────────

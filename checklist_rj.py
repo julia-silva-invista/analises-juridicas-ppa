@@ -1,0 +1,440 @@
+# -*- coding: utf-8 -*-
+"""Geração dos Checklists de Recuperação Judicial em Word (Invista PPA).
+
+Dois documentos:
+  1. Checklist de Recuperação Judicial       -> gerar_checklist_rj
+  2. Análise de Créditos em Recuperação Judicial -> gerar_checklist_creditos
+
+Os dados são extraídos preferencialmente do TEXTO OCR COMPLETO da análise
+(não apenas do relatório resumido), pois o relatório omite campos do checklist.
+"""
+
+import json
+import os
+import re
+import tempfile
+from datetime import date as _date
+
+from docx import Document
+from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+from google.genai import types
+
+from utils import _retry
+
+# Reuso dos helpers de formatação do dossiê PPA (mesma paleta/fonte Invista)
+from dossie_ppa import (
+    _LARANJA, _CINZA, _BRANCO, _TXT, _TXT_MUTE,
+    _write, _apply_font, _orange_header, _grid_table,
+    _kv_table, _kv_label_table, _para, _sec_title, _sub_orange, _sub_gray,
+    _note, _spacer, _montar_cabecalho_rodape,
+)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Helpers específicos de checklist
+# ══════════════════════════════════════════════════════════════════════════
+
+def _cb(options, selected=""):
+    """Renderiza opções de checkbox marcando ☑ a selecionada pela IA."""
+    sel = (selected or "").strip().lower()
+    out = []
+    for opt in options:
+        ol = opt.lower()
+        hit = bool(sel) and (ol in sel or sel in ol or
+                             any(w and w in ol for w in sel.split("/")))
+        out.append(("☑ " if hit else "☐ ") + opt)
+    return "   ".join(out)
+
+
+def _titulo(doc, titulo, subtitulo="PPA Invista"):
+    _montar_cabecalho_rodape(doc)
+    _para(doc, titulo, bold=True, size=18, color=_LARANJA, before=2, after=0)
+    _para(doc, subtitulo, bold=False, size=11, color=_TXT_MUTE, before=0, after=8)
+
+
+def _rodape_conf(doc):
+    _para(doc,
+          "Documento confidencial. Uso interno exclusivo do Time PPA — Invista. "
+          "Vedada a reprodução ou distribuição a terceiros sem autorização prévia.",
+          size=8, color=_TXT_MUTE, italic=True, before=10, after=0,
+          align=WD_ALIGN_PARAGRAPH.CENTER)
+
+
+def _info_rj(doc, dados, hoje):
+    _kv_table(doc, ["CAMPO", "INFORMAÇÃO"], [
+        ("Recuperação Judicial nº", dados.get("rj_numero", "")),
+        ("Vara",                    dados.get("vara", "")),
+        ("Data da Análise",         dados.get("data_analise") or hoje),
+        ("Advogada Responsável",    ""),
+    ])
+    _spacer(doc)
+
+
+def _salvar(doc, prefixo, dados):
+    nome = re.sub(r"[^\w\s-]", "", dados.get("rj_numero", "") or "caso").strip().replace(" ", "_")[:40] or "caso"
+    caminho = os.path.join(tempfile.gettempdir(), f"{prefixo}_{nome}.docx")
+    doc.save(caminho)
+    return caminho
+
+
+def _base_doc():
+    doc = Document()
+    doc.styles["Normal"].font.name = "Arial"
+    doc.styles["Normal"].font.size = Pt(9.5)
+    return doc
+
+
+def _extrair(prompt_base, fonte, client, model):
+    prompt = prompt_base + fonte[:120_000]
+    try:
+        config = types.GenerateContentConfig(response_mime_type="application/json")
+
+        def _fn():
+            return client.models.generate_content(
+                model=model,
+                contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+                config=config,
+            ).text
+
+        raw = _retry(_fn, tentativas=3, espera_base=10)
+        raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.IGNORECASE)
+        raw = re.sub(r"\n?```$", "", raw.strip())
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 1. CHECKLIST DE RECUPERAÇÃO JUDICIAL
+# ══════════════════════════════════════════════════════════════════════════
+
+_PROMPT_RJ = """\
+Você está analisando o texto extraído de um processo de Recuperação Judicial (RJ).
+Extraia os dados para preencher o Checklist de RJ no formato JSON abaixo.
+Extraia APENAS o que consta no texto. Use "" para o que não constar. NÃO invente.
+Em campos de escolha, responda com a opção exata (ex: "Deferido", "Ativo", "Sim").
+Responda SOMENTE com o JSON.
+
+{
+  "rj_numero": "", "vara": "", "data_analise": "",
+  "requerentes": "Nome · CPF/CNPJ; ...",
+  "advogados_requerentes": "",
+  "administrador_judicial": "",
+  "data_pedido": "", "data_deferimento": "",
+  "consolidacao_substancial": "Solicitado, ainda sem decisão | Deferido | Indeferido | Não se aplica",
+  "periodo_blindagem": "Ativo | Inativo",
+  "previsao_encerramento_stay": "",
+  "stay_prorrogavel": "Sim | Não | ''",
+  "recursos_relevantes": [{"recurso": "", "status": ""}],
+  "imoveis_requerentes": [{"matricula": "", "cartorio": "", "descricao": "", "proprietario": ""}],
+  "imoveis_essenciais": [{"matricula": "", "cartorio": "", "descricao": "", "proprietario": ""}],
+  "prj_classe_ii": {"desagio": "", "carencia": "", "parcelas": "", "juros": "", "correcao": ""},
+  "prj_classe_iii": {"desagio": "", "carencia": "", "parcelas": "", "juros": "", "correcao": ""},
+  "qgc": {"classe_i": "R$", "classe_ii": "R$", "classe_iii": "R$", "classe_iv": "R$", "total": "R$"},
+  "agc_situacao": "Sem datas designadas | Convocada | 1ª convocação sem quórum | Período de suspensão | Plano aprovado / rejeitado",
+  "agc_1a": "", "agc_2a": "", "agc_continuacao": "",
+  "recuperandos": [{"nome": "", "ecac": "R$", "divida_ativa": "R$"}],
+  "endividamento_fiscal_total": "R$"
+}
+
+TEXTO:
+"""
+
+
+def _build_checklist_rj(dados: dict) -> str:
+    doc = _base_doc()
+    hoje = _date.today().strftime("%d/%m/%Y")
+    _titulo(doc, "Checklist de Recuperação Judicial")
+    _info_rj(doc, dados, hoje)
+
+    # ── 1. DADOS GERAIS DO CASO ──────────────────────────────────────────
+    _sec_title(doc, "1. DADOS GERAIS DO CASO")
+    _kv_table(doc, ["CAMPO", "INFORMAÇÃO"], [
+        ("Requerentes (Nome e CPF/CNPJ)", dados.get("requerentes", "")),
+        ("Advogados dos Requerentes",     dados.get("advogados_requerentes", "")),
+        ("Administrador Judicial Nomeado", dados.get("administrador_judicial", "")),
+        ("Data do Pedido",                dados.get("data_pedido", "")),
+        ("Data do Deferimento",           dados.get("data_deferimento", "")),
+        ("Consolidação Substancial",      _cb(["Solicitado, ainda sem decisão", "Deferido", "Indeferido", "Não se aplica"],
+                                              dados.get("consolidacao_substancial", ""))),
+        ("Período de Blindagem",          _cb(["Ativo", "Inativo"], dados.get("periodo_blindagem", ""))),
+        ("Previsão de Encerramento do Stay",
+         (dados.get("previsao_encerramento_stay", "") or "____") + "    " +
+         _cb(["Prorrogável por mais 180 dias"], dados.get("stay_prorrogavel", ""))),
+    ])
+    _spacer(doc, pts=2)
+
+    # Recursos Relevantes
+    _sub_gray(doc, "Recursos Relevantes")
+    _grid_table(
+        doc, ["RECURSO RELEVANTE", "STATUS"],
+        [[r.get("recurso", ""), r.get("status", "")] for r in (dados.get("recursos_relevantes") or [])],
+        [10.9, 6.0], min_rows=1,
+    )
+    _spacer(doc, pts=2)
+
+    # Imóveis dos Requerentes / Essenciais
+    cols_imo = ["Nº da Matrícula", "Cartório", "Descrição", "Proprietário"]
+    ws_imo = [3.0, 3.5, 6.4, 4.0]
+    _sub_gray(doc, "Imóveis dos Requerentes")
+    _grid_table(doc, cols_imo,
+                [[i.get("matricula", ""), i.get("cartorio", ""), i.get("descricao", ""), i.get("proprietario", "")]
+                 for i in (dados.get("imoveis_requerentes") or [])],
+                ws_imo, min_rows=2)
+    _spacer(doc, pts=2)
+    _sub_gray(doc, "Imóveis Essenciais")
+    _grid_table(doc, cols_imo,
+                [[i.get("matricula", ""), i.get("cartorio", ""), i.get("descricao", ""), i.get("proprietario", "")]
+                 for i in (dados.get("imoveis_essenciais") or [])],
+                ws_imo, min_rows=2)
+    _spacer(doc)
+
+    # ── 2. PLANO DE RECUPERAÇÃO JUDICIAL (PRJ) ───────────────────────────
+    _sec_title(doc, "2. PLANO DE RECUPERAÇÃO JUDICIAL (PRJ)")
+    cols_cond = ["Deságio", "Carência", "Parcelas", "Juros", "Correção"]
+    ws_cond = [3.4, 3.4, 3.4, 3.35, 3.35]
+    for classe, key in [("Condições da Classe II", "prj_classe_ii"),
+                        ("Condições da Classe III", "prj_classe_iii")]:
+        _sub_gray(doc, classe)
+        c = dados.get(key) or {}
+        _grid_table(doc, cols_cond,
+                    [[c.get("desagio", ""), c.get("carencia", ""), c.get("parcelas", ""),
+                      c.get("juros", ""), c.get("correcao", "")]],
+                    ws_cond, min_rows=1)
+        _spacer(doc, pts=2)
+    _spacer(doc)
+
+    # ── 3. QUADRO GERAL DE CREDORES (QGC) ────────────────────────────────
+    _sec_title(doc, "3. QUADRO GERAL DE CREDORES (QGC)")
+    qgc = dados.get("qgc") or {}
+    _kv_table(doc, ["CLASSE", "VALOR"], [
+        ("Classe I",   qgc.get("classe_i", "R$")),
+        ("Classe II",  qgc.get("classe_ii", "R$")),
+        ("Classe III", qgc.get("classe_iii", "R$")),
+        ("Classe IV",  qgc.get("classe_iv", "R$")),
+        ("Total dos créditos arrolados", qgc.get("total", "R$")),
+    ])
+    _spacer(doc)
+
+    # ── 4. ASSEMBLEIA GERAL DE CREDORES (AGC) ────────────────────────────
+    _sec_title(doc, "4. ASSEMBLEIA GERAL DE CREDORES (AGC)")
+    _kv_table(doc, ["CAMPO", "INFORMAÇÃO"], [
+        ("Situação da AGC", _cb(["Sem datas designadas", "Convocada", "1ª convocação sem quórum",
+                                 "Período de suspensão", "Plano aprovado / rejeitado"],
+                                dados.get("agc_situacao", ""))),
+        ("1ª Convocação",              dados.get("agc_1a", "")),
+        ("2ª Convocação",              dados.get("agc_2a", "")),
+        ("Continuação da 2ª Convocação", dados.get("agc_continuacao", "")),
+    ])
+    _spacer(doc)
+
+    # ── 5. ENDIVIDAMENTO GERAL ───────────────────────────────────────────
+    _sec_title(doc, "5. ENDIVIDAMENTO GERAL")
+    recuperandos = dados.get("recuperandos") or [{}]
+    for i, rec in enumerate(recuperandos, 1):
+        nome = rec.get("nome", "") or "[Nome / CPF-CNPJ]"
+        _sub_gray(doc, f"RECUPERANDO {i} — {nome}")
+        _kv_table(doc, ["ENDIVIDAMENTO FISCAL", "VALOR / STATUS"], [
+            ("Endividamento Fiscal — e-CAC",
+             (rec.get("ecac", "") or "R$") + "    " + _cb(["CND na pasta", "Não foi possível emitir"])),
+            ("Endividamento Fiscal — Dívida Ativa",
+             (rec.get("divida_ativa", "") or "R$") + "    " + _cb(["CND na pasta", "Não foi possível emitir"])),
+        ])
+        _spacer(doc, pts=2)
+    _sub_gray(doc, "TOTAL CONSOLIDADO DO GRUPO")
+    _kv_table(doc, ["CAMPO", "VALOR"], [
+        ("Endividamento Fiscal Total", dados.get("endividamento_fiscal_total", "R$")),
+    ])
+    _note(doc, "Soma de e-CAC + Dívida Ativa de todos os recuperandos.")
+    _spacer(doc)
+
+    # ── 6. CHECKLIST DOS DOCUMENTOS SALVOS ───────────────────────────────
+    _sec_title(doc, "6. CHECKLIST DOS DOCUMENTOS SALVOS")
+    anx = ["Anexado", "Não existente"]
+    docs = [
+        ("Petição Inicial da RJ",                    _cb(["Salvo", "Pendente"])),
+        ("Quadro de Ativos dos Requerentes",         _cb(["Anexado", "Não existente/Segredo de Justiça"])),
+        ("Relatório de Perícia Prévia",              _cb(anx)),
+        ("Laudo de Imóveis Essenciais",              _cb(anx)),
+        ("Último RMA",                               _cb(anx)),
+        ("QGC do(s) recuperando(s)",                 _cb(anx)),
+        ("QGC do AJ",                                _cb(anx)),
+        ("Relatório de Divergência",                 _cb(anx)),
+        ("PRJ e Aditivos",                           _cb(anx)),
+        ("Atas, laudo de credenciamento e de votação da AGC", _cb(anx)),
+    ]
+    _kv_table(doc, ["DOCUMENTO", "STATUS"], docs)
+
+    _rodape_conf(doc)
+    return _salvar(doc, "Checklist_RJ", dados)
+
+
+def gerar_checklist_rj(fonte: str, client, model: str) -> str:
+    dados = _extrair(_PROMPT_RJ, fonte, client, model)
+    return _build_checklist_rj(dados)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2. ANÁLISE DE CRÉDITOS EM RECUPERAÇÃO JUDICIAL
+# ══════════════════════════════════════════════════════════════════════════
+
+_PROMPT_CRED = """\
+Você está analisando o texto extraído de um processo de Recuperação Judicial e das
+execuções relacionadas a um crédito. Extraia os dados do CRÉDITO no formato JSON abaixo.
+Extraia APENAS o que consta no texto. Use "" para o que não constar. NÃO invente.
+Em campos de escolha, responda com a opção exata (ex: "Favorável", "Sim").
+Responda SOMENTE com o JSON.
+
+{
+  "rj_numero": "", "vara": "", "data_analise": "",
+  "credor": "Nome · CNPJ", "advogados": "",
+  "classe_ii_valor": "R$", "classe_ii_garantias": "", "classe_ii_repr": "",
+  "classe_iii_valor": "R$", "classe_iii_repr": "",
+  "extraconcursal_valor": "R$", "extraconcursal_garantias": "",
+  "recurso_credor_alvo": "Sim | Não",
+  "impugnacoes": [
+    {"numero": "", "polo_ativo": "", "finalidade": "", "lastro": "",
+     "manifestacao_aj": "Favorável | Desfavorável | Pendente",
+     "manifestacao_mp": "Favorável | Desfavorável | Pendente",
+     "sentenca": "Favorável | Desfavorável | Pendente", "status": ""}
+  ],
+  "lastros": [
+    {"cedula": "", "emitentes": "", "avalistas": "", "coobrigados_rj": "Sim | Não",
+     "emissao": "", "garantia": "", "percentual": "", "valor_arrolado": "R$",
+     "classe": "", "acoes": "", "obs_extraconcursal": ""}
+  ],
+  "garantias": [
+    {"matricula": "", "comarca": "", "proprietario": "", "descricao": "", "onus": "",
+     "avaliacao": "R$", "proprietarios_rj": "Sim | Não (qual?)"}
+  ],
+  "execucoes": [
+    {"numero": "", "polo_ativo": "", "polo_passivo": "", "distribuicao": "", "lastro_fls": "",
+     "garantia": "", "valor_causa": "R$", "honorarios": "", "sucumbencia": "",
+     "constricao": "", "status": "", "cumprimento_autonomo": ""}
+  ],
+  "recursos": [{"numero": "", "polo_ativo": "", "finalidade": "", "status": ""}]
+}
+
+TEXTO:
+"""
+
+
+def _build_checklist_creditos(dados: dict) -> str:
+    doc = _base_doc()
+    hoje = _date.today().strftime("%d/%m/%Y")
+    _titulo(doc, "Análise de Créditos em Recuperação Judicial")
+    _info_rj(doc, dados, hoje)
+
+    # ── 1. RESUMO DO CRÉDITO ─────────────────────────────────────────────
+    _sec_title(doc, "1. RESUMO DO CRÉDITO")
+    _kv_table(doc, ["CAMPO", "INFORMAÇÃO"], [
+        ("Credor (Nome e CNPJ)",        dados.get("credor", "")),
+        ("Advogado(s)",                 dados.get("advogados", "")),
+        ("Classe II",                   dados.get("classe_ii_valor", "R$")),
+        ("Garantia(s) — Classe II",     dados.get("classe_ii_garantias", "")),
+        ("Representatividade (%) — Classe II", dados.get("classe_ii_repr", "")),
+        ("Classe III",                  dados.get("classe_iii_valor", "R$")),
+        ("Representatividade (%) — Classe III", dados.get("classe_iii_repr", "")),
+        ("Extraconcursal",              dados.get("extraconcursal_valor", "R$")),
+        ("Garantia(s) — Extraconcursal", dados.get("extraconcursal_garantias", "")),
+        ("Recurso(s) do credor-alvo?",  _cb(["Sim", "Não"], dados.get("recurso_credor_alvo", ""))),
+    ])
+    _spacer(doc)
+
+    # ── 2. IMPUGNAÇÃO DE CRÉDITO ─────────────────────────────────────────
+    _sec_title(doc, "2. IMPUGNAÇÃO DE CRÉDITO")
+    impugnacoes = dados.get("impugnacoes") or [{}]
+    manif = ["Favorável", "Desfavorável", "Pendente"]
+    for i, imp in enumerate(impugnacoes, 1):
+        _sub_gray(doc, f"Impugnação de Crédito nº {i}")
+        _kv_label_table(doc, [
+            ("Nº do Processo",              imp.get("numero", "")),
+            ("Polo Ativo",                  imp.get("polo_ativo", "")),
+            ("Finalidade",                  imp.get("finalidade", "")),
+            ("Lastro em discussão",         imp.get("lastro", "")),
+            ("Houve manifestação do AJ?",   _cb(manif, imp.get("manifestacao_aj", ""))),
+            ("Houve manifestação do MP?",   _cb(manif, imp.get("manifestacao_mp", ""))),
+            ("Sentença",                    _cb(manif, imp.get("sentenca", ""))),
+            ("Status",                      imp.get("status", "")),
+        ])
+        _spacer(doc, pts=2)
+
+    # ── 3. LASTROS ───────────────────────────────────────────────────────
+    _sec_title(doc, "3. LASTROS")
+    lastros = dados.get("lastros") or [{}]
+    for i, la in enumerate(lastros, 1):
+        _sub_gray(doc, f"Lastro nº {i}")
+        _kv_label_table(doc, [
+            ("Cédula",                        la.get("cedula", "")),
+            ("Emitente(s)",                   la.get("emitentes", "")),
+            ("Avalista(s)/Fiador(es)",        la.get("avalistas", "")),
+            ("Todos os coobrigados estão em RJ", _cb(["Sim", "Não"], la.get("coobrigados_rj", ""))),
+            ("Emissão",                       la.get("emissao", "")),
+            ("Garantia",                      la.get("garantia", "")),
+            ("Percentual/Limite garantido",   la.get("percentual", "")),
+            ("Valor Arrolado",                la.get("valor_arrolado", "R$")),
+            ("Classe",                        la.get("classe", "")),
+            ("Ações relacionadas",            la.get("acoes", "")),
+            ("Observação - Extraconcursal",   la.get("obs_extraconcursal", "")),
+        ])
+        _spacer(doc, pts=2)
+
+    # ── 4. GARANTIAS ─────────────────────────────────────────────────────
+    _sec_title(doc, "4. GARANTIAS")
+    garantias = dados.get("garantias") or [{}]
+    for i, ga in enumerate(garantias, 1):
+        _sub_gray(doc, f"Garantia nº {i}")
+        _kv_label_table(doc, [
+            ("Matrícula nº",   ga.get("matricula", "")),
+            ("Comarca",        ga.get("comarca", "")),
+            ("Proprietário",   ga.get("proprietario", "")),
+            ("Descrição",      ga.get("descricao", "")),
+            ("Ônus",           ga.get("onus", "")),
+            ("Avaliação",      ga.get("avaliacao", "R$")),
+            ("Todos os proprietários estão em RJ? Se não, qual?",
+             _cb(["Sim", "Não"], ga.get("proprietarios_rj", "")) +
+             (("  " + ga.get("proprietarios_rj", "")) if ga.get("proprietarios_rj", "") not in ("", "Sim", "Não") else "")),
+        ])
+        _spacer(doc, pts=2)
+
+    # ── 5. AÇÕES JUDICIAIS ───────────────────────────────────────────────
+    _sec_title(doc, "5. AÇÕES JUDICIAIS")
+    execucoes = dados.get("execucoes") or [{}]
+    for i, ex in enumerate(execucoes, 1):
+        _sub_gray(doc, f"Execução de Título Extrajudicial nº {i}")
+        _kv_label_table(doc, [
+            ("Nº do Processo",           ex.get("numero", "")),
+            ("Polo Ativo",               ex.get("polo_ativo", "")),
+            ("Polo Passivo",             ex.get("polo_passivo", "")),
+            ("Distribuição",             ex.get("distribuicao", "")),
+            ("Lastro (fls.)",            ex.get("lastro_fls", "")),
+            ("Garantia",                 ex.get("garantia", "")),
+            ("Valor da Causa — R$ (fls.)", ex.get("valor_causa", "")),
+            ("Honorários - credor",      ex.get("honorarios", "")),
+            ("Sucumbência",              ex.get("sucumbencia", "")),
+            ("Constrição",               ex.get("constricao", "")),
+            ("Status",                   ex.get("status", "")),
+            ("Existe cumprimento autônomo de honorários (CEF/BB)", ex.get("cumprimento_autonomo", "")),
+        ])
+        _spacer(doc, pts=2)
+
+    recursos = dados.get("recursos") or []
+    for i, rec in enumerate(recursos, 1):
+        _sub_gray(doc, f"Recurso nº {i}")
+        _kv_label_table(doc, [
+            ("Nº do Processo",     rec.get("numero", "")),
+            ("Polo ativo",         rec.get("polo_ativo", "")),
+            ("Finalidade/Matéria", rec.get("finalidade", "")),
+            ("Status Atual",       rec.get("status", "")),
+        ])
+        _spacer(doc, pts=2)
+
+    _rodape_conf(doc)
+    return _salvar(doc, "Analise_Creditos_RJ", dados)
+
+
+def gerar_checklist_creditos(fonte: str, client, model: str) -> str:
+    dados = _extrair(_PROMPT_CRED, fonte, client, model)
+    return _build_checklist_creditos(dados)
