@@ -635,16 +635,25 @@ def rj_gerar_checklist(relatorio: str, texto_bruto: str = ""):
         return gr.update(value=None, visible=False), f"❌ Erro: {e}"
 
 
-def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = ""):
+def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = "", *campos):
     # Prioriza o texto OCR completo (RJ + execuções); o relatório resumido omite campos
     fonte = texto_bruto.strip() if texto_bruto and texto_bruto.strip() else (relatorio or "").strip()
     if not fonte:
         return gr.update(value=None, visible=False), "Gere uma análise primeiro."
+    # campos = [nome_1..nome_N, doc_1..doc_N] — pareia e ignora credores sem nome
+    meia = len(campos) // 2
+    nomes, docs = campos[:meia], campos[meia:]
+    creditores = [(str(nomes[i]).strip(), str(docs[i]).strip())
+                  for i in range(meia) if nomes[i] and str(nomes[i]).strip()]
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
-        path = gerar_checklist_creditos(fonte, client, MODEL_RAPIDO_RJ)
-        return gr.update(value=path, visible=True), "✅ Análise de créditos RJ gerada — clique no arquivo para baixar."
+        path = gerar_checklist_creditos(fonte, client, MODEL_RAPIDO_RJ, creditores=creditores or None)
+        if creditores:
+            msg = f"✅ Checklist de créditos gerado para {len(creditores)} credor(es) — clique para baixar."
+        else:
+            msg = "✅ Checklist de créditos gerado (crédito identificado automaticamente)."
+        return gr.update(value=path, visible=True), msg
     except Exception as e:
         return gr.update(value=None, visible=False), f"❌ Erro: {e}"
 

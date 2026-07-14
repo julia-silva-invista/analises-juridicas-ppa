@@ -321,12 +321,7 @@ TEXTO:
 """
 
 
-def _build_checklist_creditos(dados: dict) -> str:
-    doc = _base_doc()
-    hoje = _date.today().strftime("%d/%m/%Y")
-    _titulo(doc, "Análise de Créditos em Recuperação Judicial")
-    _info_rj(doc, dados, hoje)
-
+def _creditor_sections(doc, dados: dict):
     # ── 1. RESUMO DO CRÉDITO ─────────────────────────────────────────────
     _sec_title(doc, "1. RESUMO DO CRÉDITO")
     _kv_table(doc, ["CAMPO", "INFORMAÇÃO"], [
@@ -431,10 +426,57 @@ def _build_checklist_creditos(dados: dict) -> str:
         ])
         _spacer(doc, pts=2)
 
+
+def _build_checklist_creditos(dados: dict) -> str:
+    doc = _base_doc()
+    hoje = _date.today().strftime("%d/%m/%Y")
+    _titulo(doc, "Análise de Créditos em Recuperação Judicial")
+    _info_rj(doc, dados, hoje)
+    _creditor_sections(doc, dados)
     _rodape_conf(doc)
     return _salvar(doc, "Analise_Creditos_RJ", dados)
 
 
-def gerar_checklist_creditos(fonte: str, client, model: str) -> str:
-    dados = _extrair(_PROMPT_CRED, fonte, client, model)
-    return _build_checklist_creditos(dados)
+def _build_checklist_creditos_multi(rj_info: dict, lista: list) -> str:
+    """Um único documento com um checklist por credor (quebra de página entre eles)."""
+    doc = _base_doc()
+    hoje = _date.today().strftime("%d/%m/%Y")
+    _titulo(doc, "Análise de Créditos em Recuperação Judicial")
+    _info_rj(doc, rj_info, hoje)
+    for i, dados in enumerate(lista):
+        if i > 0:
+            doc.add_page_break()
+        nome = dados.get("credor", "") or f"Credor {i+1}"
+        _para(doc, f"▸ CRÉDITO {i+1} — {nome}", bold=True, size=12, color=_LARANJA, before=2, after=4)
+        _creditor_sections(doc, dados)
+    _rodape_conf(doc)
+    return _salvar(doc, "Analise_Creditos_RJ", rj_info or (lista[0] if lista else {}))
+
+
+def _extrair_cred_scoped(fonte, nome, doc, client, model) -> dict:
+    foco = (
+        "═══ FOCO OBRIGATÓRIO ═══\n"
+        f'Extraia os dados APENAS do credor "{nome}"'
+        + (f" (CPF/CNPJ: {doc})" if doc else "")
+        + ". Ignore todos os outros credores do processo.\n\n"
+    )
+    return _extrair(foco + _PROMPT_CRED, fonte, client, model)
+
+
+def gerar_checklist_creditos(fonte: str, client, model: str, creditores=None) -> str:
+    # Sem credores informados: extrai o crédito que a IA encontrar (comportamento padrão)
+    if not creditores:
+        dados = _extrair(_PROMPT_CRED, fonte, client, model)
+        return _build_checklist_creditos(dados)
+    # Com credores: um checklist escopado por credor, tudo em um documento
+    lista = []
+    rj_info = {}
+    for nome, doc_id in creditores:
+        dados = _extrair_cred_scoped(fonte, nome, doc_id, client, model)
+        if not (dados.get("credor") or "").strip():
+            dados["credor"] = nome + (f" · {doc_id}" if doc_id else "")
+        lista.append(dados)
+        if not rj_info and (dados.get("rj_numero") or dados.get("vara")):
+            rj_info = {"rj_numero": dados.get("rj_numero", ""), "vara": dados.get("vara", ""),
+                       "data_analise": dados.get("data_analise", "")}
+    return _build_checklist_creditos_multi(rj_info, lista)

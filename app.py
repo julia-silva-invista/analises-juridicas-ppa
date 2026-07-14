@@ -247,15 +247,37 @@ with gr.Blocks(
             with gr.Row():
                 rj_word_btn          = gr.Button("Baixar Word",            variant="secondary", elem_classes=["word-download-btn"])
                 rj_excel_cred_btn    = gr.Button("Gerar Excel de Credores", variant="secondary", elem_classes=["word-download-btn"])
-            with gr.Row():
                 rj_checklist_btn     = gr.Button("Checklist RJ",            variant="secondary", elem_classes=["word-download-btn"])
-                rj_checklist_cred_btn = gr.Button("Checklist de Créditos RJ", variant="secondary", elem_classes=["word-download-btn"])
             rj_word_file      = gr.File(label="",                  interactive=False, visible=False, elem_classes=["word-file-output"])
             rj_excel_cred_file   = gr.File(label="Excel de Credores", interactive=False, visible=False, elem_classes=["word-file-output"])
             rj_excel_cred_status = gr.Textbox(label="", interactive=False, lines=1, show_label=False)
             rj_checklist_file      = gr.File(label="Checklist RJ",        interactive=False, visible=False, elem_classes=["word-file-output"])
-            rj_checklist_cred_file = gr.File(label="Checklist de Créditos RJ", interactive=False, visible=False, elem_classes=["word-file-output"])
             rj_checklist_status    = gr.Markdown("")
+
+            # ── Checklist de Créditos (por credor-alvo) ──────────────────────
+            gr.HTML('<hr class="inv-divider">')
+            gr.Markdown(
+                "**Checklist de Créditos por credor** — informe o nome e o CPF/CNPJ de cada "
+                "credor-alvo (use **+ Adicionar credor** para incluir mais). "
+                "Deixe em branco para a IA identificar o crédito automaticamente."
+            )
+            RJ_MAX_CRED = 12
+            rj_cred_count = gr.State(1)
+            rj_cred_rows, rj_cred_nomes, rj_cred_docs = [], [], []
+            for _i in range(RJ_MAX_CRED):
+                with gr.Row(visible=(_i == 0)) as _crow:
+                    _cnome = gr.Textbox(label="Nome do credor", scale=3, container=True,
+                                        placeholder="Ex: BASF S.A.")
+                    _cdoc  = gr.Textbox(label="CPF/CNPJ", scale=2, container=True,
+                                        placeholder="00.000.000/0001-00")
+                rj_cred_rows.append(_crow)
+                rj_cred_nomes.append(_cnome)
+                rj_cred_docs.append(_cdoc)
+            with gr.Row():
+                rj_cred_add_btn       = gr.Button("+ Adicionar credor", variant="secondary")
+                rj_checklist_cred_btn = gr.Button("Gerar Checklist de Créditos RJ", variant="primary", elem_classes=["word-download-btn"])
+            rj_checklist_cred_file   = gr.File(label="Checklist de Créditos RJ", interactive=False, visible=False, elem_classes=["word-file-output"])
+            rj_checklist_cred_status = gr.Markdown("")
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Column(elem_classes=["qa-section"]):
@@ -459,10 +481,16 @@ with gr.Blocks(
         inputs=[rj_relatorio_state, rj_extracao_state],
         outputs=[rj_checklist_file, rj_checklist_status],
     )
+
+    def _rj_add_credor(_count):
+        _count = min(int(_count) + 1, RJ_MAX_CRED)
+        return [_count] + [gr.update(visible=(k < _count)) for k in range(RJ_MAX_CRED)]
+    rj_cred_add_btn.click(_rj_add_credor, inputs=[rj_cred_count], outputs=[rj_cred_count] + rj_cred_rows)
+
     rj_checklist_cred_btn.click(
         fn=rj_gerar_checklist_creditos,
-        inputs=[rj_relatorio_state, rj_extracao_state],
-        outputs=[rj_checklist_cred_file, rj_checklist_status],
+        inputs=[rj_relatorio_state, rj_extracao_state] + rj_cred_nomes + rj_cred_docs,
+        outputs=[rj_checklist_cred_file, rj_checklist_cred_status],
     )
     rj_perguntar_btn.click(
         fn=rj_responder, inputs=[rj_pergunta, rj_relatorio_state], outputs=[rj_resposta]
