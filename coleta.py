@@ -11,6 +11,8 @@ from openpyxl import load_workbook
 from datetime import datetime
 from typing import Optional, Tuple, Any
 
+from dossie_ppa import preencher_passivo_dossie
+
 # ── Constantes ───────────────────────────────────────────────────────────────
 
 TEMPLATE_PATH = "x.xlsx"
@@ -166,6 +168,13 @@ def _parse_date(val) -> Optional[str]:
 def _is_trabalhista(ramo: str) -> bool:
     r = str(ramo).upper()
     return any(kw in r for kw in ("TRABALHO", "TRABALHISTA"))
+
+
+def _is_fiscal(ramo: str, classe: str) -> bool:
+    s = (str(ramo) + " " + str(classe)).upper()
+    return any(kw in s for kw in (
+        "FISCAL", "TRIBUT", "DIVIDA ATIVA", "DÍVIDA ATIVA", "EXECUCAO FISCAL", "EXECUÇÃO FISCAL",
+    ))
 
 
 def _get_nome_from_filename(filepath: str) -> str:
@@ -326,3 +335,106 @@ def coleta_gerar(excel_files) -> Tuple[str, str, Any]:
 
     status_msg = f"{total} processos preenchidos — {total_trab} trabalhistas, {total_fiscal} fiscal/cível"
     return "\n".join(lines), status_msg, out_path
+
+
+# ── Dossiê atualizado: passivo (Seção 3) a partir da Predictus ────────────────
+
+def _classificar_predictus(excel_files, log) -> Tuple[list, list, list]:
+    """Lê os Excel(s) da Predictus e separa os processos em fiscal / trabalhista / cível."""
+    fiscais, trabalhistas, civeis = [], [], []
+    for file_obj in excel_files:
+        fp = file_obj.name if hasattr(file_obj, "name") else str(file_obj)
+        log(f"📂 {os.path.basename(fp)}")
+        try:
+            xl = pd.ExcelFile(fp)
+            sheet = "Dossiê Jurídico" if "Dossiê Jurídico" in xl.sheet_names else xl.sheet_names[0]
+            df = pd.read_excel(fp, sheet_name=sheet, dtype=str)
+        except Exception as exc:
+            log(f"   ❌ Erro ao ler arquivo: {exc}")
+            continue
+        if df.empty:
+            log("   ⚠️ Planilha vazia.")
+            continue
+        df.columns = [c.strip() for c in df.columns]
+        nome = _get_nome_from_filename(fp)
+
+        col_ramo    = _col(df, ["ramo do direito", "ramo"])
+        col_valor   = _col(df, ["valor da causa", "valor"])
+        col_cnj     = _col(df, ["n° processo", "nº processo", "numero", "processo"])
+        col_data    = _col(df, ["data de distribui", "distribuição", "distribuicao"])
+        col_classe  = _col(df, ["classe processual", "classe"])
+        col_ativo   = _col(df, ["partes ativas", "polo ativo"])
+        col_status  = _col(df, ["status", "situação", "situacao"])
+
+        n_f = n_t = n_c = 0
+        for _, row in df.iterrows():
+            def g(col_name: str) -> str:
+                if not col_name:
+                    return ""
+                v = row.get(col_name, "")
+                return str(v) if v and str(v) not in ("nan", "None") else ""
+
+            ramo = g(col_ramo)
+            classe = g(col_classe)
+            valor_raw = g(col_valor)
+            try:
+                valor = float(valor_raw.replace(",", ".")) if valor_raw else None
+            except Exception:
+                valor = None
+
+            proc = {
+                "cnj":    g(col_cnj),
+                "vinc":   nome,
+                "data":   _parse_date(g(col_data)) or "",
+                "ativo":  _format_parties(g(col_ativo)),
+                "valor":  valor,
+                "status": _format_status(g(col_status)),
+            }
+            if _is_trabalhista(ramo):
+                trabalhistas.append(proc); n_t += 1
+            elif _is_fiscal(ramo, classe):
+                fiscais.append(proc); n_f += 1
+            else:
+                civeis.append(proc); n_c += 1
+        log(f"   👤 {nome} — {n_f} fiscal | {n_t} trabalhista | {n_c} cível")
+    return fiscais, trabalhistas, civeis
+
+
+def coleta_gerar_dossie(excel_files, dossie_file):
+    """
+    Preenche a Seção 3 (Passivo) de um dossiê PPA com os processos da Predictus.
+    Retorna: (log_text, status_msg, caminho_do_docx_ou_None).
+    """
+    lines: list = []
+
+    def log(msg: str):
+        lines.append(msg)
+        return "\n".join(lines)
+
+    if not excel_files:
+        return "Nenhum Excel da Predictus enviado.", "Erro: nenhum Excel da Predictus", None
+
+    try:
+        fiscais, trabalhistas, civeis = _classificar_predictus(excel_files, log)
+    except Exception as exc:
+        return log(f"\n❌ Erro ao ler a Predictus: {exc}"), "Erro na leitura da Predictus", None
+
+    total = len(fiscais) + len(trabalhistas) + len(civeis)
+    if total == 0:
+        return log("\n⚠️ Nenhum processo identificado nos arquivos."), "Nenhum processo identificado", None
+
+    dossie_path = None
+    if dossie_file:
+        dossie_path = dossie_file.name if hasattr(dossie_file, "name") else str(dossie_file)
+        log(f"\n📄 Atualizando dossiê enviado: {os.path.basename(dossie_path)}")
+    else:
+        log("\n📄 Nenhum dossiê enviado — gerando esqueleto com o passivo preenchido.")
+
+    try:
+        out = preencher_passivo_dossie(dossie_path, fiscais, trabalhistas, civeis)
+    except Exception as exc:
+        return log(f"\n❌ Erro ao preencher o dossiê: {exc}"), "Erro ao preencher o dossiê", None
+
+    log(f"\n✅ Passivo preenchido: {len(fiscais)} fiscal · {len(trabalhistas)} trabalhista · {len(civeis)} cível.")
+    status = f"Passivo preenchido — {len(fiscais)} fiscal, {len(trabalhistas)} trabalhista, {len(civeis)} cível"
+    return "\n".join(lines), status, out

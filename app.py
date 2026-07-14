@@ -15,7 +15,7 @@ from design import CSS, HEADER_HTML, FOOTER_HTML
 from processos import proc_analisar, proc_gerar_word, proc_gerar_dossie, proc_responder
 from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores, rj_gerar_checklist, rj_gerar_checklist_creditos
 from matriculas import mat_gerar_excel, mat_responder
-from coleta import coleta_gerar
+from coleta import coleta_gerar, coleta_gerar_dossie
 
 os.makedirs("resultados", exist_ok=True)
 os.makedirs("tmp_pdfs", exist_ok=True)
@@ -353,18 +353,25 @@ with gr.Blocks(
                         file_types=[".xlsx", ".xls"],
                         file_count="multiple",
                     )
+                with gr.Column(scale=2):
+                    coleta_dossie_in = gr.File(
+                        label="Dossiê PPA em Word (opcional — para atualizar o passivo)",
+                        file_types=[".docx"],
+                    )
                 with gr.Column(scale=1):
                     gr.Markdown(
                         "**Como usar:**\n\n"
                         "1. Exporte o dossiê jurídico da Predictus em Excel\n"
                         "2. Faça upload de um ou mais arquivos\n"
-                        "3. Clique em **Gerar Planilha**\n"
-                        "4. Baixe o arquivo preenchido\n\n"
-                        "_Suporta múltiplos devedores simultaneamente._\n\n"
-                        "_Os processos são distribuídos automaticamente entre as abas Trabalhista e Fiscal & Cível._"
+                        "3. **Gerar Planilha** → planilha consolidada\n"
+                        "4. Ou envie também o dossiê (Word) e clique em **Gerar Dossiê Atualizado** "
+                        "para preencher a Seção 3 (Passivo)\n\n"
+                        "_Suporta múltiplos devedores simultaneamente._"
                     )
 
-            coleta_gerar_btn = gr.Button("Gerar Planilha", variant="primary", size="lg")
+            with gr.Row():
+                coleta_gerar_btn        = gr.Button("Gerar Planilha", variant="primary", size="lg")
+                coleta_gerar_dossie_btn = gr.Button("Gerar Dossiê Atualizado", variant="secondary", size="lg")
 
             with gr.Tabs():
                 with gr.Tab("Progresso"):
@@ -378,6 +385,7 @@ with gr.Blocks(
                 with gr.Tab("Download"):
                     coleta_status = gr.Textbox(label="Status", interactive=False)
                     coleta_excel_out = gr.File(label="Planilha preenchida", interactive=False)
+                    coleta_dossie_out = gr.File(label="Dossiê atualizado (passivo)", interactive=False)
 
         # ── Tab 5: Sugestões e Feedbacks ─────────────────────────────────────
         with gr.Tab("Feedbacks"):
@@ -472,6 +480,11 @@ with gr.Blocks(
     )
 
     # Coleta de Informações
+    coleta_gerar_dossie_btn.click(
+        fn=coleta_gerar_dossie,
+        inputs=[coleta_excel_in, coleta_dossie_in],
+        outputs=[coleta_log, coleta_status, coleta_dossie_out],
+    )
     coleta_gerar_btn.click(
         fn=coleta_gerar,
         inputs=[coleta_excel_in],

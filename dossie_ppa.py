@@ -15,6 +15,8 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.table import Table as _DocxTable
+from docx.text.paragraph import Paragraph as _DocxParagraph
 
 from google.genai import types
 
@@ -260,21 +262,40 @@ def _spacer(doc, pts=4):
 # ══════════════════════════════════════════════════════════════════════════
 
 _PROMPT_DOSSIE = """\
-Com base no relatório jurídico abaixo, extraia os dados para preencher um dossiê no formato JSON.
-Extraia APENAS o que está explicitamente no relatório. Use string vazia "" para o que não constar.
+Com base no material jurídico abaixo (extração completa do(s) processo(s) e, quando houver, relatório
+consolidado de apoio), extraia os dados para preencher um dossiê no formato JSON.
+Extraia APENAS o que está explicitamente no material. Use string vazia "" para o que não constar.
 NÃO invente números, nomes ou datas. Responda SOMENTE com o JSON, sem texto adicional.
+
+═══ REGRA 1 — REFERÊNCIA OBRIGATÓRIA DA FONTE ═══
+Para CADA informação preenchida, inclua ao final, entre parênteses, a referência da fonte no processo —
+use o parâmetro que o tribunal daquela execução usa (fls., Mov., Evento, ID ou página).
+Ex.: "R$ 12.450.000,00 (fls. 45)", "IPCA (cláusula 4ª — fls. 12)", "Penhora deferida (Mov. 120)".
+Se a referência realmente não constar, deixe o valor sem os parênteses (não invente a referência).
+
+═══ REGRA 2 — CAMPOS QUE DEVEM SER PREENCHIDOS ═══
+- Índices de Correção do Contrato (ind_*): busque no título executivo (CCB/contrato/duplicata) e na
+  petição inicial — correção monetária, juros remuneratórios, juros moratórios, multa, capitalização.
+- Planilha Inicial (plan_*): a memória de cálculo que instruiu a petição inicial.
+- Última Memória de Cálculo (memoria_*): a memória de débito MAIS RECENTE juntada aos autos
+  (data da juntada, total atualizado, data-base, índices aplicados, ponderações).
+- Liste TODOS os embargos à execução, TODAS as exceções/objeções de pré-executividade e TODOS os
+  recursos que aparecerem (não apenas o primeiro). No campo "tipo" de cada defesa informe
+  "Embargos à Execução" ou "Exceção de Pré-Executividade".
+
+═══ REGRA 3 — CITAÇÃO (uma entrada por executado) ═══
+Gere UMA entrada por executado da execução. Se o executado FOI citado, informe modalidade (AR/OJ/
+Edital/Precatória), data e fls. da citação. Se NÃO foi citado, ponha modalidade="Pendente" e liste no
+campo "data" as datas das tentativas e no campo "fls" as páginas correspondentes (na mesma linha).
 
 {
   "nome_caso": "identificador curto (ex: BASF x São Lourenço)",
   "data_analise": "DD/MM/AAAA ou vazio",
-  "exequentes": "Nome · CNPJ ...",
-  "executados": "Nome1 · CPF/CNPJ ...; Nome2 ...",
-  "sat_total": "R$ ...",
-  "passivo_fiscal": "R$ ... ou vazio",
-  "passivo_trabalhista": "R$ ... ou vazio",
-  "passivo_civel": "R$ ... ou vazio",
-  "teses_principais": "Penhora Direta / IDPJ / Fraude à Execução",
-  "risco_juridico": "resumo dos principais riscos",
+  "exequentes": "Nome · CNPJ ... (fls.)",
+  "executados": "Nome1 · CPF/CNPJ ...; Nome2 ... (fls.)",
+  "sat_total": "R$ ... (fls.)",
+  "passivo_fiscal": "", "passivo_trabalhista": "", "passivo_civel": "",
+  "risco_juridico": "resumo dos principais riscos (com refs)",
   "consideracoes_gerais": "2-4 parágrafos de análise geral (separe parágrafos com \\n)",
   "creditos": [
     {
@@ -283,31 +304,35 @@ NÃO invente números, nomes ou datas. Responda SOMENTE com o JSON, sem texto ad
       "vara_comarca": "1ª Vara Cível — Cidade/UF",
       "exequente_info": "Nome · Adv: Escritório | OAB",
       "executados_info": "Nome · Adv: Escritório | OAB",
-      "data_distribuicao": "DD/MM/AAAA",
-      "sop": "R$ ...", "sat": "R$ ...", "criterio_sat": "ex: INPC + 12% a.a JM",
-      "honorarios": "ex: 10%",
-      "lastro": "CCB nº / Contrato nº", "data_emissao": "DD/MM/AAAA", "data_vencimento": "DD/MM/AAAA",
-      "assinaturas": "Nomes / Fls.", "garantia": "descrição da garantia",
-      "status_processo": "ex: em fase de penhora",
-      "ind_cm": "", "ind_jr": "", "ind_jm": "", "ind_multa": "", "ind_cap": "",
-      "plan_cm": "", "plan_jr": "", "plan_multa": "", "plan_cap": "", "plan_ponderacoes": "",
-      "memoria_data_juntada": "", "memoria_total": "", "memoria_data_base": "",
-      "memoria_indices": "", "memoria_ponderacoes": "",
-      "citacoes": [{"executado": "", "modalidade": "AR/OJ/Precatória", "data": "", "fls": ""}],
-      "embargos": [{"embargante": "", "data_dist": "", "tese": "", "andamentos_resumo": "", "status": ""}],
-      "recursos": [{"recorrente": "", "decisao_recorrida": "", "data_dist": "", "tese": "", "andamentos_resumo": "", "status": ""}],
-      "constricoes": [{"tipo": "", "descricao": "", "valor": "R$ ...", "status": "Ativa"}],
-      "andamentos": [{"data": "", "descricao": "", "fls": ""}]
+      "data_distribuicao": "DD/MM/AAAA (fls.)",
+      "sop": "R$ ... (fls.)", "sat": "R$ ... (fls.)", "criterio_sat": "ex: INPC + 12% a.a JM (fls.)",
+      "honorarios": "ex: 10% (fls.)",
+      "lastro": "CCB nº / Contrato nº (fls.)", "data_emissao": "DD/MM/AAAA (fls.)", "data_vencimento": "DD/MM/AAAA (fls.)",
+      "assinaturas": "Nomes (fls.)", "garantia": "descrição da garantia (fls.)",
+      "status_processo": "ex: em fase de penhora (Mov.)",
+      "ind_cm": "correção monetária (fls.)", "ind_jr": "juros remuneratórios (fls.)", "ind_jm": "juros moratórios (fls.)", "ind_multa": "multa (fls.)", "ind_cap": "capitalização (fls.)",
+      "plan_cm": "(fls.)", "plan_jr": "(fls.)", "plan_multa": "(fls.)", "plan_cap": "(fls.)", "plan_ponderacoes": "(fls.)",
+      "memoria_data_juntada": "DD/MM/AAAA (fls.)", "memoria_total": "R$ ... (fls.)", "memoria_data_base": "DD/MM/AAAA",
+      "memoria_indices": "índices aplicados (fls.)", "memoria_ponderacoes": "",
+      "citacoes": [{"executado": "Nome", "modalidade": "AR/OJ/Edital ou Pendente", "data": "data citação OU datas das tentativas", "fls": "fls. citação OU fls. das tentativas"}],
+      "embargos": [{"tipo": "Embargos à Execução | Exceção de Pré-Executividade", "embargante": "", "data_dist": "(fls.)", "tese": "", "andamentos_resumo": "(com refs)", "status": ""}],
+      "recursos": [{"recorrente": "", "decisao_recorrida": "", "data_dist": "(fls.)", "tese": "", "andamentos_resumo": "(com refs)", "status": ""}],
+      "constricoes": [{"tipo": "", "descricao": "(fls.)", "valor": "R$ ... (fls.)", "status": "Ativa"}],
+      "andamentos": [{"data": "", "descricao": "", "fls": "Mov./fls."}]
     }
   ]
 }
 
-RELATÓRIO:
+MATERIAL:
 """
 
 
-def _extrair_dados(relatorio: str, client, model: str) -> dict:
-    prompt = _PROMPT_DOSSIE + relatorio[:60_000]
+def _extrair_dados(texto_completo: str, relatorio: str, client, model: str) -> dict:
+    primario = (texto_completo or "").strip() or (relatorio or "").strip()
+    prompt = _PROMPT_DOSSIE + primario[:900_000]
+    rel = (relatorio or "").strip()
+    if rel and rel != primario:
+        prompt += "\n\n═══ RELATÓRIO CONSOLIDADO (resumo estruturado de apoio) ═══\n" + rel[:40_000]
     try:
         config = types.GenerateContentConfig(response_mime_type="application/json")
 
@@ -399,7 +424,7 @@ def _build_doc(dados: dict) -> str:
         ("Total atingível mapeado — VM", "R$ [___]"),
         ("Total atingível mapeado — VP", "R$ [___]"),
         ("Passivo total identificado",   passivo_cell),
-        ("Tese(s) principal(is)",        dados.get("teses_principais", "")),
+        ("Tese(s) principal(is)",        ""),
         ("Risco Jurídico",               dados.get("risco_juridico", "")),
     ])
     _spacer(doc)
@@ -518,21 +543,24 @@ def _build_doc(dados: dict) -> str:
         )
         _spacer(doc, pts=2)
 
-        # Embargos e/ou Exceção
+        # Embargos à Execução e/ou Exceção de Pré-Executividade
         _sub_gray(doc, "Embargos e/ou Exceção")
         embargos = cred.get("embargos") or []
         if not embargos:
             embargos = [{}]
-        for ei, emb in enumerate(embargos, 1):
-            _para(doc, f"Embargo nº {ei}", bold=True, size=9.5, color=_TXT, before=3, after=2)
+        _cont_def = {}
+        for emb in embargos:
+            tipo = (emb.get("tipo") or "").strip() or "Embargos à Execução"
+            _cont_def[tipo] = _cont_def.get(tipo, 0) + 1
+            _para(doc, f"{tipo} nº {_cont_def[tipo]}", bold=True, size=9.5, color=_TXT, before=3, after=2)
             _kv_label_table(doc, [
-                ("Embargante",            emb.get("embargante", "")),
+                ("Embargante / Excipiente", emb.get("embargante", "")),
                 ("Data da Distribuição",  emb.get("data_dist", "")),
-                ("Tese dos Embargos",     emb.get("tese", "")),
+                ("Tese",                  emb.get("tese", "")),
                 ("Principais Andamentos", emb.get("andamentos_resumo", "")),
                 ("Status Atual",          emb.get("status", "")),
             ])
-        _note(doc, "⊕ Replicar o quadro acima para cada embargo adicional identificado.")
+        _note(doc, "⊕ Replicar o quadro acima para cada embargo / exceção adicional identificado.")
 
         # Recursos
         _sub_gray(doc, "Recursos")
@@ -720,7 +748,91 @@ def _build_doc(dados: dict) -> str:
 # Entry point
 # ══════════════════════════════════════════════════════════════════════════
 
-def gerar_dossie_word(relatorio: str, client, model: str) -> str:
-    """Extrai dados do relatório via Gemini e gera o Word no formato PPA v3.0."""
-    dados = _extrair_dados(relatorio, client, model)
+def gerar_dossie_word(texto_completo: str, relatorio: str, client, model: str) -> str:
+    """Extrai dados do texto OCR completo (+ relatório de apoio) e gera o Word PPA v3.0."""
+    dados = _extrair_dados(texto_completo, relatorio, client, model)
     return _build_doc(dados)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Preenchimento do PASSIVO (Seção 3) a partir de dados da Predictus
+# ══════════════════════════════════════════════════════════════════════════
+
+def _fmt_valor_br(v) -> str:
+    if v is None or v == "":
+        return ""
+    try:
+        return "R$ " + f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return str(v)
+
+
+def _proc_to_row(p: dict) -> list:
+    """Mapeia um processo Predictus para as 7 colunas do passivo do dossiê."""
+    return [
+        p.get("cnj", ""),                 # Nº CNJ
+        p.get("vinc", ""),                # Vinculado a
+        p.get("data", "") or "",          # Distribuição
+        p.get("ativo", ""),               # Exequente / Autor (polo ativo)
+        _fmt_valor_br(p.get("valor")),    # Valor Causa (R$)
+        "",                               # SAT Est. (R$) — não consta na Predictus
+        p.get("status", ""),              # Status / Obs.
+    ]
+
+
+def _fill_passivo_table(table, registros: list):
+    """Substitui as linhas de dados de uma tabela do passivo (mantém o header)."""
+    ncols = len(table.columns)
+    larguras = [c.width for c in table.rows[0].cells]
+    # remove linhas de dados (mantém a primeira = header laranja)
+    for row in list(table.rows)[1:]:
+        table._tbl.remove(row._tr)
+    if not registros:
+        # deixa uma linha vazia para não colar o próximo bloco no header
+        registros = [[""] * ncols]
+    for reg in registros:
+        r = table.add_row()
+        for i in range(ncols):
+            c = r.cells[i]
+            _set_bg(c, _BRANCO); _set_borders(c); _cell_pad(c)
+            _write(c, reg[i] if i < len(reg) else "")
+            if i < len(larguras) and larguras[i]:
+                c.width = larguras[i]
+
+
+def _iter_headings_tables(doc):
+    """Itera o corpo em ordem, associando cada tabela ao último subtítulo não-vazio."""
+    last_heading = ""
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            txt = _DocxParagraph(child, doc).text.strip()
+            if txt:
+                last_heading = txt
+        elif child.tag == qn("w:tbl"):
+            yield last_heading, _DocxTable(child, doc)
+
+
+def preencher_passivo_dossie(dossie_path, fiscais: list, trabalhistas: list, civeis: list) -> str:
+    """
+    Preenche as tabelas da Seção 3 (Passivo) do dossiê — Execuções Fiscais,
+    Trabalhista e Cível — com os processos consolidados da Predictus.
+    Não toca em 'Principais Credores' nem no e-CAC.
+    Se dossie_path for None, gera um dossiê novo (esqueleto) e preenche nele.
+    """
+    if dossie_path:
+        doc = Document(dossie_path)
+    else:
+        doc = Document(_build_doc({}))
+
+    for heading, table in _iter_headings_tables(doc):
+        h = heading.lower()
+        if "execuções fiscais" in h or "execucoes fiscais" in h:
+            _fill_passivo_table(table, [_proc_to_row(p) for p in fiscais])
+        elif "trabalhista" in h:
+            _fill_passivo_table(table, [_proc_to_row(p) for p in trabalhistas])
+        elif "cível" in h or "civel" in h:
+            _fill_passivo_table(table, [_proc_to_row(p) for p in civeis])
+
+    caminho = os.path.join(tempfile.gettempdir(), "Dossie_PPA_atualizado.docx")
+    doc.save(caminho)
+    return caminho
