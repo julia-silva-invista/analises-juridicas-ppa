@@ -16,10 +16,9 @@ import gradio as gr
 from google import genai
 from google.genai import types
 
-import zipfile
 from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
 from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite
-from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos, _DOCS_ITEM6
+from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos
 
 CHUNK_MAX_PAGES_RJ    = 400
 MODEL_EXTRACAO_RJ     = os.getenv("GEMINI_MODEL_EXTRACAO", "gemini-2.5-flash")
@@ -622,154 +621,18 @@ def rj_responder(pergunta: str, relatorio: str):
         return f"Erro: {e}"
 
 
-def _combinar_pdfs(pdf_paths: list):
-    """Concatena múltiplos PDFs num só (para páginas físicas consistentes). Retorna (path, é_temp)."""
-    if len(pdf_paths) == 1:
-        return pdf_paths[0], False
-    out = fitz.open()
-    for p in pdf_paths:
-        d = fitz.open(p); out.insert_pdf(d); d.close()
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False); tmp.close()
-    out.save(tmp.name, garbage=4, deflate=True); out.close()
-    return tmp.name, True
-
-
-_PROMPT_LOC_DOCS = (
-    "Você está vendo uma PARTE de um processo de Recuperação Judicial.\n"
-    "Para CADA documento abaixo que apareça NESTE trecho, informe a página inicial e final em que ele "
-    "aparece, contando 1 = a PRIMEIRA página deste trecho (não a numeração do tribunal).\n"
-    "Documentos (chave: descrição):\n{lista}\n\n"
-    "Responda SOMENTE em JSON no formato "
-    '{{"peticao_inicial": {{"existe": true, "pg_ini": 1, "pg_fim": 10}}, ...}}. '
-    "Inclua apenas os que aparecem neste trecho (existe=true). Seja preciso nas páginas."
-)
-
-
-def _localizar_e_recortar_docs(pdf_paths: list, client, model: str):
-    """
-    Localiza os documentos do item 6 no PDF e recorta cada um num PDF separado (zipados).
-    Retorna (docs_loc, zip_path). Best-effort: qualquer falha devolve ({}, None).
-    """
-    combined, is_temp = _combinar_pdfs(pdf_paths)
-    docs_loc: dict = {}
-    zip_path = None
-    labels = "\n".join(f"- {k}: {lbl}" for k, lbl, _ in _DOCS_ITEM6)
-    try:
-        d0 = fitz.open(combined); total = len(d0); d0.close()
-        chunks = _rj_dividir_pdf(combined)  # [(path, offset, total)]
-        for chunk_path, offset, _tot in chunks:
-            comp, _o, _c = _comprimir_pdf_limite(chunk_path, max_mb=40.0)
-            try:
-                arq = client.files.upload(file=comp)
-                total_wait, wait = 0, 1
-                while total_wait < 120:
-                    st = getattr(getattr(arq, "state", None), "name", "") or str(getattr(arq, "state", ""))
-                    if st in ("ACTIVE", "FAILED"):
-                        break
-                    time.sleep(wait); total_wait += wait; wait = min(wait + 1, 4)
-                    arq = client.files.get(name=arq.name)
-                prompt = _PROMPT_LOC_DOCS.format(lista=labels)
-                cfg = types.GenerateContentConfig(response_mime_type="application/json")
-                def _call():
-                    return client.models.generate_content(
-                        model=model,
-                        contents=[types.Content(role="user", parts=[
-                            types.Part(text=prompt),
-                            types.Part(file_data=types.FileData(file_uri=arq.uri, mime_type="application/pdf")),
-                        ])],
-                        config=cfg,
-                    ).text
-                raw = _retry(_call, tentativas=2, espera_base=10)
-                raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.IGNORECASE)
-                raw = re.sub(r"\n?```$", "", raw.strip())
-                data = json.loads(raw)
-                for key, info in (data or {}).items():
-                    if not isinstance(info, dict) or not info.get("existe") or not info.get("pg_ini"):
-                        continue
-                    pi = offset + int(info["pg_ini"]) - 1
-                    pf = offset + int(info.get("pg_fim", info["pg_ini"])) - 1
-                    prev = docs_loc.get(key)
-                    if prev:
-                        prev["_pi"] = min(prev["_pi"], pi); prev["_pf"] = max(prev["_pf"], pf)
-                    else:
-                        docs_loc[key] = {"existe": True, "_pi": pi, "_pf": pf}
-                try: client.files.delete(name=arq.name)
-                except Exception: pass
-            except Exception:
-                pass
-            finally:
-                if comp != chunk_path:
-                    try: os.remove(comp)
-                    except Exception: pass
-                if chunk_path != combined:
-                    try: os.remove(chunk_path)
-                    except Exception: pass
-
-        # Recorta + zipa
-        if docs_loc:
-            label_by_key = {k: lbl for k, lbl, _ in _DOCS_ITEM6}
-            os.makedirs("resultados", exist_ok=True)
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            zip_path = f"resultados/documentos_rj_{ts}.zip"
-            src = fitz.open(combined)
-            ordem = [k for k, _l, _o in _DOCS_ITEM6 if k in docs_loc]
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for n_ord, key in enumerate(ordem, 1):
-                    info = docs_loc[key]
-                    pi = max(0, min(info["_pi"], total - 1))
-                    pf = max(pi, min(info["_pf"], total - 1))
-                    sub = fitz.open(); sub.insert_pdf(src, from_page=pi, to_page=pf)
-                    tmpf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False); tmpf.close()
-                    sub.save(tmpf.name, garbage=4, deflate=True); sub.close()
-                    safe = re.sub(r"[^\w-]+", "_", label_by_key.get(key, key)).strip("_")[:50]
-                    zf.write(tmpf.name, f"{n_ord:02d}_{safe}_pag{pi+1}-{pf+1}.pdf")
-                    try: os.remove(tmpf.name)
-                    except Exception: pass
-                    info["pg_inicio"] = pi + 1
-                    info["pg_fim"] = pf + 1
-                    info["folhas"] = f"págs. {pi+1}–{pf+1} do PDF"
-            src.close()
-        for info in docs_loc.values():
-            info.pop("_pi", None); info.pop("_pf", None)
-        return docs_loc, zip_path
-    except Exception:
-        return {}, None
-    finally:
-        if is_temp and os.path.exists(combined):
-            try: os.remove(combined)
-            except Exception: pass
-
-
-def rj_gerar_checklist(relatorio: str, texto_bruto: str = "", pdf_files=None):
+def rj_gerar_checklist(relatorio: str, texto_bruto: str = ""):
     # Prioriza o texto OCR completo; o relatório resumido omite campos do checklist
     fonte = texto_bruto.strip() if texto_bruto and texto_bruto.strip() else (relatorio or "").strip()
     if not fonte:
-        yield gr.update(value=None, visible=False), gr.update(value=None, visible=False), "Gere uma análise primeiro."
-        return
-    yield (gr.update(visible=False), gr.update(visible=False),
-           "⏳ Gerando checklist RJ e recortando os documentos do item 6...")
+        return gr.update(value=None, visible=False), "Gere uma análise primeiro."
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
-        pdf_paths = []
-        if pdf_files:
-            pdf_paths = [f.name if hasattr(f, "name") else str(f) for f in pdf_files]
-
-        docs_loc, zip_path = ({}, None)
-        if pdf_paths:
-            docs_loc, zip_path = _localizar_e_recortar_docs(pdf_paths, client, MODEL_EXTRACAO_RJ)
-
-        path = gerar_checklist_rj(fonte, client, MODEL_RAPIDO_RJ, docs_loc=docs_loc)
-        n_docs = sum(1 for v in docs_loc.values() if v.get("existe"))
-        zip_up = (gr.update(value=zip_path, visible=True) if zip_path
-                  else gr.update(value=None, visible=False))
-        if pdf_paths:
-            msg = f"✅ Checklist RJ gerado · {n_docs} documento(s) do item 6 recortado(s) em PDF."
-        else:
-            msg = "✅ Checklist RJ gerado. (Envie o PDF na análise para também recortar os documentos do item 6.)"
-        yield gr.update(value=path, visible=True), zip_up, msg
+        path = gerar_checklist_rj(fonte, client, MODEL_RAPIDO_RJ)
+        return gr.update(value=path, visible=True), "✅ Checklist RJ gerado — clique no arquivo para baixar."
     except Exception as e:
-        yield gr.update(value=None, visible=False), gr.update(value=None, visible=False), f"❌ Erro: {e}"
+        return gr.update(value=None, visible=False), f"❌ Erro: {e}"
 
 
 def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = "", *campos):

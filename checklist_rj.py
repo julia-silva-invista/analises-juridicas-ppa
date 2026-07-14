@@ -183,14 +183,29 @@ Responda SOMENTE com o JSON.
   "agc_situacao": "opção (fls.)",
   "agc_1a": "DD/MM/AAAA (fls.)", "agc_2a": "DD/MM/AAAA (fls.)", "agc_continuacao": "(fls.)",
   "recuperandos": [{"nome": "", "ecac": "R$ (fls.)", "divida_ativa": "R$ (fls.)"}],
-  "endividamento_fiscal_total": "R$"
+  "endividamento_fiscal_total": "R$",
+  "documentos_salvos": {
+    "peticao_inicial":       {"status": "Salvo | Pendente", "folhas": "fls./Mov. onde consta"},
+    "quadro_ativos":         {"status": "Anexado | Não existente", "folhas": ""},
+    "pericia_previa":        {"status": "Anexado | Não existente", "folhas": ""},
+    "laudo_imoveis":         {"status": "Anexado | Não existente", "folhas": ""},
+    "ultimo_rma":            {"status": "Anexado | Não existente", "folhas": ""},
+    "qgc_recuperando":       {"status": "Anexado | Não existente", "folhas": ""},
+    "qgc_aj":                {"status": "Anexado | Não existente", "folhas": ""},
+    "relatorio_divergencia": {"status": "Anexado | Não existente", "folhas": ""},
+    "prj_aditivos":          {"status": "Anexado | Não existente", "folhas": ""},
+    "atas_agc":              {"status": "Anexado | Não existente", "folhas": ""}
+  }
 }
+
+Para documentos_salvos: informe, para cada documento, se ele está anexado/salvo no processo e em quais
+folhas (fls.) ou movimentação (Mov./ID/Evento) ele aparece. Se não aparecer, status "Não existente".
 
 TEXTO:
 """
 
 
-def _build_checklist_rj(dados: dict, docs_loc=None) -> str:
+def _build_checklist_rj(dados: dict) -> str:
     doc = _base_doc()
     hoje = _date.today().strftime("%d/%m/%Y")
     _titulo(doc, "Checklist de Recuperação Judicial")
@@ -299,30 +314,20 @@ def _build_checklist_rj(dados: dict, docs_loc=None) -> str:
 
     # ── 6. CHECKLIST DOS DOCUMENTOS SALVOS ───────────────────────────────
     _sec_title(doc, "6. CHECKLIST DOS DOCUMENTOS SALVOS")
-    docs_loc = docs_loc or {}
+    docs_salvos = dados.get("documentos_salvos") or {}
     rows6 = []
     for key, label, opts in _DOCS_ITEM6:
-        loc = docs_loc.get(key) or {}
-        existe = loc.get("existe")
-        folhas = loc.get("folhas", "") or (
-            f"págs. {loc.get('pg_inicio')}–{loc.get('pg_fim')}" if loc.get("pg_inicio") else ""
-        )
-        if existe is True:
-            status = _cb(opts, opts[0])
-        elif existe is False:
-            status = _cb(opts, opts[-1])
-        else:
-            status = _cb(opts)
-        rows6.append((label, status, folhas))
+        info = docs_salvos.get(key) or {}
+        rows6.append((label, _cb(opts, info.get("status", "")), info.get("folhas", "")))
     _grid_table(doc, ["DOCUMENTO", "STATUS", "FOLHAS"], rows6, [8.0, 5.9, 3.0])
 
     _rodape_conf(doc)
     return _salvar(doc, "Checklist_RJ", dados)
 
 
-def gerar_checklist_rj(fonte: str, client, model: str, docs_loc=None) -> str:
+def gerar_checklist_rj(fonte: str, client, model: str) -> str:
     dados = _extrair(_PROMPT_RJ, fonte, client, model)
-    return _build_checklist_rj(dados, docs_loc)
+    return _build_checklist_rj(dados)
 
 
 # ══════════════════════════════════════════════════════════════════════════
