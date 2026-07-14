@@ -288,6 +288,13 @@ Gere UMA entrada por executado da execução. Se o executado FOI citado, informe
 Edital/Precatória), data e fls. da citação. Se NÃO foi citado, ponha modalidade="Pendente" e liste no
 campo "data" as datas das tentativas e no campo "fls" as páginas correspondentes (na mesma linha).
 
+═══ REGRA 4 — PENHORAS E ANDAMENTOS ═══
+- Constrições: no campo "status", se a penhora/constrição foi DEFERIDA, inclua a DATA da decisão de
+  deferimento. Ex.: "Penhora deferida em 15/03/2024 (fls. 120)", "Sisbajud deferido em 02/2024 (Mov. 88)".
+- andamentos: liste TODOS os andamentos processuais que constarem no material E no relatório de apoio —
+  NÃO resuma, NÃO omita e NÃO limite a quantidade. Cada andamento com data, descrição objetiva e
+  referência (Mov./fls./Evento/ID).
+
 {
   "nome_caso": "identificador curto (ex: BASF x São Lourenço)",
   "data_analise": "DD/MM/AAAA ou vazio",
@@ -317,8 +324,8 @@ campo "data" as datas das tentativas e no campo "fls" as páginas correspondente
       "citacoes": [{"executado": "Nome", "modalidade": "AR/OJ/Edital ou Pendente", "data": "data citação OU datas das tentativas", "fls": "fls. citação OU fls. das tentativas"}],
       "embargos": [{"tipo": "Embargos à Execução | Exceção de Pré-Executividade", "embargante": "", "data_dist": "(fls.)", "tese": "", "andamentos_resumo": "(com refs)", "status": ""}],
       "recursos": [{"recorrente": "", "decisao_recorrida": "", "data_dist": "(fls.)", "tese": "", "andamentos_resumo": "(com refs)", "status": ""}],
-      "constricoes": [{"tipo": "", "descricao": "(fls.)", "valor": "R$ ... (fls.)", "status": "Ativa"}],
-      "andamentos": [{"data": "", "descricao": "", "fls": "Mov./fls."}]
+      "constricoes": [{"tipo": "", "descricao": "(fls.)", "valor": "R$ ... (fls.)", "status": "Ativa | Deferida em DD/MM/AAAA (fls.)"}],
+      "andamentos": [{"data": "DD/MM/AAAA", "descricao": "descrição objetiva", "fls": "Mov./fls./Evento/ID"}]
     }
   ]
 }
@@ -349,6 +356,55 @@ def _extrair_dados(texto_completo: str, relatorio: str, client, model: str) -> d
         return json.loads(raw)
     except Exception:
         return {}
+
+
+_PROMPT_COMPLETAR = """\
+Abaixo está um dossiê em JSON (parcialmente preenchido) e o RELATÓRIO consolidado do caso.
+Confira, campo a campo, quais estão VAZIOS ("") e preencha-os com informação que CONSTE no RELATÓRIO.
+Regras:
+- NÃO altere campos que já têm valor. NÃO invente — só preencha o que constar no relatório.
+- Mantenha EXATAMENTE a mesma estrutura, chaves e lista de créditos do JSON atual.
+- Inclua a referência da fonte (fls./Mov./ID/Evento) quando o relatório trouxer.
+- Se um andamento/embargo/recurso constar no relatório e faltar no JSON, ACRESCENTE à lista.
+Responda SOMENTE com o JSON completo.
+
+JSON ATUAL:
+{json_atual}
+
+RELATÓRIO:
+{relatorio}
+"""
+
+
+def _completar_com_relatorio(dados: dict, relatorio: str, client, model: str) -> dict:
+    """Passada final: preenche campos vazios do dossiê com o que constar no relatório."""
+    rel = (relatorio or "").strip()
+    if not dados or not dados.get("creditos") or not rel:
+        return dados
+    try:
+        prompt = _PROMPT_COMPLETAR.format(
+            json_atual=json.dumps(dados, ensure_ascii=False)[:150_000],
+            relatorio=rel[:150_000],
+        )
+        config = types.GenerateContentConfig(response_mime_type="application/json")
+
+        def _fn():
+            return client.models.generate_content(
+                model=model,
+                contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+                config=config,
+            ).text
+
+        raw = _retry(_fn, tentativas=2, espera_base=10)
+        raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.IGNORECASE)
+        raw = re.sub(r"\n?```$", "", raw.strip())
+        completo = json.loads(raw)
+        # Só aceita se preservar (ou ampliar) a lista de créditos — evita perder dados
+        if isinstance(completo, dict) and len(completo.get("creditos") or []) >= len(dados.get("creditos") or []):
+            return completo
+        return dados
+    except Exception:
+        return dados
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -751,6 +807,8 @@ def _build_doc(dados: dict) -> str:
 def gerar_dossie_word(texto_completo: str, relatorio: str, client, model: str) -> str:
     """Extrai dados do texto OCR completo (+ relatório de apoio) e gera o Word PPA v3.0."""
     dados = _extrair_dados(texto_completo, relatorio, client, model)
+    # Passada final: confere campos vazios contra o relatório e completa o que faltou
+    dados = _completar_com_relatorio(dados, relatorio, client, model)
     return _build_doc(dados)
 
 
