@@ -567,13 +567,39 @@ body,
 
 /* Arquivo Word só aparece depois de gerado */
 .word-file-output {
-    margin-top: 10px !important;
+    margin-top: 6px !important;
 }
 
 .word-file-output label,
 .word-file-output .label-wrap,
 .word-file-output > label {
     display: none !important;
+}
+
+/* Caixa de arquivo gerado compacta (~1/4 da altura padrão) */
+.word-file-output,
+.word-file-output * {
+    min-height: 0 !important;
+}
+.word-file-output .block,
+.word-file-output > div {
+    padding: 2px 6px !important;
+    border-radius: 10px !important;
+}
+.word-file-output .file-preview-holder,
+.word-file-output .file-preview,
+.word-file-output .file-container {
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+}
+.word-file-output .file,
+.word-file-output tr,
+.word-file-output td,
+.word-file-output .file-preview a {
+    padding: 2px 6px !important;
+    font-size: 0.8rem !important;
+    line-height: 1.2 !important;
 }
 
 /* Perguntas: bloco único, sem caixas internas desnecessárias */

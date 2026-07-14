@@ -13,6 +13,7 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 from datetime import date as _date
 
 from docx import Document
@@ -36,16 +37,36 @@ from dossie_ppa import (
 # Helpers específicos de checklist
 # ══════════════════════════════════════════════════════════════════════════
 
+def _norm_cb(s: str) -> str:
+    s = unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode("ascii").lower()
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def _cb(options, selected=""):
-    """Renderiza opções de checkbox marcando ☑ a selecionada pela IA."""
-    sel = (selected or "").strip().lower()
-    out = []
-    for opt in options:
-        ol = opt.lower()
-        hit = bool(sel) and (ol in sel or sel in ol or
-                             any(w and w in ol for w in sel.split("/")))
-        out.append(("☑ " if hit else "☐ ") + opt)
-    return "   ".join(out)
+    """Marca ☑ APENAS uma opção — a que melhor casa com o valor extraído.
+
+    Usa fronteira de palavra (\\b) para não marcar 'Favorável' quando o valor é
+    'Desfavorável' (favoravel é substring de desfavoravel).
+    """
+    sel = _norm_cb(selected)
+    best_i, best_score = -1, 0
+    if sel:
+        for i, opt in enumerate(options):
+            o = _norm_cb(opt)
+            if not o:
+                continue
+            if sel == o:
+                score = 1000
+            elif re.search(r"\b" + re.escape(o) + r"\b", sel):
+                score = 500 + len(o)      # a opção aparece inteira no valor
+            elif re.search(r"\b" + re.escape(sel) + r"\b", o):
+                score = 200 + len(sel)    # o valor aparece inteiro na opção
+            else:
+                score = 0
+            if score > best_score:
+                best_score, best_i = score, i
+    return "   ".join(("☑ " if i == best_i and best_score > 0 else "☐ ") + opt
+                      for i, opt in enumerate(options))
 
 
 def _titulo(doc, titulo, subtitulo="PPA Invista"):
@@ -87,7 +108,7 @@ def _base_doc():
 
 
 def _extrair(prompt_base, fonte, client, model):
-    prompt = prompt_base + fonte[:120_000]
+    prompt = prompt_base + fonte[:900_000]
     try:
         config = types.GenerateContentConfig(response_mime_type="application/json")
 
@@ -126,16 +147,20 @@ _DOCS_ITEM6 = [
 ]
 
 _PROMPT_RJ = """\
-Você está analisando o texto extraído de um processo de Recuperação Judicial (RJ).
-Extraia os dados para preencher o Checklist de RJ no formato JSON abaixo.
-Extraia APENAS o que consta no texto. Use "" para o que não constar. NÃO invente.
-Em campos de escolha, responda com a opção exata (ex: "Deferido", "Ativo", "Sim").
+Você está analisando o texto COMPLETO extraído de um processo de Recuperação Judicial (RJ).
+Analise TODO o texto (não só um resumo) para preencher o Checklist de RJ no formato JSON abaixo.
+NÃO invente.
 
 ═══ REGRA — REFERÊNCIA OBRIGATÓRIA DA FONTE ═══
 Para CADA informação (matrícula, deferimento, blindagem, stay, valores, datas, etc.), inclua ao final,
 entre parênteses, ONDE ela foi extraída — a fls. do PDF e o parâmetro do tribunal (Mov./ID/fls./Evento).
 Ex.: "Deferido em 20/01/2023 (fls. 340 · Mov. 12)", "Ativo (fls. 350)", "Matrícula 12.454 (fls. 88)".
 Se em campo de escolha, mantenha a opção seguida da referência: "Deferido (fls. 340)".
+
+═══ REGRA — CAMPO NÃO ENCONTRADO ═══
+Se um dado factual não constar em NENHUMA parte do processo, preencha com "Não consta".
+Em campos de escolha, responda com a opção EXATA e ÚNICA (ex: "Deferido"). NUNCA marque mais de uma
+opção; se não houver informação, deixe "".
 
 Responda SOMENTE com o JSON.
 
@@ -305,10 +330,21 @@ def gerar_checklist_rj(fonte: str, client, model: str, docs_loc=None) -> str:
 # ══════════════════════════════════════════════════════════════════════════
 
 _PROMPT_CRED = """\
-Você está analisando o texto extraído de um processo de Recuperação Judicial e das
+Você está analisando o texto COMPLETO extraído de um processo de Recuperação Judicial e das
 execuções relacionadas a um crédito. Extraia os dados do CRÉDITO no formato JSON abaixo.
-Extraia APENAS o que consta no texto. Use "" para o que não constar. NÃO invente.
-Em campos de escolha, responda com a opção exata (ex: "Favorável", "Sim").
+Analise TODO o texto (não só um resumo) para preencher cédula, emitente, avalista, garantias, etc.
+NÃO invente.
+
+═══ REGRA — REFERÊNCIA OBRIGATÓRIA DA FONTE ═══
+Para CADA informação preenchida, inclua ao final, entre parênteses, ONDE foi extraída — a fls. do PDF
+e o parâmetro do tribunal (Mov./ID/fls./Evento). Ex.: "CCB nº 123 (fls. 45)", "R$ 8.000.000 (fls. 88)".
+
+═══ REGRA — CAMPO NÃO ENCONTRADO ═══
+Se um dado factual (cédula, emitente, avalista, matrícula, valor, data, etc.) NÃO constar em NENHUMA
+parte do processo, preencha com "Não consta". Em campos de escolha (Sim/Não, Favorável/...), se não
+houver informação, deixe "" (nenhuma opção marcada). NUNCA marque mais de uma opção.
+
+Em campos de escolha, responda com a opção EXATA e ÚNICA (ex: "Favorável", "Desfavorável", "Sim").
 Responda SOMENTE com o JSON.
 
 {
