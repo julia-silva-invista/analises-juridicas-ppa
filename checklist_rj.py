@@ -110,32 +110,54 @@ def _extrair(prompt_base, fonte, client, model):
 # 1. CHECKLIST DE RECUPERAÇÃO JUDICIAL
 # ══════════════════════════════════════════════════════════════════════════
 
+# Documentos do item 6 (chave, rótulo, opções de status). A chave é usada tanto no
+# checklist quanto no recorte do PDF (rj._localizar_e_recortar_docs).
+_DOCS_ITEM6 = [
+    ("peticao_inicial",       "Petição Inicial da RJ",                              ["Salvo", "Pendente"]),
+    ("quadro_ativos",         "Quadro de Ativos dos Requerentes",                   ["Anexado", "Não existente/Segredo de Justiça"]),
+    ("pericia_previa",        "Relatório de Perícia Prévia",                        ["Anexado", "Não existente"]),
+    ("laudo_imoveis",         "Laudo de Imóveis Essenciais",                        ["Anexado", "Não existente"]),
+    ("ultimo_rma",            "Último RMA",                                         ["Anexado", "Não existente"]),
+    ("qgc_recuperando",       "QGC do(s) recuperando(s)",                           ["Anexado", "Não existente"]),
+    ("qgc_aj",                "QGC do AJ",                                          ["Anexado", "Não existente"]),
+    ("relatorio_divergencia", "Relatório de Divergência",                           ["Anexado", "Não existente"]),
+    ("prj_aditivos",          "PRJ e Aditivos",                                     ["Anexado", "Não existente"]),
+    ("atas_agc",              "Atas, laudo de credenciamento e de votação da AGC",  ["Anexado", "Não existente"]),
+]
+
 _PROMPT_RJ = """\
 Você está analisando o texto extraído de um processo de Recuperação Judicial (RJ).
 Extraia os dados para preencher o Checklist de RJ no formato JSON abaixo.
 Extraia APENAS o que consta no texto. Use "" para o que não constar. NÃO invente.
 Em campos de escolha, responda com a opção exata (ex: "Deferido", "Ativo", "Sim").
+
+═══ REGRA — REFERÊNCIA OBRIGATÓRIA DA FONTE ═══
+Para CADA informação (matrícula, deferimento, blindagem, stay, valores, datas, etc.), inclua ao final,
+entre parênteses, ONDE ela foi extraída — a fls. do PDF e o parâmetro do tribunal (Mov./ID/fls./Evento).
+Ex.: "Deferido em 20/01/2023 (fls. 340 · Mov. 12)", "Ativo (fls. 350)", "Matrícula 12.454 (fls. 88)".
+Se em campo de escolha, mantenha a opção seguida da referência: "Deferido (fls. 340)".
+
 Responda SOMENTE com o JSON.
 
 {
   "rj_numero": "", "vara": "", "data_analise": "",
-  "requerentes": "Nome · CPF/CNPJ; ...",
-  "advogados_requerentes": "",
-  "administrador_judicial": "",
-  "data_pedido": "", "data_deferimento": "",
-  "consolidacao_substancial": "Solicitado, ainda sem decisão | Deferido | Indeferido | Não se aplica",
-  "periodo_blindagem": "Ativo | Inativo",
-  "previsao_encerramento_stay": "",
+  "requerentes": "Nome · CPF/CNPJ ... (fls.)",
+  "advogados_requerentes": "(fls.)",
+  "administrador_judicial": "Nome (fls./Mov.)",
+  "data_pedido": "DD/MM/AAAA (fls.)", "data_deferimento": "DD/MM/AAAA (fls./Mov.)",
+  "consolidacao_substancial": "Deferido/Indeferido/... (fls.)",
+  "periodo_blindagem": "Ativo/Inativo (fls.)",
+  "previsao_encerramento_stay": "DD/MM/AAAA (fls.)",
   "stay_prorrogavel": "Sim | Não | ''",
-  "recursos_relevantes": [{"recurso": "", "status": ""}],
-  "imoveis_requerentes": [{"matricula": "", "cartorio": "", "descricao": "", "proprietario": ""}],
-  "imoveis_essenciais": [{"matricula": "", "cartorio": "", "descricao": "", "proprietario": ""}],
-  "prj_classe_ii": {"desagio": "", "carencia": "", "parcelas": "", "juros": "", "correcao": ""},
-  "prj_classe_iii": {"desagio": "", "carencia": "", "parcelas": "", "juros": "", "correcao": ""},
-  "qgc": {"classe_i": "R$", "classe_ii": "R$", "classe_iii": "R$", "classe_iv": "R$", "total": "R$"},
-  "agc_situacao": "Sem datas designadas | Convocada | 1ª convocação sem quórum | Período de suspensão | Plano aprovado / rejeitado",
-  "agc_1a": "", "agc_2a": "", "agc_continuacao": "",
-  "recuperandos": [{"nome": "", "ecac": "R$", "divida_ativa": "R$"}],
+  "recursos_relevantes": [{"recurso": "(fls.)", "status": ""}],
+  "imoveis_requerentes": [{"matricula": "nº (fls.)", "cartorio": "", "descricao": "", "proprietario": ""}],
+  "imoveis_essenciais": [{"matricula": "nº (fls.)", "cartorio": "", "descricao": "", "proprietario": ""}],
+  "prj_classe_ii": {"desagio": "(fls.)", "carencia": "", "parcelas": "", "juros": "", "correcao": ""},
+  "prj_classe_iii": {"desagio": "(fls.)", "carencia": "", "parcelas": "", "juros": "", "correcao": ""},
+  "qgc": {"classe_i": "R$ (fls.)", "classe_ii": "R$ (fls.)", "classe_iii": "R$ (fls.)", "classe_iv": "R$ (fls.)", "total": "R$ (fls.)"},
+  "agc_situacao": "opção (fls.)",
+  "agc_1a": "DD/MM/AAAA (fls.)", "agc_2a": "DD/MM/AAAA (fls.)", "agc_continuacao": "(fls.)",
+  "recuperandos": [{"nome": "", "ecac": "R$ (fls.)", "divida_ativa": "R$ (fls.)"}],
   "endividamento_fiscal_total": "R$"
 }
 
@@ -143,7 +165,7 @@ TEXTO:
 """
 
 
-def _build_checklist_rj(dados: dict) -> str:
+def _build_checklist_rj(dados: dict, docs_loc=None) -> str:
     doc = _base_doc()
     hoje = _date.today().strftime("%d/%m/%Y")
     _titulo(doc, "Checklist de Recuperação Judicial")
@@ -252,28 +274,30 @@ def _build_checklist_rj(dados: dict) -> str:
 
     # ── 6. CHECKLIST DOS DOCUMENTOS SALVOS ───────────────────────────────
     _sec_title(doc, "6. CHECKLIST DOS DOCUMENTOS SALVOS")
-    anx = ["Anexado", "Não existente"]
-    docs = [
-        ("Petição Inicial da RJ",                    _cb(["Salvo", "Pendente"])),
-        ("Quadro de Ativos dos Requerentes",         _cb(["Anexado", "Não existente/Segredo de Justiça"])),
-        ("Relatório de Perícia Prévia",              _cb(anx)),
-        ("Laudo de Imóveis Essenciais",              _cb(anx)),
-        ("Último RMA",                               _cb(anx)),
-        ("QGC do(s) recuperando(s)",                 _cb(anx)),
-        ("QGC do AJ",                                _cb(anx)),
-        ("Relatório de Divergência",                 _cb(anx)),
-        ("PRJ e Aditivos",                           _cb(anx)),
-        ("Atas, laudo de credenciamento e de votação da AGC", _cb(anx)),
-    ]
-    _kv_table(doc, ["DOCUMENTO", "STATUS"], docs)
+    docs_loc = docs_loc or {}
+    rows6 = []
+    for key, label, opts in _DOCS_ITEM6:
+        loc = docs_loc.get(key) or {}
+        existe = loc.get("existe")
+        folhas = loc.get("folhas", "") or (
+            f"págs. {loc.get('pg_inicio')}–{loc.get('pg_fim')}" if loc.get("pg_inicio") else ""
+        )
+        if existe is True:
+            status = _cb(opts, opts[0])
+        elif existe is False:
+            status = _cb(opts, opts[-1])
+        else:
+            status = _cb(opts)
+        rows6.append((label, status, folhas))
+    _grid_table(doc, ["DOCUMENTO", "STATUS", "FOLHAS"], rows6, [8.0, 5.9, 3.0])
 
     _rodape_conf(doc)
     return _salvar(doc, "Checklist_RJ", dados)
 
 
-def gerar_checklist_rj(fonte: str, client, model: str) -> str:
+def gerar_checklist_rj(fonte: str, client, model: str, docs_loc=None) -> str:
     dados = _extrair(_PROMPT_RJ, fonte, client, model)
-    return _build_checklist_rj(dados)
+    return _build_checklist_rj(dados, docs_loc)
 
 
 # ══════════════════════════════════════════════════════════════════════════

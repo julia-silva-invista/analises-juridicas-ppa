@@ -252,6 +252,7 @@ with gr.Blocks(
             rj_excel_cred_file   = gr.File(label="Excel de Credores", interactive=False, visible=False, elem_classes=["word-file-output"])
             rj_excel_cred_status = gr.Textbox(label="", interactive=False, lines=1, show_label=False)
             rj_checklist_file      = gr.File(label="Checklist RJ",        interactive=False, visible=False, elem_classes=["word-file-output"])
+            rj_checklist_docs_file = gr.File(label="Documentos do item 6 (PDFs recortados)", interactive=False, visible=False, elem_classes=["word-file-output"])
             rj_checklist_status    = gr.Markdown("")
 
             # ── Checklist de Créditos (por credor-alvo) ──────────────────────
@@ -478,8 +479,8 @@ with gr.Blocks(
     )
     rj_checklist_btn.click(
         fn=rj_gerar_checklist,
-        inputs=[rj_relatorio_state, rj_extracao_state],
-        outputs=[rj_checklist_file, rj_checklist_status],
+        inputs=[rj_relatorio_state, rj_extracao_state, rj_pdf_principal],
+        outputs=[rj_checklist_file, rj_checklist_docs_file, rj_checklist_status],
     )
 
     def _rj_add_credor(_count):
