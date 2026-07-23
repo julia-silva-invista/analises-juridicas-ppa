@@ -41,7 +41,6 @@ def _mat_get_clients():
 class OnusFinanceiro(BaseModel):
     codigo: Optional[str] = None
     tipo: Optional[str] = None          # penhora, hipoteca, alienacao fiduciaria, CCB, etc.
-    credor: Optional[str] = None        # credor/beneficiario da garantia (banco/instituicao)
     numero_processo: Optional[str] = None   # nº do processo judicial (penhora, arresto, execucao)
     numero_instrumento: Optional[str] = None  # nº da CCB, contrato, operacao bancaria
     valor_principal: Optional[float] = None
@@ -146,9 +145,6 @@ PROMPT_MATRICULA = (
     " CCB, confissao de divida ou qualquer titulo de credito), preencha onus_financeiros com:\n"
     "   - codigo: codigo do ato (ex: R.5, AV.9)\n"
     "   - tipo: tipo do onus (ex: penhora, hipoteca, alienacao fiduciaria, CCB)\n"
-    "   - credor: OBRIGATORIO para hipoteca e alienacao fiduciaria. Nome do credor/beneficiario"
-    " da garantia (banco ou instituicao financeira). Apenas o nome, sem CPF/CNPJ."
-    " Null se nao identificavel ou se o tipo de onus nao for hipoteca/alienacao fiduciaria.\n"
     "   - numero_processo: OBRIGATORIO para penhora, arresto, execucao e qualquer ato judicial."
     " Informe o numero completo do processo (ex: 0001234-56.2023.8.26.0100). Null se nao for ato judicial.\n"
     "   - numero_instrumento: OBRIGATORIO para CCB, contrato bancario, operacao de credito, cedula."
@@ -390,51 +386,6 @@ def _mat_calcular_valor_onus(onus_list: list, onus_vigentes_texto: str = "",
     return f"Total: {_fmt_brl(total)}\n" + "\n".join(linhas_individuais)
 
 
-def _mat_normalizar_texto(s: str) -> str:
-    if not s:
-        return ""
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(c for c in s if not unicodedata.combining(c))
-    return s.lower().strip()
-
-
-def _mat_resumo_garantias(onus_list: list) -> str:
-    """Resumo enxuto das garantias reais vigentes (Alienação Fiduciária e Hipoteca),
-    listando apenas os credores — sem grau, valor ou demais detalhes."""
-    af_credores, hip_credores = [], []
-    af_vistos, hip_vistos = set(), set()
-
-    for onus in onus_list or []:
-        def _get(key):
-            return onus.get(key) if isinstance(onus, dict) else getattr(onus, key, None)
-
-        if _get("cancelado"):
-            continue
-
-        tipo_norm = _mat_normalizar_texto(_get("tipo") or "")
-        if "alienacao fiduciaria" in tipo_norm:
-            destino, vistos = af_credores, af_vistos
-        elif "hipoteca" in tipo_norm:
-            destino, vistos = hip_credores, hip_vistos
-        else:
-            continue
-
-        credor = (_get("credor") or "").strip() or "credor não identificado"
-        chave = _mat_normalizar_texto(credor)
-        if chave in vistos:
-            continue
-        vistos.add(chave)
-        destino.append(credor)
-
-    partes = []
-    if af_credores:
-        partes.append("Alienação Fiduciária: " + ", ".join(af_credores))
-    if hip_credores:
-        partes.append("Hipoteca: " + ", ".join(hip_credores))
-
-    return "\n".join(partes) if partes else "Sem garantia real vigente identificada."
-
-
 # ── Parsing de devedores/relacionados ─────────────────────────────────────────
 
 def _mat_parse_parties(texto: str) -> set:
@@ -577,20 +528,18 @@ COLUNAS_RENAME_MAT = {
     "proprietario_atual": "Proprietário Atual", "descricao_imovel": "Descrição do Imóvel",
     "transmissoes_averbadas_registradas": "Transmissões",
     "onus_vigentes_registrados_averbados": "Ônus Vigentes",
-    "principais_garantias_vigentes": "Principais Garantias Vigentes",
     "observacoes": "Observações", "onus_cancelados": "Ônus Cancelados",
     "grau_confianca": "Grau de Confiança",
 }
 COLUNAS_ORDEM_MAT = [
     "Matrícula", "Comarca", "Proprietário Atual", "Descrição do Imóvel",
-    "Transmissões", "Ônus Vigentes", "Principais Garantias Vigentes",
-    "Observações", "Ônus Cancelados",
+    "Transmissões", "Ônus Vigentes", "Observações", "Ônus Cancelados",
     "Fração Ideal", "Valor da Avaliação Definitiva (VM)",
     "Valor da Avaliação Definitiva (VP)", "Valor Total do Ônus",
     "Saldo Avaliação - Ônus", "Grau de Confiança",
 ]
-LARGURAS_MAT = {1:12, 2:22, 3:30, 4:45, 5:55, 6:55, 7:35, 8:50, 9:50, 10:14, 11:22, 12:22, 13:22, 14:22, 15:18}
-COL_VM, COL_ONUS, COL_SALDO = 11, 13, 14
+LARGURAS_MAT = {1:12, 2:22, 3:30, 4:45, 5:55, 6:55, 7:50, 8:50, 9:14, 10:22, 11:22, 12:22, 13:22, 14:18}
+COL_VM, COL_ONUS, COL_SALDO = 10, 12, 13
 
 FILL_AMARELO  = PatternFill("solid", fgColor="FFFACD")  # lemon chiffon
 FILL_VERMELHO = PatternFill("solid", fgColor="FFD0D0")  # rosa claro
@@ -644,7 +593,7 @@ def _mat_salvar_excel(df, caminho, alert_map: dict):
         cell.border    = _mat_borda("medium", "FFFFFF")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    colunas_center = {1, 2, 10, 11, 12, 13, 14, 15}
+    colunas_center = {1, 2, 9, 10, 11, 12, 13, 14}
     for row_idx in range(2, ultima + 1):
         df_idx = row_idx - 2        # índice 0-based no DataFrame
         alertas = alert_map.get(df_idx, set())
@@ -788,7 +737,6 @@ def mat_gerar_excel(arquivos,
         r["valor_total_onus_calculado"] = _mat_calcular_valor_onus(
             onus_list, onus_vigentes_texto=onus_vigentes_txt, data_referencia=hoje
         )
-        r["principais_garantias_vigentes"] = _mat_resumo_garantias(onus_list)
 
         if usar_alertas:
             alertas = _mat_detectar_alertas(r, devedores_docs, relacionados_docs, data_ajuiz)
