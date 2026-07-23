@@ -56,6 +56,7 @@ def _retry(fn, tentativas=5, espera_base=20):
                     "connection reset", "connection error", "connecterror",
                     "read timed out", "readtimeout",
                     "resource_exhausted", "rate limit", "quota",
+                    "json_invalid", "eof while parsing",
                 ])
             )
             if retryable and t < tentativas:

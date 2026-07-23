@@ -21,7 +21,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-from utils import _retry, _responder_pergunta_generica
+from utils import _retry, _responder_pergunta_generica, GEMINI_TIMEOUT_MS
 
 
 def _mat_get_clients():
@@ -29,7 +29,11 @@ def _mat_get_clients():
     k2 = os.getenv("GEMINI_API_KEY_2") or k1
     if not k1:
         raise RuntimeError("GEMINI_API_KEY_1 não configurada.")
-    return genai.Client(api_key=k1), genai.Client(api_key=k2)
+    http_opts = types.HttpOptions(timeout=GEMINI_TIMEOUT_MS)
+    return (
+        genai.Client(api_key=k1, http_options=http_opts),
+        genai.Client(api_key=k2, http_options=http_opts),
+    )
 
 
 # ── Modelos Pydantic ──────────────────────────────────────────────────────────
@@ -520,6 +524,7 @@ def _mat_analisar_pdf(caminho_pdf: str, client) -> dict:
         response_schema=MatriculaExtraida,
         temperature=0,
         thinking_config=types.ThinkingConfig(thinking_budget=0),
+        max_output_tokens=65536,
     )
 
     def _call():
@@ -832,7 +837,7 @@ def mat_gerar_excel(arquivos,
 def mat_responder(pergunta: str, log_texto: str):
     try:
         k = os.getenv("GEMINI_API_KEY_1") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-        client = genai.Client(api_key=k)
+        client = genai.Client(api_key=k, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
         return _responder_pergunta_generica(
             pergunta, log_texto, client, "gemini-2.5-flash"
         )
