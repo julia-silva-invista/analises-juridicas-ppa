@@ -33,6 +33,66 @@ _TXT_MUTE  = "AAAAAA"   # notas/placeholder
 
 _LOGO_PATH = Path(__file__).parent / "assets" / "invista_logo.png"
 
+# Siglas que devem conservar a grafia técnica mesmo quando o restante do
+# texto vier integralmente em caixa alta.
+_SIGLAS_PRESERVADAS = {
+    "AR", "CCB", "CNJ", "CNPJ", "CPF", "ID", "IDPJ", "INPC", "IPCA",
+    "OAB", "OJ", "PPA", "RG", "SA", "SAT", "SOP", "UF", "VM", "VP",
+}
+_PARTICULAS_NOME = {
+    "a", "as", "com", "da", "das", "de", "do", "dos", "e", "em", "na",
+    "nas", "no", "nos", "para", "por",
+}
+_RE_PALAVRA = re.compile(
+    r"[A-Za-zÀ-ÖØ-öø-ÿ]+(?:[.'’][A-Za-zÀ-ÖØ-öø-ÿ]+)*\.?"
+)
+
+
+def _normalizar_caixa_alta(texto) -> str:
+    """
+    Converte texto predominantemente em caixa alta para capitalização natural.
+
+    Nomes como ``JULIA DE OLIVEIRA`` tornam-se ``Julia de Oliveira``. Siglas
+    jurídicas e financeiras conhecidas permanecem em caixa alta. Textos que
+    já possuem capitalização normal não são alterados.
+    """
+    valor = str(texto if texto is not None else "")
+    letras = [c for c in valor if c.isalpha()]
+    if len(letras) < 2:
+        return valor
+    proporcao_maiusculas = sum(c.isupper() for c in letras) / len(letras)
+    if proporcao_maiusculas < 0.72:
+        return valor
+
+    indice = 0
+
+    def _ajustar(match):
+        nonlocal indice
+        palavra = match.group(0)
+        chave = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ]", "", palavra).upper()
+        minuscula = palavra.lower()
+        if chave in _SIGLAS_PRESERVADAS:
+            resultado = palavra.upper()
+        elif indice > 0 and minuscula.rstrip(".") in _PARTICULAS_NOME:
+            resultado = minuscula
+        else:
+            resultado = minuscula[:1].upper() + minuscula[1:]
+        indice += 1
+        return resultado
+
+    return _RE_PALAVRA.sub(_ajustar, valor)
+
+
+def _normalizar_dados(valor):
+    """Aplica a capitalização natural recursivamente aos dados extraídos."""
+    if isinstance(valor, dict):
+        return {chave: _normalizar_dados(item) for chave, item in valor.items()}
+    if isinstance(valor, list):
+        return [_normalizar_dados(item) for item in valor]
+    if isinstance(valor, str):
+        return _normalizar_caixa_alta(valor)
+    return valor
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Helpers de célula (baixo nível)
@@ -95,11 +155,11 @@ def _write(cell, text, bold=False, size=9, color=_TXT, italic=False, align=None,
     p = cell.paragraphs[0]
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(0)
-    if align:
+    if align is not None:
         p.alignment = align
     parts = str(text if text is not None else "").split("\n")
     for j, line in enumerate(parts):
-        r = p.add_run(line)
+        r = p.add_run(_normalizar_caixa_alta(line))
         _apply_font(r, bold, size, color, italic)
         if j < len(parts) - 1:
             r.add_break()
@@ -154,7 +214,7 @@ def _kv_table(doc, header, rows, w_label=5.9, w_value=11.0):
         _set_bg(cl, _BRANCO); _set_borders(cl); _cell_pad(cl)
         _write(cl, label, bold=True, color=_TXT)
         _set_bg(cv, _BRANCO); _set_borders(cv); _cell_pad(cv)
-        _write(cv, value, color=_TXT)
+        _write(cv, value, color=_TXT, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         _widths(r, [w_label, w_value])
     return t
 
@@ -170,7 +230,7 @@ def _kv_label_table(doc, rows, w_label=5.9, w_value=11.0):
         _set_bg(cl, _CINZA); _set_borders(cl); _cell_pad(cl)
         _write(cl, label, bold=True, color=_TXT)
         _set_bg(cv, _BRANCO); _set_borders(cv); _cell_pad(cv)
-        _write(cv, value, color=_TXT)
+        _write(cv, value, color=_TXT, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         _widths(r, [w_label, w_value])
     return t
 
@@ -190,7 +250,7 @@ def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
             c = r.cells[i]
             val = row_data[i] if i < len(row_data) else ""
             _set_bg(c, _BRANCO); _set_borders(c); _cell_pad(c)
-            _write(c, val)
+            _write(c, val, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         _widths(r, ws)
     if total_row:
         r = t.add_row()
@@ -212,9 +272,9 @@ def _para(doc, text, bold=False, size=9.5, color=_TXT, italic=False,
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(before)
     p.paragraph_format.space_after = Pt(after)
-    if align:
+    if align is not None:
         p.alignment = align
-    r = p.add_run(str(text or ""))
+    r = p.add_run(_normalizar_caixa_alta(text))
     _apply_font(r, bold, size, color, italic)
     return p
 
@@ -232,11 +292,17 @@ def _sub_gray(doc, text):
 
 
 def _note(doc, text):
-    return _para(doc, text, size=8, color=_TXT_MUTE, italic=True, before=2, after=6)
+    return _para(
+        doc, text, size=8, color=_TXT_MUTE, italic=True, before=2, after=6,
+        align=WD_ALIGN_PARAGRAPH.JUSTIFY,
+    )
 
 
 def _body(doc, text):
-    return _para(doc, text, size=9.5, color=_TXT, before=0, after=5)
+    return _para(
+        doc, text, size=9.5, color=_TXT, before=0, after=5,
+        align=WD_ALIGN_PARAGRAPH.JUSTIFY,
+    )
 
 
 def _guidance(doc, text):
@@ -246,7 +312,10 @@ def _guidance(doc, text):
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     c = t.rows[0].cells[0]
     _set_bg(c, _DESTAQUE); _set_borders(c, color="F3D9CF"); _cell_pad(c, top=90, bottom=90)
-    _write(c, text, size=9, color=_TXT, italic=True)
+    _write(
+        c, text, size=9, color=_TXT, italic=True,
+        align=WD_ALIGN_PARAGRAPH.JUSTIFY,
+    )
     c.width = Cm(16.9)
     return t
 
@@ -294,6 +363,12 @@ campo "data" as datas das tentativas e no campo "fls" as páginas correspondente
 - andamentos: liste TODOS os andamentos processuais que constarem no material E no relatório de apoio —
   NÃO resuma, NÃO omita e NÃO limite a quantidade. Cada andamento com data, descrição objetiva e
   referência (Mov./fls./Evento/ID).
+
+═══ REGRA 5 — FORMATAÇÃO DO TEXTO ═══
+- Nunca escreva nomes de pessoas físicas ou jurídicas integralmente em caixa alta.
+- Use capitalização natural: "Julia de Oliveira Bernardo da Silva", "Empresa Agrícola Ltda.".
+- Preserve em caixa alta somente siglas técnicas, como CPF, CNPJ, CNJ, OAB, SAT, SOP, IDPJ, VM e VP.
+- Redija títulos, descrições, teses, status e andamentos com maiúsculas e minúsculas normais.
 
 {
   "nome_caso": "identificador curto (ex: BASF x São Lourenço)",
@@ -441,6 +516,7 @@ def _montar_cabecalho_rodape(doc):
 
 
 def _build_doc(dados: dict) -> str:
+    dados = _normalizar_dados(dados or {})
     doc = Document()
     doc.styles["Normal"].font.name = "Arial"
     doc.styles["Normal"].font.size = Pt(9.5)
