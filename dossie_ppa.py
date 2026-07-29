@@ -5,7 +5,9 @@ import io
 import json
 import os
 import re
+import shutil
 import tempfile
+from copy import deepcopy
 from datetime import date as _date
 from pathlib import Path
 
@@ -32,16 +34,36 @@ _TXT       = "555555"   # texto escuro padrão
 _TXT_MUTE  = "AAAAAA"   # notas/placeholder
 
 _LOGO_PATH = Path(__file__).parent / "assets" / "invista_logo.png"
+_TEMPLATE_PATH = Path(__file__).parent / "assets" / "Parecer_Invista_PPA_v2_Atualizada_3.0.docx"
 
 # Siglas que devem conservar a grafia técnica mesmo quando o restante do
 # texto vier integralmente em caixa alta.
 _SIGLAS_PRESERVADAS = {
-    "AR", "CAC", "CCB", "CNJ", "CNPJ", "CPF", "ID", "IDPJ", "INPC", "IPCA",
-    "OAB", "OJ", "PPA", "RG", "SA", "SAT", "SOP", "UF", "VM", "VP",
+    "AR", "BACENJUD", "CAC", "CCB", "CNJ", "CNPJ", "CPF", "CRI", "ID",
+    "IDPJ", "INFOJUD", "INPC", "IPCA", "OAB", "OJ", "PPA", "RENAJUD",
+    "RG", "SA", "SAT", "SERASAJUD", "SISBAJUD", "SNIPER", "SOP", "UF",
+    "VM", "VP",
 }
 _PARTICULAS_NOME = {
-    "a", "as", "com", "da", "das", "de", "do", "dos", "e", "em", "na",
-    "nas", "no", "nos", "para", "por",
+    "a", "as", "à", "às", "ao", "aos", "com", "da", "das", "de", "do",
+    "dos", "e", "em", "na", "nas", "no", "nos", "para", "pela", "pelas",
+    "pelo", "pelos", "por", "sob", "sobre", "x",
+}
+_CAMPOS_NARRATIVOS = {
+    "andamentos_resumo",
+    "consideracoes_gerais",
+    "criterio_sat",
+    "decisao_recorrida",
+    "descricao",
+    "garantia",
+    "memoria_indices",
+    "memoria_ponderacoes",
+    "plan_ponderacoes",
+    "risco_juridico",
+    "status",
+    "status_processo",
+    "tese",
+    "teses_principais",
 }
 _RE_PALAVRA = re.compile(
     r"[A-Za-zÀ-ÖØ-öø-ÿ]+(?:[.'’][A-Za-zÀ-ÖØ-öø-ÿ]+)*\.?"
@@ -57,8 +79,8 @@ def _normalizar_caixa_alta(texto) -> str:
     já possuem capitalização normal não são alterados.
     """
     valor = str(texto if texto is not None else "")
-    if valor.strip() == "e-CAC":
-        return valor
+    if valor.strip().casefold() == "e-cac":
+        return "e-CAC"
     letras = [c for c in valor if c.isalpha()]
     if len(letras) < 2:
         return valor
@@ -82,26 +104,58 @@ def _normalizar_caixa_alta(texto) -> str:
         indice += 1
         return resultado
 
-    return _RE_PALAVRA.sub(_ajustar, valor)
+    resultado = _RE_PALAVRA.sub(_ajustar, valor)
+    return re.sub(r"\be-CAC\b", "e-CAC", resultado, flags=re.IGNORECASE)
 
 
-def _normalizar_dados(valor):
+def _normalizar_texto_narrativo(texto) -> str:
+    """Converte caixa alta em capitalização de frase, preservando siglas."""
+    valor = str(texto if texto is not None else "")
+    letras = [c for c in valor if c.isalpha()]
+    if len(letras) < 2:
+        return valor
+    proporcao_maiusculas = sum(c.isupper() for c in letras) / len(letras)
+    if proporcao_maiusculas < 0.72:
+        return valor
+
+    inicio_frase = True
+    fim_anterior = 0
+
+    def _ajustar(match):
+        nonlocal inicio_frase, fim_anterior
+        entre = valor[fim_anterior:match.start()]
+        if re.search(r"(?:^|[.!?]\s+|\n+)$", entre):
+            inicio_frase = True
+        palavra = match.group(0)
+        chave = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ]", "", palavra).upper()
+        if chave in _SIGLAS_PRESERVADAS:
+            resultado = palavra.upper()
+        else:
+            resultado = palavra.lower()
+            if inicio_frase:
+                resultado = resultado[:1].upper() + resultado[1:]
+        inicio_frase = False
+        fim_anterior = match.end()
+        return resultado
+
+    resultado = _RE_PALAVRA.sub(_ajustar, valor)
+    return re.sub(r"\be-CAC\b", "e-CAC", resultado, flags=re.IGNORECASE)
+
+
+def _normalizar_dados(valor, chave_atual=""):
     """Aplica a capitalização natural recursivamente aos dados extraídos."""
     if isinstance(valor, dict):
-        return {chave: _normalizar_dados(item) for chave, item in valor.items()}
+        return {
+            chave: _normalizar_dados(item, chave)
+            for chave, item in valor.items()
+        }
     if isinstance(valor, list):
-        return [_normalizar_dados(item) for item in valor]
+        return [_normalizar_dados(item, chave_atual) for item in valor]
     if isinstance(valor, str):
+        if chave_atual in _CAMPOS_NARRATIVOS:
+            return _normalizar_texto_narrativo(valor)
         return _normalizar_caixa_alta(valor)
     return valor
-
-
-def _alinhamento_conteudo(texto):
-    """Justifica conteúdo narrativo; mantém dados curtos alinhados à esquerda."""
-    linhas = str(texto if texto is not None else "").splitlines() or [""]
-    if max(len(linha.strip()) for linha in linhas) >= 80:
-        return WD_ALIGN_PARAGRAPH.JUSTIFY
-    return None
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -147,13 +201,6 @@ def _cell_pad(cell, top=50, left=90, bottom=50, right=90):
     tcp.append(mar)
 
 
-def _nao_dividir_linha(row):
-    """Evita que uma linha de tabela seja fragmentada entre duas páginas."""
-    trp = row._tr.get_or_add_trPr()
-    if trp.find(qn("w:cantSplit")) is None:
-        trp.append(OxmlElement("w:cantSplit"))
-
-
 def _apply_font(run, bold, size, color, italic):
     run.font.name = "Arial"
     run.font.size = Pt(size)
@@ -194,11 +241,10 @@ def _widths(row, ws):
 def _orange_header(table, labels, ws=None):
     """Linha de header laranja com texto branco em negrito."""
     row = table.add_row()
-    _nao_dividir_linha(row)
     for i, lab in enumerate(labels):
         c = row.cells[i]
-        _set_bg(c, _LARANJA); _set_borders(c); _cell_pad(c, left=55, right=55)
-        _write(c, lab, bold=True, size=8.2, color=_BRANCO)
+        _set_bg(c, _LARANJA); _set_borders(c); _cell_pad(c)
+        _write(c, lab, bold=True, size=9, color=_BRANCO)
     if ws:
         _widths(row, ws)
     return row
@@ -207,7 +253,6 @@ def _orange_header(table, labels, ws=None):
 def _span_header(table, text):
     """Header laranja que abrange todas as colunas (ex.: DADOS DA MEMÓRIA DE CÁLCULO)."""
     row = table.add_row()
-    _nao_dividir_linha(row)
     n = len(row.cells)
     cell = row.cells[0]
     for i in range(1, n):
@@ -221,7 +266,6 @@ def _kv_table(doc, header, rows, w_label=5.9, w_value=11.0):
     """Tabela 2 col estilo 'header laranja' (CAMPO|INFORMAÇÃO) + labels/valores brancos."""
     t = doc.add_table(rows=0, cols=2)
     t.style = "Table Grid"
-    t.autofit = False
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if header:
         if isinstance(header, str):
@@ -234,7 +278,7 @@ def _kv_table(doc, header, rows, w_label=5.9, w_value=11.0):
         _set_bg(cl, _BRANCO); _set_borders(cl); _cell_pad(cl)
         _write(cl, label, bold=True, color=_TXT)
         _set_bg(cv, _BRANCO); _set_borders(cv); _cell_pad(cv)
-        _write(cv, value, color=_TXT, align=_alinhamento_conteudo(value))
+        _write(cv, value, color=_TXT, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         _widths(r, [w_label, w_value])
     return t
 
@@ -243,7 +287,6 @@ def _kv_label_table(doc, rows, w_label=5.9, w_value=11.0):
     """Tabela 2 col com coluna-label cinza (embargo/recurso), sem header laranja."""
     t = doc.add_table(rows=0, cols=2)
     t.style = "Table Grid"
-    t.autofit = False
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for label, value in rows:
         r = t.add_row()
@@ -251,7 +294,7 @@ def _kv_label_table(doc, rows, w_label=5.9, w_value=11.0):
         _set_bg(cl, _CINZA); _set_borders(cl); _cell_pad(cl)
         _write(cl, label, bold=True, color=_TXT)
         _set_bg(cv, _BRANCO); _set_borders(cv); _cell_pad(cv)
-        _write(cv, value, color=_TXT, align=_alinhamento_conteudo(value))
+        _write(cv, value, color=_TXT, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         _widths(r, [w_label, w_value])
     return t
 
@@ -260,7 +303,6 @@ def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
     """Tabela multi-coluna: header laranja + linhas brancas (+ TOTAL cinza opcional)."""
     t = doc.add_table(rows=0, cols=len(headers))
     t.style = "Table Grid"
-    t.autofit = False
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _orange_header(t, headers, ws)
     data = list(rows)
@@ -272,7 +314,7 @@ def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
             c = r.cells[i]
             val = row_data[i] if i < len(row_data) else ""
             _set_bg(c, _BRANCO); _set_borders(c); _cell_pad(c)
-            _write(c, val, align=_alinhamento_conteudo(val))
+            _write(c, val, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         _widths(r, ws)
     if total_row:
         r = t.add_row()
@@ -283,214 +325,6 @@ def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
             _write(c, val, bold=True)
         _widths(r, ws)
     return t
-
-
-def _keep_table_together(table):
-    """Mantém fichas curtas inteiras, inclusive entre o cabeçalho e os dados."""
-    linhas = list(table.rows)
-    for indice, row in enumerate(linhas):
-        _nao_dividir_linha(row)
-        manter_proxima = indice < len(linhas) - 1
-        for cell in row.cells:
-            for paragraph in cell.paragraphs:
-                paragraph.paragraph_format.keep_with_next = manter_proxima
-                paragraph.paragraph_format.keep_together = True
-
-
-def _cards(valor):
-    """Converte texto, lista ou dicionário em cartões narrativos homogêneos."""
-    if not valor:
-        return []
-    itens = valor if isinstance(valor, list) else [valor]
-    resultado = []
-    for item in itens:
-        if isinstance(item, dict):
-            texto = (
-                item.get("texto")
-                or item.get("descricao")
-                or item.get("detalhamento")
-                or item.get("analise")
-                or ""
-            )
-            titulo = item.get("titulo") or item.get("fato") or item.get("ato") or ""
-            referencia = item.get("referencia") or item.get("fonte") or ""
-            if str(texto).strip() or str(titulo).strip():
-                resultado.append({
-                    "titulo": str(titulo).strip(),
-                    "texto": str(texto).strip(),
-                    "referencia": str(referencia).strip(),
-                })
-            continue
-        for trecho in re.split(r"\n\s*\n|\n(?=\S)", str(item)):
-            if trecho.strip():
-                resultado.append({"titulo": "", "texto": trecho.strip(), "referencia": ""})
-    return resultado
-
-
-def _write_analysis_cell(cell, texto, titulo="", referencia=""):
-    """Escreve narrativa jurídica justificada e referência destacada na célula."""
-    cell.text = ""
-    cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
-    p = cell.paragraphs[0]
-    if titulo:
-        p.paragraph_format.space_before = Pt(0)
-        p.paragraph_format.space_after = Pt(5)
-        p.paragraph_format.keep_with_next = True
-        rtitle = p.add_run(_normalizar_caixa_alta(titulo))
-        _apply_font(rtitle, bold=True, size=8.8, color=_LARANJA, italic=False)
-        p = cell.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    p.paragraph_format.space_before = Pt(0)
-    p.paragraph_format.space_after = Pt(0)
-    p.paragraph_format.line_spacing = 1.08
-    r = p.add_run(_normalizar_caixa_alta(texto))
-    _apply_font(r, bold=False, size=9.3, color=_TXT, italic=False)
-    if referencia:
-        pref = cell.add_paragraph()
-        pref.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        pref.paragraph_format.space_before = Pt(4)
-        pref.paragraph_format.space_after = Pt(0)
-        rr = pref.add_run(_normalizar_caixa_alta(referencia))
-        _apply_font(rr, bold=False, size=7.8, color=_TXT_MUTE, italic=True)
-
-
-def _analysis_box(doc, texto, titulo="", referencia=""):
-    """Quadro formal para uma unidade autônoma de análise jurídica."""
-    t = doc.add_table(rows=1, cols=1)
-    t.style = "Table Grid"
-    t.autofit = False
-    t.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    b = t.rows[0]
-    if len(str(texto)) <= 900:
-        _nao_dividir_linha(b)
-    bc = b.cells[0]
-    _set_bg(bc, "FFFDFC")
-    _set_borders(bc, color="E8B9A8", sz=6)
-    _cell_pad(bc, top=115, left=135, bottom=115, right=135)
-    _write_analysis_cell(bc, texto, titulo=titulo, referencia=referencia)
-    bc.width = Cm(16.9)
-    return t
-
-
-def _analysis_cards(doc, valor, placeholder=""):
-    """Renderiza a análise em quadros separados, um fato ou fundamento por cartão."""
-    itens = _cards(valor)
-    if not itens:
-        if placeholder:
-            _guidance(doc, placeholder)
-        return
-    for i, item in enumerate(itens):
-        _analysis_box(
-            doc,
-            item.get("texto", ""),
-            titulo=item.get("titulo", ""),
-            referencia=item.get("referencia", ""),
-        )
-        if i < len(itens) - 1:
-            _spacer(doc, pts=2)
-
-
-def _asset_cards(doc, ativos, tese=None, placeholder=True):
-    """Exibe ativos em fichas legíveis, sem comprimir narrativa em dez colunas."""
-    registros = [
-        a for a in (ativos or [])
-        if not tese or tese.casefold() in str(a.get("tese", "")).strip().casefold()
-    ]
-    if not registros:
-        if placeholder:
-            _kv_table(doc, ["ATIVO", "INFORMAÇÃO"], [
-                ("Matrícula / identificação", ""),
-                ("Proprietário atual", ""),
-                ("Descrição e situação jurídica", ""),
-                ("Avaliação e potencial de recuperação", ""),
-            ], w_label=5.0, w_value=11.9)
-        return
-    for i, ativo in enumerate(registros):
-        identificacao = ativo.get("matricula") or ativo.get("ativo") or f"Ativo nº {i + 1}"
-        comarca = ativo.get("comarca", "")
-        titulo = " · ".join(x for x in [identificacao, comarca] if x)
-        descricao = " · ".join(x for x in [
-            ativo.get("tipo_ativo", ""),
-            ativo.get("descricao", ""),
-            ativo.get("area", ""),
-            ativo.get("situacao_produtiva", ""),
-        ] if x)
-        situacao = " · ".join(x for x in [
-            ativo.get("onus_vigentes", ""),
-            f"Fração atingível: {ativo.get('fracao_atingivel', '')}" if ativo.get("fracao_atingivel") else "",
-            f"Liquidez: {ativo.get('liquidez', '')}" if ativo.get("liquidez") else "",
-        ] if x)
-        valores = " · ".join(x for x in [
-            f"VM: {ativo.get('vm', '')}" if ativo.get("vm") else "",
-            f"VP: {ativo.get('vp', '')}" if ativo.get("vp") else "",
-            f"Ônus: {ativo.get('onus_total', '')}" if ativo.get("onus_total") else "",
-            f"Saldo estimado: {ativo.get('saldo', '')}" if ativo.get("saldo") else "",
-        ] if x)
-        tabela = _kv_table(doc, titulo.upper(), [
-            ("Proprietário atual", ativo.get("proprietario_atual", "")),
-            ("Descrição do ativo", descricao),
-            ("Situação jurídica", situacao),
-            ("Avaliação", valores),
-            ("Observações", ativo.get("observacoes", "")),
-        ], w_label=4.3, w_value=12.6)
-        _keep_table_together(tabela)
-        if i < len(registros) - 1:
-            _spacer(doc, pts=3)
-
-
-def _process_cards(doc, registros, parte_label):
-    """Quadros processuais do passivo, com situação em largura integral."""
-    t = doc.add_table(rows=0, cols=2)
-    t.style = "Table Grid"
-    t.autofit = False
-    t.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _fill_process_cards(t, registros, parte_label)
-    return t
-
-
-def _fill_process_cards(table, registros, parte_label):
-    """Preenche uma tabela de duas colunas com um ou mais processos."""
-    for row in list(table.rows):
-        table._tbl.remove(row._tr)
-    dados = list(registros or [])
-    if not dados:
-        _span_header(table, "DADOS PROCESSUAIS")
-        r = table.add_row()
-        _set_bg(r.cells[0], _CINZA); _set_borders(r.cells[0]); _cell_pad(r.cells[0])
-        _write(r.cells[0], "Processo", bold=True)
-        _set_bg(r.cells[1], _BRANCO); _set_borders(r.cells[1]); _cell_pad(r.cells[1])
-        _write(r.cells[1], "")
-        _widths(r, [4.3, 12.6])
-        return
-    for registro in dados:
-        if isinstance(registro, dict):
-            numero = registro.get("numero_cnj") or registro.get("numero") or ""
-            vinculado = registro.get("vinculado_a") or registro.get("vinculado") or ""
-            distribuicao = registro.get("distribuicao") or ""
-            parte = registro.get("parte_contraria") or registro.get("exequente") or registro.get("autor") or ""
-            valor = registro.get("valor_causa") or ""
-            sat = registro.get("sat_estimado") or registro.get("sat") or ""
-            status = registro.get("status") or registro.get("situacao") or ""
-        else:
-            valores = list(registro) + [""] * 7
-            numero, vinculado, distribuicao, parte, valor, sat, status = valores[:7]
-        _span_header(table, f"Processo nº {numero}" if numero else "Processo")
-        for label, value in [
-            ("Vinculado a", vinculado),
-            ("Distribuição", distribuicao),
-            (parte_label, parte),
-            ("Valor da causa", valor),
-            ("SAT estimado", sat),
-            ("Situação processual", status),
-        ]:
-            r = table.add_row()
-            if len(str(value)) <= 900:
-                _nao_dividir_linha(r)
-            _set_bg(r.cells[0], _CINZA); _set_borders(r.cells[0]); _cell_pad(r.cells[0])
-            _write(r.cells[0], label, bold=True, size=8.8)
-            _set_bg(r.cells[1], _BRANCO); _set_borders(r.cells[1]); _cell_pad(r.cells[1], top=70, bottom=70)
-            _write(r.cells[1], value, size=8.8, align=_alinhamento_conteudo(value), valign=False)
-            _widths(r, [4.3, 12.6])
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -510,24 +344,15 @@ def _para(doc, text, bold=False, size=9.5, color=_TXT, italic=False,
 
 
 def _sec_title(doc, text):
-    p = _para(doc, text, bold=True, size=13, color=_LARANJA, before=14, after=5)
-    p.paragraph_format.keep_with_next = True
-    p.paragraph_format.keep_together = True
-    return p
+    return _para(doc, text, bold=True, size=13, color=_LARANJA, before=14, after=5)
 
 
 def _sub_orange(doc, text):
-    p = _para(doc, text, bold=True, size=11, color=_LARANJA, before=10, after=4)
-    p.paragraph_format.keep_with_next = True
-    p.paragraph_format.keep_together = True
-    return p
+    return _para(doc, text, bold=True, size=11, color=_LARANJA, before=10, after=4)
 
 
 def _sub_gray(doc, text):
-    p = _para(doc, text, bold=True, size=10, color=_TXT, before=7, after=3)
-    p.paragraph_format.keep_with_next = True
-    p.paragraph_format.keep_together = True
-    return p
+    return _para(doc, text, bold=True, size=10, color=_TXT, before=7, after=3)
 
 
 def _note(doc, text):
@@ -550,7 +375,6 @@ def _guidance(doc, text):
     t.style = "Table Grid"
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     c = t.rows[0].cells[0]
-    _nao_dividir_linha(t.rows[0])
     _set_bg(c, _DESTAQUE); _set_borders(c, color="F3D9CF"); _cell_pad(c, top=90, bottom=90)
     _write(
         c, text, size=9, color=_TXT, italic=True,
@@ -610,71 +434,20 @@ campo "data" as datas das tentativas e no campo "fls" as páginas correspondente
 - Preserve em caixa alta somente siglas técnicas, como CPF, CNPJ, CNJ, OAB, SAT, SOP, IDPJ, VM e VP.
 - Redija títulos, descrições, teses, status e andamentos com maiúsculas e minúsculas normais.
 
-═══ REGRA 6 — ANÁLISE JURÍDICA E QUADROS ═══
-- Preencha também as teses de recuperação, os ativos, o passivo e as pendências com tudo o que constar
-  no relatório consolidado. Não deixe essas seções como modelo vazio se o relatório trouxer a informação.
-- Em campos de análise, produza cartões autônomos: um fato, fundamento ou conclusão por item.
-- Cada cartão deve ter título objetivo, texto jurídico completo e referência da fonte separada.
-- Preserve a cronologia, os requisitos legais, os riscos, as ressalvas e a conclusão. Não simplifique
-  a ponto de eliminar fatos relevantes e não repita o mesmo conteúdo em cartões diferentes.
-- Use linguagem formal, assertiva e tecnicamente precisa. Diferencie fato comprovado, indício,
-  inferência jurídica, risco e diligência pendente.
-
 {
   "nome_caso": "identificador curto (ex: BASF x São Lourenço)",
   "data_analise": "DD/MM/AAAA ou vazio",
+  "advogada_responsavel": "nome com capitalização natural ou vazio",
   "exequentes": "Nome · CNPJ ... (fls.)",
   "executados": "Nome1 · CPF/CNPJ ...; Nome2 ... (fls.)",
   "sat_total": "R$ ... (fls.)",
+  "total_atingivel_vm": "R$ ... ou vazio",
+  "total_atingivel_vp": "R$ ... ou vazio",
+  "teses_principais": "síntese objetiva das teses principais (com refs)",
   "passivo_fiscal": "", "passivo_trabalhista": "", "passivo_civel": "",
+  "passivo_total": "",
   "risco_juridico": "resumo dos principais riscos (com refs)",
   "consideracoes_gerais": "2-4 parágrafos de análise geral (separe parágrafos com \\n)",
-  "teses_principais": "síntese das teses aplicáveis",
-  "total_atingivel_vm": "R$ ...",
-  "total_atingivel_vp": "R$ ...",
-  "visao_consolidada_ativos": [
-    {"tese": "Penhora Direta | IDPJ | Fraude à Execução | outra", "vm": "R$ ...", "vp": "R$ ...", "onus": "R$ ...", "observacoes": ""}
-  ],
-  "ativos": [
-    {
-      "tese": "Penhora Direta | IDPJ | Fraude à Execução | outra",
-      "matricula": "Matrícula nº ...", "comarca": "Cidade/UF", "proprietario_atual": "",
-      "tipo_ativo": "apartamento, galpão, terreno etc.", "descricao": "", "area": "",
-      "situacao_produtiva": "", "liquidez": "", "fracao_atingivel": "",
-      "onus_vigentes": "", "vm": "R$ ...", "vp": "R$ ...", "onus_total": "R$ ...",
-      "saldo": "R$ ...", "observacoes": ""
-    }
-  ],
-  "teses_recuperacao": {
-    "penhora_direta": {
-      "analise": [{"titulo": "", "texto": "fato, fundamento e conclusão", "referencia": "fls./Mov./ID/Evento"}]
-    },
-    "idpj": {
-      "resumo": [{"titulo": "", "texto": "", "referencia": ""}],
-      "empresa_alvo": {
-        "razao_social": "", "cnpj": "", "cnae_principal": "", "atividades_secundarias": "",
-        "socio_atual": "", "endereco_fiscal": "", "fundamentacao": "",
-        "credito_propositura": ""
-      },
-      "cronologia": [{"data": "", "ato": "", "detalhamento": "", "referencia": ""}],
-      "evidencias": [{"titulo": "", "texto": "", "referencia": ""}],
-      "upside": [{"titulo": "", "texto": "", "referencia": ""}]
-    },
-    "fraude_execucao": {
-      "resumo": [{"titulo": "", "texto": "", "referencia": ""}],
-      "ma_fe_insolvencia": [{"titulo": "", "texto": "", "referencia": ""}]
-    },
-    "outras": [{"titulo": "", "texto": "", "referencia": ""}]
-  },
-  "passivo": {
-    "e_cac": [{"nome": "", "cpf_cnpj": "", "saldo": ""}],
-    "fiscais": [{"numero_cnj": "", "vinculado_a": "", "distribuicao": "", "parte_contraria": "", "valor_causa": "", "sat_estimado": "", "status": ""}],
-    "trabalhistas": [{"numero_cnj": "", "vinculado_a": "", "distribuicao": "", "parte_contraria": "", "valor_causa": "", "sat_estimado": "", "status": ""}],
-    "civeis": [{"numero_cnj": "", "vinculado_a": "", "distribuicao": "", "parte_contraria": "", "valor_causa": "", "sat_estimado": "", "status": ""}],
-    "principais_credores": [{"credor": "", "natureza": "", "valor": "", "garantia_preferencia": "", "status": "", "observacoes": ""}],
-    "pontos_atencao": [{"titulo": "", "texto": "", "referencia": ""}]
-  },
-  "pendencias": [{"pendencia": "", "protocolo": "", "prazo_status": ""}],
   "creditos": [
     {
       "id": "Crédito [Credor]",
@@ -811,7 +584,7 @@ def _montar_cabecalho_rodape(doc):
     _apply_font(r, bold=False, size=8, color=_TXT_MUTE, italic=False)
 
 
-def _build_doc(dados: dict) -> str:
+def _build_doc_programatico_obsoleto(dados: dict) -> str:
     dados = _normalizar_dados(dados or {})
     doc = Document()
     doc.styles["Normal"].font.name = "Arial"
@@ -849,10 +622,10 @@ def _build_doc(dados: dict) -> str:
         ("Exequente(s)",                 dados.get("exequentes", "")),
         ("Executado(s)",                 dados.get("executados", "")),
         ("SAT",                          dados.get("sat_total", "R$")),
-        ("Total atingível mapeado — VM", dados.get("total_atingivel_vm", "") or "R$ [___]"),
-        ("Total atingível mapeado — VP", dados.get("total_atingivel_vp", "") or "R$ [___]"),
+        ("Total atingível mapeado — VM", "R$ [___]"),
+        ("Total atingível mapeado — VP", "R$ [___]"),
         ("Passivo total identificado",   passivo_cell),
-        ("Tese(s) principal(is)",        dados.get("teses_principais", "")),
+        ("Tese(s) principal(is)",        ""),
         ("Risco Jurídico",               dados.get("risco_juridico", "")),
     ])
     _spacer(doc)
@@ -860,49 +633,35 @@ def _build_doc(dados: dict) -> str:
     # Visão consolidada dos ativos
     _sub_orange(doc, "VISÃO CONSOLIDADA DOS ATIVOS")
     _note(doc, "Quadro-resumo dos ativos atingíveis por tese. Os valores já descontam os ônus incidentes sobre os ativos.")
-    resumo_ativos = dados.get("visao_consolidada_ativos") or []
-    linhas_resumo = [[
-        item.get("tese", ""),
-        item.get("vm", ""),
-        item.get("vp", ""),
-        item.get("onus", ""),
-        item.get("observacoes", ""),
-    ] for item in resumo_ativos]
-    if not linhas_resumo:
-        linhas_resumo = [
-            ["Penhora Direta", "", "", "", ""],
-            ["IDPJ", "", "", "", ""],
-            ["Fraude à Execução", "", "", "", ""],
-            ["Pauliana", "", "", "", ""],
-        ]
     _grid_table(
         doc,
         ["TESE", "VM (R$)", "VP (R$)", "ÔNUS (R$)", "OBSERVAÇÕES"],
-        linhas_resumo,
+        [["Penhora Direta", "", "", "", ""],
+         ["IDPJ", "", "", "", ""],
+         ["Fraude à Execução", "", "", "", ""],
+         ["Pauliana", "", "", "", ""]],
         [3.5, 2.6, 2.6, 2.6, 5.6],
-        total_row=[
-            "TOTAL GERAL",
-            dados.get("total_atingivel_vm", ""),
-            dados.get("total_atingivel_vp", ""),
-            "",
-            "",
-        ],
+        total_row=["TOTAL GERAL", "", "", "", ""],
     )
     _spacer(doc)
 
-    # Visão geral dos atingíveis em fichas — narrativa não é comprimida em colunas estreitas.
+    # Visão geral dos atingíveis (3 tabelas)
     _sub_orange(doc, "VISÃO GERAL DOS ATINGÍVEIS")
-    ativos = dados.get("ativos") or []
+    cols_at = ["ATIVO / MATRÍCULA", "TIPO DE ATIVO", "ÁREA / HA", "SIT. PRODUTIVA",
+               "LIQUIDEZ", "% ATING.", "ÔNUS (R$)", "OBSERVAÇÕES"]
+    ws_at = [2.6, 2.1, 1.6, 2.2, 1.9, 1.5, 2.0, 3.0]
     for tese in ["Penhora Direta", "IDPJ", "Fraude à Execução"]:
         _sub_gray(doc, tese)
-        _asset_cards(doc, ativos, tese=tese, placeholder=True)
+        _grid_table(doc, cols_at, [], ws_at, min_rows=3)
         _spacer(doc, pts=2)
 
     # Principais considerações
     _sub_orange(doc, "PRINCIPAIS CONSIDERAÇÕES")
     cons = (dados.get("consideracoes_gerais") or "").strip()
     if cons:
-        _analysis_cards(doc, cons)
+        for para in cons.split("\n"):
+            if para.strip():
+                _body(doc, para.strip())
     else:
         _guidance(doc, "Registre aqui: visão geral da operação · principais riscos jurídicos e "
                        "patrimoniais · oportunidades identificadas · pontos críticos para aquisição · "
@@ -1050,175 +809,107 @@ def _build_doc(dados: dict) -> str:
     # ══ 2. TESES DE RECUPERAÇÃO ══════════════════════════════════════════
     _sec_title(doc, "2. TESES DE RECUPERAÇÃO")
 
-    teses = dados.get("teses_recuperacao") or {}
+    cols_mat = ["Mat.", "Comarca", "Proprietário Atual", "Descrição do Imóvel", "Ônus Vigentes",
+                "Fração", "VM (R$)", "VP (R$)", "Ônus Total (R$)", "Saldo (R$)"]
+    ws_mat = [1.3, 1.7, 2.0, 2.5, 1.9, 1.2, 1.4, 1.4, 1.7, 1.4]
 
     # 2.1 Penhora Direta
-    penhora = teses.get("penhora_direta") or {}
     _sub_orange(doc, "2.1 Penhora Direta")
     _sub_gray(doc, "a. Ponderações e Observações Gerais")
-    _analysis_cards(
-        doc,
-        penhora.get("analise"),
-        "Descrever aqui: situação geral dos imóveis localizados, gravames identificados, "
-        "bloqueios de matrícula, imóveis não localizados, pesquisas pendentes e demais "
-        "observações relevantes.",
-    )
+    _guidance(doc, "Descrever aqui: situação geral dos imóveis localizados, gravames identificados, "
+                   "bloqueios de matrícula, imóveis não localizados, pesquisas pendentes e demais "
+                   "observações relevantes.")
     _sub_gray(doc, "b. Matrículas Mapeadas")
-    _asset_cards(doc, ativos, tese="Penhora Direta", placeholder=True)
+    _grid_table(doc, cols_mat, [], ws_mat, total_row=["TOTAL", "", "", "", "", "", "", "", "", ""], min_rows=2)
     _spacer(doc)
 
     # 2.2 IDPJ
-    idpj = teses.get("idpj") or {}
     _sub_orange(doc, "2.2 IDPJ")
     _sub_gray(doc, "a. Resumo da Tese")
-    _analysis_cards(
-        doc,
-        idpj.get("resumo"),
-        "Fundamento principal · Histórico dos fatos · Objetivo do IDPJ · Principais elementos "
-        "probatórios identificados (procurações, representação conjunta, declarações em processo, "
-        "confusão patrimonial, etc.).",
-    )
+    _guidance(doc, "Fundamento principal · Histórico dos fatos · Objetivo do IDPJ · Principais elementos "
+                   "probatórios identificados (procurações, representação conjunta, declarações em processo, "
+                   "confusão patrimonial, etc.).")
     _sub_gray(doc, "b. Empresa-Alvo")
-    empresa = idpj.get("empresa_alvo") or {}
     _kv_table(doc, ["CAMPO", "DADO"], [
-        ("Razão social da empresa-alvo", empresa.get("razao_social", "")),
-        ("CNPJ", empresa.get("cnpj", "")),
-        ("CNAE principal", empresa.get("cnae_principal", "")),
-        ("Atividades secundárias", empresa.get("atividades_secundarias", "")),
-        ("Sócio atual", empresa.get("socio_atual", "")),
-        ("Endereço fiscal", empresa.get("endereco_fiscal", "")),
-        ("Fundamentação da tese", empresa.get("fundamentacao", "")),
-        ("Crédito mais adequado para propositura", empresa.get("credito_propositura", "")),
+        ("Razão social da empresa-alvo",        ""),
+        ("CNPJ",                                ""),
+        ("Fundamentação da tese",               "Simulação / Desvio de finalidade / Confusão patrimonial"),
+        ("Crédito mais adequado para propositura", ""),
     ])
     _spacer(doc, pts=2)
     _sub_gray(doc, "c. Cronologia Societária — Atos Relevantes")
-    cronologia = idpj.get("cronologia") or []
-    _grid_table(
-        doc,
-        ["DATA", "ATO", "DETALHAMENTO / FONTE"],
-        [[
-            item.get("data", ""),
-            item.get("ato", ""),
-            " · ".join(x for x in [item.get("detalhamento", ""), item.get("referencia", "")] if x),
-        ] for item in cronologia],
-        [2.6, 4.5, 9.8],
-        min_rows=2,
-    )
+    _grid_table(doc, ["DATA", "ATO", "DETALHAMENTO"], [], [2.6, 4.5, 9.8], min_rows=2)
     _spacer(doc, pts=2)
     _sub_gray(doc, "d. Evidências de Controle Informal")
-    _analysis_cards(
-        doc,
-        idpj.get("evidencias"),
-        "Espaço destinado à consolidação dos principais elementos probatórios que sustentam a "
-        "tese: fatos relevantes identificados durante a investigação, documentos, prints, imagens, "
-        "pesquisas patrimoniais, alterações societárias, procurações, manifestações processuais e "
-        "demais evidências que demonstrem a viabilidade da medida.",
-    )
+    _guidance(doc, "Espaço destinado à consolidação dos principais elementos probatórios que sustentam a "
+                   "tese: fatos relevantes identificados durante a investigação, documentos, prints, imagens, "
+                   "pesquisas patrimoniais, alterações societárias, procurações, manifestações processuais e "
+                   "demais evidências que demonstrem a viabilidade da medida.")
     _sub_gray(doc, "e. Ativos Atingíveis via IDPJ  —  ~R$ [___] (VM) / ~R$ [___] (VP)")
-    _asset_cards(doc, ativos, tese="IDPJ", placeholder=True)
+    _grid_table(doc, cols_mat, [], ws_mat, total_row=["TOTAL", "", "", "", "", "", "", "", "", ""], min_rows=2)
     _spacer(doc, pts=2)
     _sub_gray(doc, "f. Upside Identificado (se houver)")
-    _analysis_cards(
-        doc,
-        idpj.get("upside"),
-        "Descrever eventual upside — ex: recebíveis futuros de compra e venda em andamento, "
-        "participações societárias, créditos a receber, outros ativos. Indicar valor estimado e "
-        "prazo de realização.",
-    )
+    _guidance(doc, "Descrever eventual upside — ex: recebíveis futuros de compra e venda em andamento, "
+                   "participações societárias, créditos a receber, outros ativos. Indicar valor estimado e "
+                   "prazo de realização.")
     _spacer(doc)
 
     # 2.3 Fraude à Execução
-    fraude = teses.get("fraude_execucao") or {}
     _sub_orange(doc, "2.3 Fraude à Execução")
     _sub_gray(doc, "a. Resumo da Tese")
-    _analysis_cards(
-        doc,
-        fraude.get("resumo"),
-        "Descrever os negócios jurídicos impugnáveis (doações, transferências, usufruto) "
-        "praticados no curso ou após o ajuizamento da execução. Indicar a data do ajuizamento e a "
-        "data de cada ato para enquadramento da tese. Identificar qual crédito é mais adequado "
-        "para a propositura.",
-    )
+    _guidance(doc, "Descrever os negócios jurídicos impugnáveis (doações, transferências, usufruto) "
+                   "praticados no curso ou após o ajuizamento da execução. Indicar a data do ajuizamento e a "
+                   "data de cada ato para enquadramento da tese. Identificar qual crédito é mais adequado "
+                   "para a propositura.")
     _sub_gray(doc, "b. Má-fé e Insolvência")
-    _analysis_cards(
-        doc,
-        fraude.get("ma_fe_insolvencia"),
-        "Registrar os elementos que demonstram a má-fé do adquirente (consilium fraudis) e a "
-        "insolvência do devedor decorrente do ato — pressupostos da fraude à execução / ação pauliana.",
-    )
+    _guidance(doc, "Registrar os elementos que demonstram a má-fé do adquirente (consilium fraudis) e a "
+                   "insolvência do devedor decorrente do ato — pressupostos da fraude à execução / ação pauliana.")
     _sub_gray(doc, "c. Ativos Atingíveis via Fraude à Execução  —  ~R$ [___] (VM) / ~R$ [___] (VP)")
-    _asset_cards(doc, ativos, tese="Fraude à Execução", placeholder=True)
+    _grid_table(doc, cols_mat, [], ws_mat, total_row=["TOTAL", "", "", "", "", "", "", "", "", ""], min_rows=2)
     _spacer(doc)
 
     # 2.4 Outras teses
     _sub_orange(doc, "2.4 Outras teses")
-    _analysis_cards(
-        doc,
-        teses.get("outras"),
-        "Registrar outras teses de recuperação eventualmente aplicáveis ao caso.",
-    )
+    _guidance(doc, "Registrar outras teses de recuperação eventualmente aplicáveis ao caso.")
     _spacer(doc)
 
     # ══ 3. PASSIVO ═══════════════════════════════════════════════════════
     _sec_title(doc, "3. PASSIVO")
     _note(doc, "Mapear o passivo integral dos devedores e das empresas-alvo. O passivo é fator "
                "determinante na avaliação do risco real de recuperação.")
-    passivo = dados.get("passivo") or {}
 
     # 3.1 Passivo Fiscal
     _sub_orange(doc, "3.1 Passivo Fiscal")
     _sub_gray(doc, "e-CAC")
-    e_cac = passivo.get("e_cac") or []
-    _grid_table(
-        doc,
-        ["NOME", "CPF / CNPJ", "SALDO e-CAC (R$)"],
-        [[item.get("nome", ""), item.get("cpf_cnpj", ""), item.get("saldo", "")] for item in e_cac],
-        [7.0, 5.0, 4.9],
-        min_rows=2,
-    )
+    _grid_table(doc, ["NOME", "CPF / CNPJ", "SALDO e-CAC (R$)"], [], [7.0, 5.0, 4.9], min_rows=2)
     _spacer(doc, pts=2)
     _sub_gray(doc, "Execuções Fiscais")
-    _process_cards(doc, passivo.get("fiscais") or [], "Exequente")
+    cols_exec = ["Nº CNJ", "Vinculado a", "Distribuição", "Exequente", "Valor Causa (R$)", "SAT Est. (R$)", "Status"]
+    ws_exec = [3.0, 2.2, 2.0, 2.8, 2.3, 2.3, 2.3]
+    _grid_table(doc, cols_exec, [], ws_exec, min_rows=2)
     _spacer(doc)
 
     # 3.2 Passivo Trabalhista
     _sub_orange(doc, "3.2 Passivo Trabalhista")
-    _process_cards(doc, passivo.get("trabalhistas") or [], "Autor / Reclamante")
+    cols_trab = ["Nº CNJ", "Vinculado a", "Distribuição", "Autor", "Valor Causa (R$)", "SAT Est. (R$)", "Status"]
+    _grid_table(doc, cols_trab, [], ws_exec, min_rows=2)
     _spacer(doc)
 
     # 3.3 Passivo Cível (Terceiros)
     _sub_orange(doc, "3.3 Passivo Cível (Terceiros)")
-    _process_cards(doc, passivo.get("civeis") or [], "Parte contrária")
+    cols_civ = ["Nº CNJ", "Vinculado a", "Distribuição", "Exequente", "Valor Causa (R$)", "SAT Est. (R$)", "Obs."]
+    _grid_table(doc, cols_civ, [], ws_exec, min_rows=2)
     _spacer(doc, pts=2)
 
     # Principais Credores
     _sub_gray(doc, "Principais Credores")
-    credores = passivo.get("principais_credores") or []
-    if credores:
-        for i, credor in enumerate(credores):
-            _kv_table(doc, (credor.get("credor") or f"Credor nº {i + 1}").upper(), [
-                ("Natureza do crédito", credor.get("natureza", "")),
-                ("Valor estimado", credor.get("valor", "")),
-                ("Garantia / preferência", credor.get("garantia_preferencia", "")),
-                ("Status", credor.get("status", "")),
-                ("Observações", credor.get("observacoes", "")),
-            ], w_label=4.3, w_value=12.6)
-            if i < len(credores) - 1:
-                _spacer(doc, pts=3)
-    else:
-        _kv_table(doc, ["CREDOR", "INFORMAÇÃO"], [
-            ("Natureza do crédito", ""),
-            ("Valor estimado", ""),
-            ("Garantia / preferência", ""),
-            ("Status e observações", ""),
-        ], w_label=4.3, w_value=12.6)
-    _sub_gray(doc, "Pontos de Atenção sobre o Passivo")
-    _analysis_cards(
+    _grid_table(
         doc,
-        passivo.get("pontos_atencao"),
-        "Hipotecas preferentes · créditos arrematados por terceiros · passivo oculto potencial · "
-        "ações de reintegração · litígios relevantes.",
+        ["CREDOR", "NATUREZA DO CRÉDITO", "VALOR ESTIMADO (R$)", "GARANTIA / PREFERÊNCIA", "STATUS", "OBSERVAÇÕES"],
+        [], [3.0, 2.9, 2.5, 3.0, 2.1, 3.4], min_rows=2,
     )
+    _note(doc, "Pontos de atenção sobre o passivo: hipotecas preferentes, créditos arrematados por "
+               "terceiros, passivo oculto potencial, ações de reintegração, litígios relevantes, etc.")
     _spacer(doc)
 
     # ══ 5. PENDÊNCIAS ════════════════════════════════════════════════════
@@ -1226,14 +917,7 @@ def _build_doc(dados: dict) -> str:
     _note(doc, "Campo destinado ao registro de pendências relacionadas à pesquisa de bens, obtenção de "
                "escrituras, avaliações de imóveis e demais diligências ainda necessárias para a conclusão "
                "da análise do caso.")
-    pendencias = dados.get("pendencias") or []
-    _grid_table(
-        doc,
-        ["PENDÊNCIA", "PROTOCOLO", "PRAZO / STATUS"],
-        [[p.get("pendencia", ""), p.get("protocolo", ""), p.get("prazo_status", "")] for p in pendencias],
-        [8.9, 4.0, 4.0],
-        min_rows=2,
-    )
+    _grid_table(doc, ["PENDÊNCIA", "PROTOCOLO", "PRAZO / STATUS"], [], [8.9, 4.0, 4.0], min_rows=2)
     _spacer(doc)
 
     # ══ 6. ELABORAÇÃO E REVISÃO ══════════════════════════════════════════
@@ -1257,6 +941,400 @@ def _build_doc(dados: dict) -> str:
     # ── Salvar ────────────────────────────────────────────────────────────
     nome = re.sub(r"[^\w\s-]", "", dados.get("nome_caso", "") or "caso").strip().replace(" ", "_")[:40] or "caso"
     caminho = os.path.join(tempfile.gettempdir(), f"Dossie_PPA_{nome}.docx")
+    doc.save(caminho)
+    return caminho
+
+
+def _nao_dividir_linha(row):
+    """Evita que uma linha curta seja fragmentada entre páginas."""
+    trp = row._tr.get_or_add_trPr()
+    if trp.find(qn("w:cantSplit")) is None:
+        trp.append(OxmlElement("w:cantSplit"))
+
+
+def _repetir_cabecalho(row):
+    trp = row._tr.get_or_add_trPr()
+    if trp.find(qn("w:tblHeader")) is None:
+        el = OxmlElement("w:tblHeader")
+        el.set(qn("w:val"), "true")
+        trp.append(el)
+
+
+def _substituir_texto_paragrafo(paragraph, texto, justificar=False):
+    """Troca somente o conteúdo, preservando o pPr e o rPr do template."""
+    valor = _normalizar_caixa_alta(texto)
+    rpr = None
+    if paragraph.runs and paragraph.runs[0]._r.rPr is not None:
+        rpr = deepcopy(paragraph.runs[0]._r.rPr)
+    for run in list(paragraph.runs):
+        paragraph._p.remove(run._r)
+    run = paragraph.add_run(valor)
+    if rpr is not None:
+        if run._r.rPr is not None:
+            run._r.remove(run._r.rPr)
+        run._r.insert(0, rpr)
+    paragraph.paragraph_format.keep_together = True
+    if justificar or len(valor.strip()) >= 80:
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    return paragraph
+
+
+def _substituir_texto_celula(cell, texto, justificar=None):
+    """Preenche uma célula sem reconstruir sua formatação ou geometria."""
+    valor = _normalizar_caixa_alta(texto)
+    paragraphs = list(cell.paragraphs)
+    p = paragraphs[0]
+    for extra in paragraphs[1:]:
+        cell._tc.remove(extra._p)
+    if justificar is None:
+        justificar = len(valor.strip()) >= 80 or "\n" in valor
+    _substituir_texto_paragrafo(p, valor, justificar=justificar)
+    cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+    return cell
+
+
+def _chave_rotulo(texto):
+    return re.sub(r"\s+", " ", str(texto or "")).strip().casefold()
+
+
+def _preencher_tabela_chave_valor(table, valores):
+    mapa = {_chave_rotulo(k): v for k, v in valores.items()}
+    preenchidas = set()
+    for row in table.rows:
+        if len(row.cells) < 2:
+            continue
+        chave = _chave_rotulo(row.cells[0].text)
+        if chave in mapa and chave not in preenchidas:
+            _substituir_texto_celula(row.cells[1], mapa[chave])
+            _nao_dividir_linha(row)
+            preenchidas.add(chave)
+
+
+def _ajustar_linhas_dados(table, quantidade, minimo=1):
+    """Clona ou remove apenas linhas de dados, preservando o cabeçalho real."""
+    alvo = max(int(quantidade), minimo)
+    while len(table.rows) - 1 < alvo:
+        modelo = table.rows[-1]._tr
+        table._tbl.append(deepcopy(modelo))
+    while len(table.rows) - 1 > alvo:
+        table._tbl.remove(table.rows[-1]._tr)
+    if table.rows:
+        _repetir_cabecalho(table.rows[0])
+        _nao_dividir_linha(table.rows[0])
+
+
+def _preencher_tabela_grade(table, registros, minimo=1):
+    dados = list(registros or [])
+    _ajustar_linhas_dados(table, len(dados), minimo=minimo)
+    colunas = len(table.columns)
+    for indice, row in enumerate(table.rows[1:]):
+        valores = dados[indice] if indice < len(dados) else []
+        for coluna in range(colunas):
+            valor = valores[coluna] if coluna < len(valores) else ""
+            _substituir_texto_celula(row.cells[coluna], valor)
+        _nao_dividir_linha(row)
+
+
+def _manter_tabela_inteira(table):
+    """Mantém quadros jurídicos curtos na mesma página."""
+    linhas = list(table.rows)
+    for indice, row in enumerate(linhas):
+        _nao_dividir_linha(row)
+        manter_proxima = indice < len(linhas) - 1
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.keep_with_next = manter_proxima
+                paragraph.paragraph_format.keep_together = True
+
+
+def _texto_elemento(elemento, doc):
+    if elemento.tag == qn("w:p"):
+        return _DocxParagraph(elemento, doc).text.strip()
+    return ""
+
+
+def _indice_paragrafo(elementos, doc, prefixo, inicio=0):
+    alvo = prefixo.casefold()
+    for indice in range(inicio, len(elementos)):
+        texto = _texto_elemento(elementos[indice], doc)
+        if texto.casefold().startswith(alvo):
+            return indice
+    raise ValueError(f"Bloco obrigatório não localizado no template: {prefixo}")
+
+
+def _primeira_tabela(elementos, doc):
+    for elemento in elementos:
+        if elemento.tag == qn("w:tbl"):
+            return _DocxTable(elemento, doc)
+    raise ValueError("Tabela esperada não localizada no bloco clonado.")
+
+
+def _expandir_quadros_repetidos(
+    elementos, doc, prefixo_inicio, itens, titulo_item, preencher_item
+):
+    """Replica o quadro original até a nota ⊕, sem criar outro componente."""
+    inicio = _indice_paragrafo(elementos, doc, prefixo_inicio)
+    fim = None
+    for indice in range(inicio + 1, len(elementos)):
+        if _texto_elemento(elementos[indice], doc).startswith("⊕"):
+            fim = indice
+            break
+    if fim is None:
+        raise ValueError(f"Nota de replicação não localizada após {prefixo_inicio}.")
+    if prefixo_inicio.casefold().startswith("recurso"):
+        _substituir_texto_paragrafo(
+            _DocxParagraph(elementos[fim], doc),
+            "⊕ Replicar o quadro acima para cada recurso adicional identificado.",
+        )
+    padrao = [deepcopy(el) for el in elementos[inicio:fim]]
+    registros = list(itens or [{}])
+    novos = []
+    for numero, item in enumerate(registros, 1):
+        grupo = [deepcopy(el) for el in padrao]
+        pidx = _indice_paragrafo(grupo, doc, prefixo_inicio)
+        titulo = _substituir_texto_paragrafo(
+            _DocxParagraph(grupo[pidx], doc), titulo_item(item, numero)
+        )
+        for elemento in grupo[pidx:]:
+            if elemento.tag == qn("w:tbl"):
+                break
+            if elemento.tag == qn("w:p"):
+                paragraph = _DocxParagraph(elemento, doc)
+                paragraph.paragraph_format.keep_with_next = True
+                paragraph.paragraph_format.keep_together = True
+        preencher_item(_primeira_tabela(grupo, doc), item)
+        novos.extend(grupo)
+    elementos[inicio:fim] = novos
+
+
+def _preencher_embargo(table, embargo):
+    tipo = (embargo.get("tipo") or "").casefold()
+    if "exce" in tipo and len(table.rows) >= 3:
+        _substituir_texto_celula(table.rows[2].cells[0], "Tese da Exceção")
+    _preencher_tabela_chave_valor(table, {
+        "Embargante": embargo.get("embargante", ""),
+        "Embargante / Excipiente": embargo.get("embargante", ""),
+        "Data da Distribuição": embargo.get("data_dist", ""),
+        "Tese dos Embargos": embargo.get("tese", ""),
+        "Tese da Exceção": embargo.get("tese", ""),
+        "Principais Andamentos": embargo.get("andamentos_resumo", ""),
+        "Status Atual": embargo.get("status", ""),
+    })
+    _manter_tabela_inteira(table)
+
+
+def _preencher_recurso(table, recurso):
+    _preencher_tabela_chave_valor(table, {
+        "Recorrente": recurso.get("recorrente", ""),
+        "Decisão Recorrida": recurso.get("decisao_recorrida", ""),
+        "Data da Distribuição": recurso.get("data_dist", ""),
+        "Tese do Recurso": recurso.get("tese", ""),
+        "Principais Andamentos": recurso.get("andamentos_resumo", ""),
+        "Status Atual": recurso.get("status", ""),
+    })
+    _manter_tabela_inteira(table)
+
+
+def _iterar_elementos_com_titulo(elementos, doc):
+    titulo = ""
+    for elemento in elementos:
+        if elemento.tag == qn("w:p"):
+            texto = _DocxParagraph(elemento, doc).text.strip()
+            if texto:
+                titulo = texto
+        elif elemento.tag == qn("w:tbl"):
+            yield titulo, _DocxTable(elemento, doc)
+
+
+def _preencher_bloco_credito(elementos, doc, credito, indice_credito):
+    """Preenche uma cópia do bloco 1.1 e replica defesas/recursos existentes."""
+    cid = credito.get("id") or f"Crédito {indice_credito}"
+    titulo_idx = _indice_paragrafo(elementos, doc, "1.1 Crédito")
+    titulo_credito = _substituir_texto_paragrafo(
+        _DocxParagraph(elementos[titulo_idx], doc),
+        f"1.{indice_credito} {cid}",
+    )
+    if indice_credito > 1:
+        titulo_credito.paragraph_format.page_break_before = True
+
+    embargos = credito.get("embargos") or []
+    _expandir_quadros_repetidos(
+        elementos,
+        doc,
+        "Embargo nº 1",
+        embargos,
+        lambda item, n: (
+            f"{(item.get('tipo') or 'Embargo à Execução')} nº {n}"
+        ),
+        _preencher_embargo,
+    )
+    recursos = credito.get("recursos") or []
+    _expandir_quadros_repetidos(
+        elementos,
+        doc,
+        "Recurso nº 1",
+        recursos,
+        lambda item, n: f"Recurso nº {n}",
+        _preencher_recurso,
+    )
+
+    for titulo, table in _iterar_elementos_com_titulo(elementos, doc):
+        chave = titulo.casefold()
+        if chave == "dados do processo":
+            _preencher_tabela_chave_valor(table, {
+                "Número do processo": credito.get("numero_processo", ""),
+                "Vara / Comarca": credito.get("vara_comarca", ""),
+                "Exequente": credito.get("exequente_info", ""),
+                "Executado(s)": credito.get("executados_info", ""),
+                "Data de distribuição": credito.get("data_distribuicao", ""),
+                "SOP": credito.get("sop", ""),
+                "SAT": credito.get("sat", ""),
+                "Critério de atualização do SAT": credito.get("criterio_sat", ""),
+                "Honorários": credito.get("honorarios", ""),
+                "Lastro / Instrumento": credito.get("lastro", ""),
+                "Data de Emissão": credito.get("data_emissao", ""),
+                "Data do Vencimento": credito.get("data_vencimento", ""),
+                "Assinaturas": credito.get("assinaturas", ""),
+                "Garantia": credito.get("garantia", ""),
+                "Status do Processo": credito.get("status_processo", ""),
+            })
+        elif chave == "índices de correção do contrato":
+            _preencher_tabela_chave_valor(table, {
+                "Correção monetária": credito.get("ind_cm", ""),
+                "Juros remuneratórios": credito.get("ind_jr", ""),
+                "Juros moratórios": credito.get("ind_jm", ""),
+                "Multa moratória": credito.get("ind_multa", ""),
+                "Capitalização": credito.get("ind_cap", ""),
+            })
+        elif chave == "planilha inicial":
+            _preencher_tabela_chave_valor(table, {
+                "Correção monetária": credito.get("plan_cm", ""),
+                "Juros remuneratórios": credito.get("plan_jr", ""),
+                "Multa moratória": credito.get("plan_multa", ""),
+                "Capitalização": credito.get("plan_cap", ""),
+                "Ponderações": credito.get("plan_ponderacoes", ""),
+            })
+        elif chave == "última memória de cálculo":
+            _preencher_tabela_chave_valor(table, {
+                "Data da Juntada": credito.get("memoria_data_juntada", ""),
+                "Total Atualizado": credito.get("memoria_total", ""),
+                "Data-base": credito.get("memoria_data_base", ""),
+                "Índices aplicados": credito.get("memoria_indices", ""),
+                "Ponderações": credito.get("memoria_ponderacoes", ""),
+            })
+        elif chave == "citação":
+            _preencher_tabela_grade(
+                table,
+                [[
+                    c.get("executado", ""),
+                    c.get("modalidade", ""),
+                    c.get("data", ""),
+                    c.get("fls", ""),
+                ] for c in (credito.get("citacoes") or [])],
+                minimo=1,
+            )
+        elif chave == "constrições vigentes":
+            _preencher_tabela_grade(
+                table,
+                [[
+                    c.get("tipo", ""),
+                    c.get("descricao", ""),
+                    c.get("valor", ""),
+                    c.get("status", ""),
+                ] for c in (credito.get("constricoes") or [])],
+                minimo=1,
+            )
+        elif chave == "principais andamentos processuais":
+            _preencher_tabela_grade(
+                table,
+                [[
+                    a.get("data", ""),
+                    a.get("descricao", ""),
+                    a.get("fls", ""),
+                ] for a in (credito.get("andamentos") or [])],
+                minimo=1,
+            )
+
+
+def _preencher_creditos_template(doc, creditos):
+    body = doc.element.body
+    elementos = list(body.iterchildren())
+    inicio = _indice_paragrafo(elementos, doc, "1.1 Crédito")
+    placeholder = _indice_paragrafo(elementos, doc, "1.2 Crédito", inicio + 1)
+    secao_dois = _indice_paragrafo(elementos, doc, "2. TESES DE RECUPERAÇÃO", placeholder + 1)
+    padrao = [deepcopy(el) for el in elementos[inicio:placeholder]]
+    ancora = elementos[secao_dois]
+    for elemento in elementos[inicio:secao_dois]:
+        body.remove(elemento)
+
+    lista = list(creditos or [{}])
+    for numero, credito in enumerate(lista, 1):
+        bloco = [deepcopy(el) for el in padrao]
+        _preencher_bloco_credito(bloco, doc, credito, numero)
+        for elemento in bloco:
+            ancora.addprevious(elemento)
+
+
+def _build_doc(dados: dict) -> str:
+    """Preenche uma cópia do template oficial, sem reconstruir seu design."""
+    if not _TEMPLATE_PATH.exists():
+        raise FileNotFoundError(
+            f"Template oficial não localizado: {_TEMPLATE_PATH}"
+        )
+    dados = _normalizar_dados(dados or {})
+    nome = re.sub(
+        r"[^\w\s-]", "", dados.get("nome_caso", "") or "caso"
+    ).strip().replace(" ", "_")[:40] or "caso"
+    caminho = os.path.join(tempfile.gettempdir(), f"Dossie_PPA_{nome}.docx")
+    shutil.copy2(_TEMPLATE_PATH, caminho)
+    doc = Document(caminho)
+
+    hoje = _date.today().strftime("%d/%m/%Y")
+    _preencher_tabela_chave_valor(doc.tables[0], {
+        "Nome do Caso": dados.get("nome_caso", ""),
+        "Data da Análise": dados.get("data_analise") or hoje,
+        "Advogada Responsável": dados.get("advogada_responsavel", ""),
+    })
+
+    pf = dados.get("passivo_fiscal", "")
+    pt = dados.get("passivo_trabalhista", "")
+    pc = dados.get("passivo_civel", "")
+    _preencher_tabela_chave_valor(doc.tables[1], {
+        "Exequente(s)": dados.get("exequentes", ""),
+        "Executado(s)": dados.get("executados", ""),
+        "SAT": dados.get("sat_total", ""),
+        "Total atingível mapeado — VM": dados.get("total_atingivel_vm", ""),
+        "Total atingível mapeado — VP": dados.get("total_atingivel_vp", ""),
+        "Tese(s) principal(is)": dados.get("teses_principais", ""),
+        "Risco Jurídico": dados.get("risco_juridico", ""),
+    })
+    if len(doc.tables[1].rows) >= 10:
+        _substituir_texto_celula(
+            doc.tables[1].rows[6].cells[1], f"Fiscal: {pf}" if pf else "Fiscal:"
+        )
+        _substituir_texto_celula(
+            doc.tables[1].rows[7].cells[1],
+            f"Trabalhista: {pt}" if pt else "Trabalhista:",
+        )
+        _substituir_texto_celula(
+            doc.tables[1].rows[8].cells[1], f"Cível: {pc}" if pc else "Cível:"
+        )
+        total_passivo = dados.get("passivo_total", "")
+        _substituir_texto_celula(
+            doc.tables[1].rows[9].cells[1],
+            f"TOTAL: {total_passivo}" if total_passivo else "TOTAL:",
+        )
+
+    consideracoes = (dados.get("consideracoes_gerais") or "").strip()
+    if consideracoes:
+        _substituir_texto_celula(doc.tables[6].cell(0, 0), consideracoes, justificar=True)
+        for paragraph in doc.paragraphs:
+            if paragraph.text.startswith("Campo livre para registro"):
+                _substituir_texto_paragrafo(paragraph, "")
+                break
+
+    _preencher_creditos_template(doc, dados.get("creditos") or [])
+
     doc.save(caminho)
     return caminho
 
@@ -1299,13 +1377,12 @@ def _proc_to_row(p: dict) -> list:
     ]
 
 
-def _fill_passivo_table(table, registros: list, parte_label: str):
-    """Preenche o passivo novo em cartões e mantém compatibilidade com o modelo antigo."""
+def _fill_passivo_table(table, registros: list):
+    """Substitui as linhas de dados de uma tabela do passivo (mantém o header)."""
     ncols = len(table.columns)
-    if ncols == 2:
-        _fill_process_cards(table, registros, parte_label)
-        return
     larguras = [c.width for c in table.rows[0].cells]
+    _repetir_cabecalho(table.rows[0])
+    _nao_dividir_linha(table.rows[0])
     # remove linhas de dados (mantém a primeira = header laranja)
     for row in list(table.rows)[1:]:
         table._tbl.remove(row._tr)
@@ -1314,10 +1391,17 @@ def _fill_passivo_table(table, registros: list, parte_label: str):
         registros = [[""] * ncols]
     for reg in registros:
         r = table.add_row()
+        _nao_dividir_linha(r)
         for i in range(ncols):
             c = r.cells[i]
             _set_bg(c, _BRANCO); _set_borders(c); _cell_pad(c)
-            _write(c, reg[i] if i < len(reg) else "")
+            valor = reg[i] if i < len(reg) else ""
+            _write(
+                c,
+                _normalizar_caixa_alta(valor),
+                align=WD_ALIGN_PARAGRAPH.JUSTIFY
+                if len(str(valor).strip()) >= 80 else None,
+            )
             if i < len(larguras) and larguras[i]:
                 c.width = larguras[i]
 
@@ -1349,11 +1433,11 @@ def preencher_passivo_dossie(dossie_path, fiscais: list, trabalhistas: list, civ
     for heading, table in _iter_headings_tables(doc):
         h = heading.lower()
         if "execuções fiscais" in h or "execucoes fiscais" in h:
-            _fill_passivo_table(table, [_proc_to_row(p) for p in fiscais], "Exequente")
+            _fill_passivo_table(table, [_proc_to_row(p) for p in fiscais])
         elif "trabalhista" in h:
-            _fill_passivo_table(table, [_proc_to_row(p) for p in trabalhistas], "Autor / Reclamante")
+            _fill_passivo_table(table, [_proc_to_row(p) for p in trabalhistas])
         elif "cível" in h or "civel" in h:
-            _fill_passivo_table(table, [_proc_to_row(p) for p in civeis], "Parte contrária")
+            _fill_passivo_table(table, [_proc_to_row(p) for p in civeis])
 
     caminho = os.path.join(tempfile.gettempdir(), "Dossie_PPA_atualizado.docx")
     doc.save(caminho)
