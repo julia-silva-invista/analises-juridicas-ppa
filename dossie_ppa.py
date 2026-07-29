@@ -39,10 +39,13 @@ _TEMPLATE_PATH = Path(__file__).parent / "assets" / "Parecer_Invista_PPA_v2_Atua
 # Siglas que devem conservar a grafia técnica mesmo quando o restante do
 # texto vier integralmente em caixa alta.
 _SIGLAS_PRESERVADAS = {
-    "AR", "BACENJUD", "CAC", "CCB", "CNJ", "CNPJ", "CPF", "CRI", "ID",
-    "IDPJ", "INFOJUD", "INPC", "IPCA", "OAB", "OJ", "PPA", "RENAJUD",
-    "RG", "SA", "SAT", "SERASAJUD", "SISBAJUD", "SNIPER", "SOP", "UF",
-    "VM", "VP",
+    "AC", "AL", "AM", "AP", "AR", "BA", "BACENJUD", "CAC", "CC", "CCB",
+    "CE", "CNAE", "CNJ", "CNPJ", "CPC", "CPF", "CRI", "CTN", "DF", "ES",
+    "GO", "ID", "IDPJ", "INFOJUD", "INPC", "IPCA", "MA", "MG", "MS", "MT",
+    "OAB", "OJ", "PA", "PB", "PE", "PI", "PPA", "PR", "RENAJUD", "RG", "RJ",
+    "RN", "RO", "RR", "RS", "SA", "SAT", "SC", "SE", "SERASAJUD",
+    "SISBAJUD", "SNIPER", "SOP", "SP", "STF", "STJ", "TJSP", "TO", "TRF",
+    "TST", "UF", "VM", "VP",
 }
 _PARTICULAS_NOME = {
     "a", "as", "à", "às", "ao", "aos", "com", "da", "das", "de", "do",
@@ -50,20 +53,35 @@ _PARTICULAS_NOME = {
     "pelo", "pelos", "por", "sob", "sobre", "x",
 }
 _CAMPOS_NARRATIVOS = {
+    "analise",
     "andamentos_resumo",
+    "atividades_secundarias",
+    "ato",
     "consideracoes_gerais",
+    "credito_propositura",
     "criterio_sat",
     "decisao_recorrida",
     "descricao",
+    "detalhamento",
+    "evidencias",
+    "fraude_execucao",
+    "fundamentacao",
     "garantia",
+    "ma_fe_insolvencia",
     "memoria_indices",
     "memoria_ponderacoes",
+    "observacoes",
+    "outras",
     "plan_ponderacoes",
+    "resumo",
     "risco_juridico",
+    "situacao_produtiva",
     "status",
     "status_processo",
     "tese",
     "teses_principais",
+    "texto",
+    "upside",
 }
 _RE_PALAVRA = re.compile(
     r"[A-Za-zÀ-ÖØ-öø-ÿ]+(?:[.'’][A-Za-zÀ-ÖØ-öø-ÿ]+)*\.?"
@@ -105,7 +123,8 @@ def _normalizar_caixa_alta(texto) -> str:
         return resultado
 
     resultado = _RE_PALAVRA.sub(_ajustar, valor)
-    return re.sub(r"\be-CAC\b", "e-CAC", resultado, flags=re.IGNORECASE)
+    resultado = re.sub(r"\be-CAC\b", "e-CAC", resultado, flags=re.IGNORECASE)
+    return re.sub(r"\br\s*\$\s*", "R$ ", resultado, flags=re.IGNORECASE)
 
 
 def _normalizar_texto_narrativo(texto) -> str:
@@ -139,7 +158,8 @@ def _normalizar_texto_narrativo(texto) -> str:
         return resultado
 
     resultado = _RE_PALAVRA.sub(_ajustar, valor)
-    return re.sub(r"\be-CAC\b", "e-CAC", resultado, flags=re.IGNORECASE)
+    resultado = re.sub(r"\be-CAC\b", "e-CAC", resultado, flags=re.IGNORECASE)
+    return re.sub(r"\br\s*\$\s*", "R$ ", resultado, flags=re.IGNORECASE)
 
 
 def _normalizar_dados(valor, chave_atual=""):
@@ -434,6 +454,13 @@ campo "data" as datas das tentativas e no campo "fls" as páginas correspondente
 - Preserve em caixa alta somente siglas técnicas, como CPF, CNPJ, CNJ, OAB, SAT, SOP, IDPJ, VM e VP.
 - Redija títulos, descrições, teses, status e andamentos com maiúsculas e minúsculas normais.
 
+═══ REGRA 6 — QUADROS DO TEMPLATE OFICIAL ═══
+- Preencha a visão consolidada dos ativos e as teses de recuperação sempre que a informação constar
+  no material. Esses dados serão inseridos nos quadros já existentes do template; não invente outro layout.
+- Em cada item narrativo, diferencie fato comprovado, indício, fundamento jurídico, risco e conclusão.
+- Para ativos, informe matrícula, proprietário, ônus, fração atingível, VM, VP e saldo quando disponíveis.
+- Não repita o mesmo fato em vários campos. Preserve a referência processual de cada afirmação.
+
 {
   "nome_caso": "identificador curto (ex: BASF x São Lourenço)",
   "data_analise": "DD/MM/AAAA ou vazio",
@@ -448,6 +475,39 @@ campo "data" as datas das tentativas e no campo "fls" as páginas correspondente
   "passivo_total": "",
   "risco_juridico": "resumo dos principais riscos (com refs)",
   "consideracoes_gerais": "2-4 parágrafos de análise geral (separe parágrafos com \\n)",
+  "visao_consolidada_ativos": [
+    {"tese": "Penhora Direta | IDPJ | Fraude à Execução | outra", "vm": "R$ ...", "vp": "R$ ...", "onus": "R$ ...", "observacoes": ""}
+  ],
+  "ativos": [
+    {
+      "tese": "Penhora Direta | IDPJ | Fraude à Execução | outra",
+      "matricula": "Matrícula nº ...", "comarca": "Cidade/UF", "proprietario_atual": "",
+      "tipo_ativo": "apartamento, galpão, terreno etc.", "descricao": "", "area": "",
+      "situacao_produtiva": "", "liquidez": "", "fracao_atingivel": "",
+      "onus_vigentes": "", "vm": "R$ ...", "vp": "R$ ...", "onus_total": "R$ ...",
+      "saldo": "R$ ...", "observacoes": ""
+    }
+  ],
+  "teses_recuperacao": {
+    "penhora_direta": {
+      "analise": [{"titulo": "", "texto": "fato, fundamento e conclusão", "referencia": "fls./Mov./ID/Evento"}]
+    },
+    "idpj": {
+      "resumo": [{"titulo": "", "texto": "", "referencia": ""}],
+      "empresa_alvo": {
+        "razao_social": "", "cnpj": "", "cnae_principal": "", "atividades_secundarias": "",
+        "socio_atual": "", "endereco_fiscal": "", "fundamentacao": "", "credito_propositura": ""
+      },
+      "cronologia": [{"data": "", "ato": "", "detalhamento": "", "referencia": ""}],
+      "evidencias": [{"titulo": "", "texto": "", "referencia": ""}],
+      "upside": [{"titulo": "", "texto": "", "referencia": ""}]
+    },
+    "fraude_execucao": {
+      "resumo": [{"titulo": "", "texto": "", "referencia": ""}],
+      "ma_fe_insolvencia": [{"titulo": "", "texto": "", "referencia": ""}]
+    },
+    "outras": [{"titulo": "", "texto": "", "referencia": ""}]
+  },
   "creditos": [
     {
       "id": "Crédito [Credor]",
@@ -1275,6 +1335,319 @@ def _preencher_creditos_template(doc, creditos):
             ancora.addprevious(elemento)
 
 
+def _texto_analise(valor) -> str:
+    """Consolida itens jurídicos no quadro narrativo original do template."""
+    if not valor:
+        return ""
+    if isinstance(valor, str):
+        return valor.strip()
+    if isinstance(valor, dict):
+        valor = [valor]
+    trechos = []
+    for item in valor:
+        if not isinstance(item, dict):
+            if str(item).strip():
+                trechos.append(str(item).strip())
+            continue
+        titulo = str(item.get("titulo") or "").strip()
+        texto = str(
+            item.get("texto")
+            or item.get("descricao")
+            or item.get("detalhamento")
+            or item.get("analise")
+            or ""
+        ).strip()
+        referencia = str(item.get("referencia") or item.get("fonte") or "").strip()
+        trecho = f"{titulo}: {texto}" if titulo and texto else (titulo or texto)
+        if referencia and referencia.casefold() not in trecho.casefold():
+            trecho = f"{trecho} ({referencia})" if trecho else referencia
+        if trecho:
+            trechos.append(trecho)
+    return "\n\n".join(trechos)
+
+
+def _valor_monetario(texto):
+    valor = str(texto or "")
+    match = re.search(r"-?\d[\d.\s]*(?:,\d{1,2})?", valor)
+    if not match:
+        return None
+    numero = match.group(0).replace(" ", "").replace(".", "").replace(",", ".")
+    try:
+        return float(numero)
+    except ValueError:
+        return None
+
+
+def _somar_moeda(registros, campo):
+    valores = [
+        numero
+        for numero in (_valor_monetario(item.get(campo)) for item in registros)
+        if numero is not None
+    ]
+    if not valores:
+        return ""
+    return _fmt_valor_br(sum(valores))
+
+
+def _ajustar_linhas_com_total(table, quantidade):
+    """Ajusta linhas sem perder a linha TOTAL estilizada do template."""
+    alvo = max(int(quantidade), 1)
+    while len(table.rows) - 2 < alvo:
+        modelo = table.rows[-2]._tr
+        table.rows[-1]._tr.addprevious(deepcopy(modelo))
+    while len(table.rows) - 2 > alvo:
+        table._tbl.remove(table.rows[-2]._tr)
+    _repetir_cabecalho(table.rows[0])
+    _nao_dividir_linha(table.rows[0])
+
+
+def _preencher_resumo_ativos(table, registros, dados):
+    itens = list(registros or [])
+    _ajustar_linhas_com_total(table, len(itens))
+    for indice, row in enumerate(table.rows[1:-1]):
+        item = itens[indice] if indice < len(itens) else {}
+        valores = [
+            item.get("tese", ""),
+            item.get("vm", ""),
+            item.get("vp", ""),
+            item.get("onus", ""),
+            item.get("observacoes", ""),
+        ]
+        for coluna, valor in enumerate(valores):
+            _substituir_texto_celula(row.cells[coluna], valor)
+        _nao_dividir_linha(row)
+    total = table.rows[-1]
+    totais = [
+        "TOTAL GERAL",
+        dados.get("total_atingivel_vm") or _somar_moeda(itens, "vm"),
+        dados.get("total_atingivel_vp") or _somar_moeda(itens, "vp"),
+        _somar_moeda(itens, "onus"),
+        "",
+    ]
+    for coluna, valor in enumerate(totais):
+        _substituir_texto_celula(total.cells[coluna], valor)
+    _nao_dividir_linha(total)
+
+
+def _filtrar_ativos(ativos, tese):
+    alvo = tese.casefold()
+    return [
+        item for item in (ativos or [])
+        if alvo in str(item.get("tese") or "").casefold()
+    ]
+
+
+def _preencher_ativos_resumidos(table, ativos):
+    _preencher_tabela_grade(
+        table,
+        [[
+            item.get("matricula", ""),
+            item.get("tipo_ativo") or item.get("descricao", ""),
+            item.get("area", ""),
+            item.get("situacao_produtiva", ""),
+            item.get("liquidez", ""),
+            item.get("fracao_atingivel", ""),
+            item.get("onus_vigentes") or item.get("onus_total", ""),
+            item.get("observacoes", ""),
+        ] for item in (ativos or [])],
+        minimo=1,
+    )
+
+
+def _compactar_celula(cell, tamanho, centralizar=False):
+    _cell_pad(cell, top=30, left=25, bottom=30, right=25)
+    for paragraph in cell.paragraphs:
+        if centralizar:
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in paragraph.runs:
+            run.font.size = Pt(tamanho)
+
+
+def _preencher_ativos_detalhados(table, ativos):
+    itens = list(ativos or [])
+    _ajustar_linhas_com_total(table, len(itens))
+    for indice, row in enumerate(table.rows[1:-1]):
+        item = itens[indice] if indice < len(itens) else {}
+        valores = [
+            item.get("matricula", ""),
+            item.get("comarca", ""),
+            item.get("proprietario_atual", ""),
+            item.get("descricao") or item.get("tipo_ativo", ""),
+            item.get("onus_vigentes", ""),
+            item.get("fracao_atingivel", ""),
+            item.get("vm", ""),
+            item.get("vp", ""),
+            item.get("onus_total", ""),
+            item.get("saldo", ""),
+        ]
+        for coluna, valor in enumerate(valores):
+            _substituir_texto_celula(row.cells[coluna], valor)
+            _compactar_celula(
+                row.cells[coluna],
+                5.3 if coluna >= 6 else 6.2,
+                centralizar=coluna >= 5,
+            )
+        _nao_dividir_linha(row)
+    total = table.rows[-1]
+    totais = [
+        "TOTAL", "", "", "", "", "",
+        _somar_moeda(itens, "vm"),
+        _somar_moeda(itens, "vp"),
+        _somar_moeda(itens, "onus_total"),
+        _somar_moeda(itens, "saldo"),
+    ]
+    for coluna, valor in enumerate(totais):
+        _substituir_texto_celula(total.cells[coluna], valor)
+        _compactar_celula(
+            total.cells[coluna],
+            5.3 if coluna >= 6 else 6.2,
+            centralizar=coluna >= 5,
+        )
+    _nao_dividir_linha(total)
+
+
+def _preencher_paragrafo_apos_titulo(doc, titulo, texto):
+    if not str(texto or "").strip():
+        return
+    paragraphs = doc.paragraphs
+    inicio = next(
+        (
+            indice for indice, paragraph in enumerate(paragraphs)
+            if paragraph.text.strip().casefold().startswith(titulo.casefold())
+        ),
+        None,
+    )
+    if inicio is None:
+        return
+    candidatos = []
+    for paragraph in paragraphs[inicio + 1:]:
+        atual = paragraph.text.strip()
+        if atual and re.match(r"^(?:\d+(?:\.\d+)*\.?|[a-z]\.)\s", atual, re.IGNORECASE):
+            break
+        candidatos.append(paragraph)
+    if not candidatos:
+        return
+    destino = next((p for p in candidatos if p.text.strip()), candidatos[0])
+    _substituir_texto_paragrafo(destino, texto, justificar=True)
+
+
+def _atualizar_titulo_valores(doc, prefixo, resumo, tese):
+    item = next(
+        (
+            registro for registro in (resumo or [])
+            if tese.casefold() in str(registro.get("tese") or "").casefold()
+        ),
+        {},
+    )
+    vm, vp = item.get("vm", ""), item.get("vp", "")
+    if not (vm or vp):
+        return
+    for paragraph in doc.paragraphs:
+        if paragraph.text.strip().casefold().startswith(prefixo.casefold()):
+            _substituir_texto_paragrafo(
+                paragraph,
+                f"{prefixo} — {vm or 'R$ [___]'} (VM) / {vp or 'R$ [___]'} (VP)",
+            )
+            paragraph.paragraph_format.keep_with_next = True
+            break
+
+
+def _preencher_visao_ativos_template(doc, dados):
+    resumo = dados.get("visao_consolidada_ativos") or []
+    ativos = dados.get("ativos") or []
+    if resumo:
+        _preencher_resumo_ativos(doc.tables[2], resumo, dados)
+    if ativos:
+        _preencher_ativos_resumidos(
+            doc.tables[3], _filtrar_ativos(ativos, "Penhora Direta")
+        )
+        _preencher_ativos_resumidos(
+            doc.tables[4], _filtrar_ativos(ativos, "IDPJ")
+        )
+        _preencher_ativos_resumidos(
+            doc.tables[5], _filtrar_ativos(ativos, "Fraude à Execução")
+        )
+
+
+def _preencher_teses_template(doc, dados):
+    if len(doc.tables) < 25:
+        raise ValueError("Template oficial incompleto: quadros das teses não localizados.")
+    teses = dados.get("teses_recuperacao") or {}
+    ativos = dados.get("ativos") or []
+    resumo_ativos = dados.get("visao_consolidada_ativos") or []
+    penhora = teses.get("penhora_direta") or {}
+    idpj = teses.get("idpj") or {}
+    fraude = teses.get("fraude_execucao") or {}
+
+    texto = _texto_analise(penhora.get("analise"))
+    if texto:
+        _substituir_texto_celula(doc.tables[16].cell(0, 0), texto, justificar=True)
+    penhora_ativos = _filtrar_ativos(ativos, "Penhora Direta")
+    if penhora_ativos:
+        _preencher_ativos_detalhados(doc.tables[17], penhora_ativos)
+
+    texto = _texto_analise(idpj.get("resumo"))
+    if texto:
+        _substituir_texto_celula(doc.tables[18].cell(0, 0), texto, justificar=True)
+    empresa = idpj.get("empresa_alvo") or {}
+    if empresa:
+        _preencher_tabela_chave_valor(doc.tables[19], {
+            "Razão social da empresa-alvo": empresa.get("razao_social", ""),
+            "CNPJ": empresa.get("cnpj", ""),
+            "CNAE principal": empresa.get("cnae_principal", ""),
+            "Atividades secundárias": empresa.get("atividades_secundarias", ""),
+            "Sócio atual": empresa.get("socio_atual", ""),
+            "Endereço fiscal": empresa.get("endereco_fiscal", ""),
+            "Fundamentação da tese": empresa.get("fundamentacao", ""),
+            "Crédito mais adequado para propositura": empresa.get("credito_propositura", ""),
+        })
+    cronologia = idpj.get("cronologia") or []
+    if cronologia:
+        _preencher_tabela_grade(
+            doc.tables[20],
+            [[
+                item.get("data", ""),
+                item.get("ato", ""),
+                " — ".join(filter(None, [
+                    item.get("detalhamento", ""),
+                    item.get("referencia", ""),
+                ])),
+            ] for item in cronologia],
+            minimo=1,
+        )
+    _preencher_paragrafo_apos_titulo(
+        doc, "d. Evidências de Controle Informal", _texto_analise(idpj.get("evidencias"))
+    )
+    idpj_ativos = _filtrar_ativos(ativos, "IDPJ")
+    if idpj_ativos:
+        _preencher_ativos_detalhados(doc.tables[21], idpj_ativos)
+    _atualizar_titulo_valores(
+        doc, "e. Ativos Atingíveis via IDPJ", resumo_ativos, "IDPJ"
+    )
+    texto = _texto_analise(idpj.get("upside"))
+    if texto:
+        _substituir_texto_celula(doc.tables[22].cell(0, 0), texto, justificar=True)
+
+    texto = _texto_analise(fraude.get("resumo"))
+    if texto:
+        _substituir_texto_celula(doc.tables[23].cell(0, 0), texto, justificar=True)
+    _preencher_paragrafo_apos_titulo(
+        doc, "b. Má-fé e Insolvência",
+        _texto_analise(fraude.get("ma_fe_insolvencia")),
+    )
+    fraude_ativos = _filtrar_ativos(ativos, "Fraude à Execução")
+    if fraude_ativos:
+        _preencher_ativos_detalhados(doc.tables[24], fraude_ativos)
+    _atualizar_titulo_valores(
+        doc, "c. Ativos Atingíveis via Fraude à Execução",
+        resumo_ativos,
+        "Fraude à Execução",
+    )
+    _preencher_paragrafo_apos_titulo(
+        doc, "2.4 Outras teses", _texto_analise(teses.get("outras"))
+    )
+
+
 def _build_doc(dados: dict) -> str:
     """Preenche uma cópia do template oficial, sem reconstruir seu design."""
     if not _TEMPLATE_PATH.exists():
@@ -1333,6 +1706,8 @@ def _build_doc(dados: dict) -> str:
                 _substituir_texto_paragrafo(paragraph, "")
                 break
 
+    _preencher_visao_ativos_template(doc, dados)
+    _preencher_teses_template(doc, dados)
     _preencher_creditos_template(doc, dados.get("creditos") or [])
 
     doc.save(caminho)
