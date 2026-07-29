@@ -285,6 +285,18 @@ def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
     return t
 
 
+def _keep_table_together(table):
+    """Mantém fichas curtas inteiras, inclusive entre o cabeçalho e os dados."""
+    linhas = list(table.rows)
+    for indice, row in enumerate(linhas):
+        _nao_dividir_linha(row)
+        manter_proxima = indice < len(linhas) - 1
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.keep_with_next = manter_proxima
+                paragraph.paragraph_format.keep_together = True
+
+
 def _cards(valor):
     """Converte texto, lista ou dicionário em cartões narrativos homogêneos."""
     if not valor:
@@ -414,13 +426,14 @@ def _asset_cards(doc, ativos, tese=None, placeholder=True):
             f"Ônus: {ativo.get('onus_total', '')}" if ativo.get("onus_total") else "",
             f"Saldo estimado: {ativo.get('saldo', '')}" if ativo.get("saldo") else "",
         ] if x)
-        _kv_table(doc, titulo.upper(), [
+        tabela = _kv_table(doc, titulo.upper(), [
             ("Proprietário atual", ativo.get("proprietario_atual", "")),
             ("Descrição do ativo", descricao),
             ("Situação jurídica", situacao),
             ("Avaliação", valores),
             ("Observações", ativo.get("observacoes", "")),
         ], w_label=4.3, w_value=12.6)
+        _keep_table_together(tabela)
         if i < len(registros) - 1:
             _spacer(doc, pts=3)
 
