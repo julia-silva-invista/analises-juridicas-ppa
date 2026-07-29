@@ -36,7 +36,7 @@ _LOGO_PATH = Path(__file__).parent / "assets" / "invista_logo.png"
 # Siglas que devem conservar a grafia técnica mesmo quando o restante do
 # texto vier integralmente em caixa alta.
 _SIGLAS_PRESERVADAS = {
-    "AR", "CCB", "CNJ", "CNPJ", "CPF", "ID", "IDPJ", "INPC", "IPCA",
+    "AR", "CAC", "CCB", "CNJ", "CNPJ", "CPF", "ID", "IDPJ", "INPC", "IPCA",
     "OAB", "OJ", "PPA", "RG", "SA", "SAT", "SOP", "UF", "VM", "VP",
 }
 _PARTICULAS_NOME = {
@@ -57,6 +57,8 @@ def _normalizar_caixa_alta(texto) -> str:
     já possuem capitalização normal não são alterados.
     """
     valor = str(texto if texto is not None else "")
+    if valor.strip() == "e-CAC":
+        return valor
     letras = [c for c in valor if c.isalpha()]
     if len(letras) < 2:
         return valor
@@ -92,6 +94,14 @@ def _normalizar_dados(valor):
     if isinstance(valor, str):
         return _normalizar_caixa_alta(valor)
     return valor
+
+
+def _alinhamento_conteudo(texto):
+    """Justifica conteúdo narrativo; mantém dados curtos alinhados à esquerda."""
+    linhas = str(texto if texto is not None else "").splitlines() or [""]
+    if max(len(linha.strip()) for linha in linhas) >= 80:
+        return WD_ALIGN_PARAGRAPH.JUSTIFY
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -137,6 +147,13 @@ def _cell_pad(cell, top=50, left=90, bottom=50, right=90):
     tcp.append(mar)
 
 
+def _nao_dividir_linha(row):
+    """Evita que uma linha de tabela seja fragmentada entre duas páginas."""
+    trp = row._tr.get_or_add_trPr()
+    if trp.find(qn("w:cantSplit")) is None:
+        trp.append(OxmlElement("w:cantSplit"))
+
+
 def _apply_font(run, bold, size, color, italic):
     run.font.name = "Arial"
     run.font.size = Pt(size)
@@ -177,10 +194,11 @@ def _widths(row, ws):
 def _orange_header(table, labels, ws=None):
     """Linha de header laranja com texto branco em negrito."""
     row = table.add_row()
+    _nao_dividir_linha(row)
     for i, lab in enumerate(labels):
         c = row.cells[i]
-        _set_bg(c, _LARANJA); _set_borders(c); _cell_pad(c)
-        _write(c, lab, bold=True, size=9, color=_BRANCO)
+        _set_bg(c, _LARANJA); _set_borders(c); _cell_pad(c, left=55, right=55)
+        _write(c, lab, bold=True, size=8.2, color=_BRANCO)
     if ws:
         _widths(row, ws)
     return row
@@ -189,6 +207,7 @@ def _orange_header(table, labels, ws=None):
 def _span_header(table, text):
     """Header laranja que abrange todas as colunas (ex.: DADOS DA MEMÓRIA DE CÁLCULO)."""
     row = table.add_row()
+    _nao_dividir_linha(row)
     n = len(row.cells)
     cell = row.cells[0]
     for i in range(1, n):
@@ -202,6 +221,7 @@ def _kv_table(doc, header, rows, w_label=5.9, w_value=11.0):
     """Tabela 2 col estilo 'header laranja' (CAMPO|INFORMAÇÃO) + labels/valores brancos."""
     t = doc.add_table(rows=0, cols=2)
     t.style = "Table Grid"
+    t.autofit = False
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if header:
         if isinstance(header, str):
@@ -214,7 +234,7 @@ def _kv_table(doc, header, rows, w_label=5.9, w_value=11.0):
         _set_bg(cl, _BRANCO); _set_borders(cl); _cell_pad(cl)
         _write(cl, label, bold=True, color=_TXT)
         _set_bg(cv, _BRANCO); _set_borders(cv); _cell_pad(cv)
-        _write(cv, value, color=_TXT, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        _write(cv, value, color=_TXT, align=_alinhamento_conteudo(value))
         _widths(r, [w_label, w_value])
     return t
 
@@ -223,6 +243,7 @@ def _kv_label_table(doc, rows, w_label=5.9, w_value=11.0):
     """Tabela 2 col com coluna-label cinza (embargo/recurso), sem header laranja."""
     t = doc.add_table(rows=0, cols=2)
     t.style = "Table Grid"
+    t.autofit = False
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for label, value in rows:
         r = t.add_row()
@@ -230,7 +251,7 @@ def _kv_label_table(doc, rows, w_label=5.9, w_value=11.0):
         _set_bg(cl, _CINZA); _set_borders(cl); _cell_pad(cl)
         _write(cl, label, bold=True, color=_TXT)
         _set_bg(cv, _BRANCO); _set_borders(cv); _cell_pad(cv)
-        _write(cv, value, color=_TXT, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+        _write(cv, value, color=_TXT, align=_alinhamento_conteudo(value))
         _widths(r, [w_label, w_value])
     return t
 
@@ -239,6 +260,7 @@ def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
     """Tabela multi-coluna: header laranja + linhas brancas (+ TOTAL cinza opcional)."""
     t = doc.add_table(rows=0, cols=len(headers))
     t.style = "Table Grid"
+    t.autofit = False
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _orange_header(t, headers, ws)
     data = list(rows)
@@ -250,7 +272,7 @@ def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
             c = r.cells[i]
             val = row_data[i] if i < len(row_data) else ""
             _set_bg(c, _BRANCO); _set_borders(c); _cell_pad(c)
-            _write(c, val, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+            _write(c, val, align=_alinhamento_conteudo(val))
         _widths(r, ws)
     if total_row:
         r = t.add_row()
@@ -261,6 +283,201 @@ def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
             _write(c, val, bold=True)
         _widths(r, ws)
     return t
+
+
+def _cards(valor):
+    """Converte texto, lista ou dicionário em cartões narrativos homogêneos."""
+    if not valor:
+        return []
+    itens = valor if isinstance(valor, list) else [valor]
+    resultado = []
+    for item in itens:
+        if isinstance(item, dict):
+            texto = (
+                item.get("texto")
+                or item.get("descricao")
+                or item.get("detalhamento")
+                or item.get("analise")
+                or ""
+            )
+            titulo = item.get("titulo") or item.get("fato") or item.get("ato") or ""
+            referencia = item.get("referencia") or item.get("fonte") or ""
+            if str(texto).strip() or str(titulo).strip():
+                resultado.append({
+                    "titulo": str(titulo).strip(),
+                    "texto": str(texto).strip(),
+                    "referencia": str(referencia).strip(),
+                })
+            continue
+        for trecho in re.split(r"\n\s*\n|\n(?=\S)", str(item)):
+            if trecho.strip():
+                resultado.append({"titulo": "", "texto": trecho.strip(), "referencia": ""})
+    return resultado
+
+
+def _write_analysis_cell(cell, texto, titulo="", referencia=""):
+    """Escreve narrativa jurídica justificada e referência destacada na célula."""
+    cell.text = ""
+    cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+    p = cell.paragraphs[0]
+    if titulo:
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(5)
+        p.paragraph_format.keep_with_next = True
+        rtitle = p.add_run(_normalizar_caixa_alta(titulo))
+        _apply_font(rtitle, bold=True, size=8.8, color=_LARANJA, italic=False)
+        p = cell.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.line_spacing = 1.08
+    r = p.add_run(_normalizar_caixa_alta(texto))
+    _apply_font(r, bold=False, size=9.3, color=_TXT, italic=False)
+    if referencia:
+        pref = cell.add_paragraph()
+        pref.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        pref.paragraph_format.space_before = Pt(4)
+        pref.paragraph_format.space_after = Pt(0)
+        rr = pref.add_run(_normalizar_caixa_alta(referencia))
+        _apply_font(rr, bold=False, size=7.8, color=_TXT_MUTE, italic=True)
+
+
+def _analysis_box(doc, texto, titulo="", referencia=""):
+    """Quadro formal para uma unidade autônoma de análise jurídica."""
+    t = doc.add_table(rows=1, cols=1)
+    t.style = "Table Grid"
+    t.autofit = False
+    t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    b = t.rows[0]
+    if len(str(texto)) <= 900:
+        _nao_dividir_linha(b)
+    bc = b.cells[0]
+    _set_bg(bc, "FFFDFC")
+    _set_borders(bc, color="E8B9A8", sz=6)
+    _cell_pad(bc, top=115, left=135, bottom=115, right=135)
+    _write_analysis_cell(bc, texto, titulo=titulo, referencia=referencia)
+    bc.width = Cm(16.9)
+    return t
+
+
+def _analysis_cards(doc, valor, placeholder=""):
+    """Renderiza a análise em quadros separados, um fato ou fundamento por cartão."""
+    itens = _cards(valor)
+    if not itens:
+        if placeholder:
+            _guidance(doc, placeholder)
+        return
+    for i, item in enumerate(itens):
+        _analysis_box(
+            doc,
+            item.get("texto", ""),
+            titulo=item.get("titulo", ""),
+            referencia=item.get("referencia", ""),
+        )
+        if i < len(itens) - 1:
+            _spacer(doc, pts=2)
+
+
+def _asset_cards(doc, ativos, tese=None, placeholder=True):
+    """Exibe ativos em fichas legíveis, sem comprimir narrativa em dez colunas."""
+    registros = [
+        a for a in (ativos or [])
+        if not tese or tese.casefold() in str(a.get("tese", "")).strip().casefold()
+    ]
+    if not registros:
+        if placeholder:
+            _kv_table(doc, ["ATIVO", "INFORMAÇÃO"], [
+                ("Matrícula / identificação", ""),
+                ("Proprietário atual", ""),
+                ("Descrição e situação jurídica", ""),
+                ("Avaliação e potencial de recuperação", ""),
+            ], w_label=5.0, w_value=11.9)
+        return
+    for i, ativo in enumerate(registros):
+        identificacao = ativo.get("matricula") or ativo.get("ativo") or f"Ativo nº {i + 1}"
+        comarca = ativo.get("comarca", "")
+        titulo = " · ".join(x for x in [identificacao, comarca] if x)
+        descricao = " · ".join(x for x in [
+            ativo.get("tipo_ativo", ""),
+            ativo.get("descricao", ""),
+            ativo.get("area", ""),
+            ativo.get("situacao_produtiva", ""),
+        ] if x)
+        situacao = " · ".join(x for x in [
+            ativo.get("onus_vigentes", ""),
+            f"Fração atingível: {ativo.get('fracao_atingivel', '')}" if ativo.get("fracao_atingivel") else "",
+            f"Liquidez: {ativo.get('liquidez', '')}" if ativo.get("liquidez") else "",
+        ] if x)
+        valores = " · ".join(x for x in [
+            f"VM: {ativo.get('vm', '')}" if ativo.get("vm") else "",
+            f"VP: {ativo.get('vp', '')}" if ativo.get("vp") else "",
+            f"Ônus: {ativo.get('onus_total', '')}" if ativo.get("onus_total") else "",
+            f"Saldo estimado: {ativo.get('saldo', '')}" if ativo.get("saldo") else "",
+        ] if x)
+        _kv_table(doc, titulo.upper(), [
+            ("Proprietário atual", ativo.get("proprietario_atual", "")),
+            ("Descrição do ativo", descricao),
+            ("Situação jurídica", situacao),
+            ("Avaliação", valores),
+            ("Observações", ativo.get("observacoes", "")),
+        ], w_label=4.3, w_value=12.6)
+        if i < len(registros) - 1:
+            _spacer(doc, pts=3)
+
+
+def _process_cards(doc, registros, parte_label):
+    """Quadros processuais do passivo, com situação em largura integral."""
+    t = doc.add_table(rows=0, cols=2)
+    t.style = "Table Grid"
+    t.autofit = False
+    t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _fill_process_cards(t, registros, parte_label)
+    return t
+
+
+def _fill_process_cards(table, registros, parte_label):
+    """Preenche uma tabela de duas colunas com um ou mais processos."""
+    for row in list(table.rows):
+        table._tbl.remove(row._tr)
+    dados = list(registros or [])
+    if not dados:
+        _span_header(table, "DADOS PROCESSUAIS")
+        r = table.add_row()
+        _set_bg(r.cells[0], _CINZA); _set_borders(r.cells[0]); _cell_pad(r.cells[0])
+        _write(r.cells[0], "Processo", bold=True)
+        _set_bg(r.cells[1], _BRANCO); _set_borders(r.cells[1]); _cell_pad(r.cells[1])
+        _write(r.cells[1], "")
+        _widths(r, [4.3, 12.6])
+        return
+    for registro in dados:
+        if isinstance(registro, dict):
+            numero = registro.get("numero_cnj") or registro.get("numero") or ""
+            vinculado = registro.get("vinculado_a") or registro.get("vinculado") or ""
+            distribuicao = registro.get("distribuicao") or ""
+            parte = registro.get("parte_contraria") or registro.get("exequente") or registro.get("autor") or ""
+            valor = registro.get("valor_causa") or ""
+            sat = registro.get("sat_estimado") or registro.get("sat") or ""
+            status = registro.get("status") or registro.get("situacao") or ""
+        else:
+            valores = list(registro) + [""] * 7
+            numero, vinculado, distribuicao, parte, valor, sat, status = valores[:7]
+        _span_header(table, f"Processo nº {numero}" if numero else "Processo")
+        for label, value in [
+            ("Vinculado a", vinculado),
+            ("Distribuição", distribuicao),
+            (parte_label, parte),
+            ("Valor da causa", valor),
+            ("SAT estimado", sat),
+            ("Situação processual", status),
+        ]:
+            r = table.add_row()
+            if len(str(value)) <= 900:
+                _nao_dividir_linha(r)
+            _set_bg(r.cells[0], _CINZA); _set_borders(r.cells[0]); _cell_pad(r.cells[0])
+            _write(r.cells[0], label, bold=True, size=8.8)
+            _set_bg(r.cells[1], _BRANCO); _set_borders(r.cells[1]); _cell_pad(r.cells[1], top=70, bottom=70)
+            _write(r.cells[1], value, size=8.8, align=_alinhamento_conteudo(value), valign=False)
+            _widths(r, [4.3, 12.6])
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -280,15 +497,24 @@ def _para(doc, text, bold=False, size=9.5, color=_TXT, italic=False,
 
 
 def _sec_title(doc, text):
-    return _para(doc, text, bold=True, size=13, color=_LARANJA, before=14, after=5)
+    p = _para(doc, text, bold=True, size=13, color=_LARANJA, before=14, after=5)
+    p.paragraph_format.keep_with_next = True
+    p.paragraph_format.keep_together = True
+    return p
 
 
 def _sub_orange(doc, text):
-    return _para(doc, text, bold=True, size=11, color=_LARANJA, before=10, after=4)
+    p = _para(doc, text, bold=True, size=11, color=_LARANJA, before=10, after=4)
+    p.paragraph_format.keep_with_next = True
+    p.paragraph_format.keep_together = True
+    return p
 
 
 def _sub_gray(doc, text):
-    return _para(doc, text, bold=True, size=10, color=_TXT, before=7, after=3)
+    p = _para(doc, text, bold=True, size=10, color=_TXT, before=7, after=3)
+    p.paragraph_format.keep_with_next = True
+    p.paragraph_format.keep_together = True
+    return p
 
 
 def _note(doc, text):
@@ -311,6 +537,7 @@ def _guidance(doc, text):
     t.style = "Table Grid"
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     c = t.rows[0].cells[0]
+    _nao_dividir_linha(t.rows[0])
     _set_bg(c, _DESTAQUE); _set_borders(c, color="F3D9CF"); _cell_pad(c, top=90, bottom=90)
     _write(
         c, text, size=9, color=_TXT, italic=True,
@@ -370,6 +597,16 @@ campo "data" as datas das tentativas e no campo "fls" as páginas correspondente
 - Preserve em caixa alta somente siglas técnicas, como CPF, CNPJ, CNJ, OAB, SAT, SOP, IDPJ, VM e VP.
 - Redija títulos, descrições, teses, status e andamentos com maiúsculas e minúsculas normais.
 
+═══ REGRA 6 — ANÁLISE JURÍDICA E QUADROS ═══
+- Preencha também as teses de recuperação, os ativos, o passivo e as pendências com tudo o que constar
+  no relatório consolidado. Não deixe essas seções como modelo vazio se o relatório trouxer a informação.
+- Em campos de análise, produza cartões autônomos: um fato, fundamento ou conclusão por item.
+- Cada cartão deve ter título objetivo, texto jurídico completo e referência da fonte separada.
+- Preserve a cronologia, os requisitos legais, os riscos, as ressalvas e a conclusão. Não simplifique
+  a ponto de eliminar fatos relevantes e não repita o mesmo conteúdo em cartões diferentes.
+- Use linguagem formal, assertiva e tecnicamente precisa. Diferencie fato comprovado, indício,
+  inferência jurídica, risco e diligência pendente.
+
 {
   "nome_caso": "identificador curto (ex: BASF x São Lourenço)",
   "data_analise": "DD/MM/AAAA ou vazio",
@@ -379,6 +616,52 @@ campo "data" as datas das tentativas e no campo "fls" as páginas correspondente
   "passivo_fiscal": "", "passivo_trabalhista": "", "passivo_civel": "",
   "risco_juridico": "resumo dos principais riscos (com refs)",
   "consideracoes_gerais": "2-4 parágrafos de análise geral (separe parágrafos com \\n)",
+  "teses_principais": "síntese das teses aplicáveis",
+  "total_atingivel_vm": "R$ ...",
+  "total_atingivel_vp": "R$ ...",
+  "visao_consolidada_ativos": [
+    {"tese": "Penhora Direta | IDPJ | Fraude à Execução | outra", "vm": "R$ ...", "vp": "R$ ...", "onus": "R$ ...", "observacoes": ""}
+  ],
+  "ativos": [
+    {
+      "tese": "Penhora Direta | IDPJ | Fraude à Execução | outra",
+      "matricula": "Matrícula nº ...", "comarca": "Cidade/UF", "proprietario_atual": "",
+      "tipo_ativo": "apartamento, galpão, terreno etc.", "descricao": "", "area": "",
+      "situacao_produtiva": "", "liquidez": "", "fracao_atingivel": "",
+      "onus_vigentes": "", "vm": "R$ ...", "vp": "R$ ...", "onus_total": "R$ ...",
+      "saldo": "R$ ...", "observacoes": ""
+    }
+  ],
+  "teses_recuperacao": {
+    "penhora_direta": {
+      "analise": [{"titulo": "", "texto": "fato, fundamento e conclusão", "referencia": "fls./Mov./ID/Evento"}]
+    },
+    "idpj": {
+      "resumo": [{"titulo": "", "texto": "", "referencia": ""}],
+      "empresa_alvo": {
+        "razao_social": "", "cnpj": "", "cnae_principal": "", "atividades_secundarias": "",
+        "socio_atual": "", "endereco_fiscal": "", "fundamentacao": "",
+        "credito_propositura": ""
+      },
+      "cronologia": [{"data": "", "ato": "", "detalhamento": "", "referencia": ""}],
+      "evidencias": [{"titulo": "", "texto": "", "referencia": ""}],
+      "upside": [{"titulo": "", "texto": "", "referencia": ""}]
+    },
+    "fraude_execucao": {
+      "resumo": [{"titulo": "", "texto": "", "referencia": ""}],
+      "ma_fe_insolvencia": [{"titulo": "", "texto": "", "referencia": ""}]
+    },
+    "outras": [{"titulo": "", "texto": "", "referencia": ""}]
+  },
+  "passivo": {
+    "e_cac": [{"nome": "", "cpf_cnpj": "", "saldo": ""}],
+    "fiscais": [{"numero_cnj": "", "vinculado_a": "", "distribuicao": "", "parte_contraria": "", "valor_causa": "", "sat_estimado": "", "status": ""}],
+    "trabalhistas": [{"numero_cnj": "", "vinculado_a": "", "distribuicao": "", "parte_contraria": "", "valor_causa": "", "sat_estimado": "", "status": ""}],
+    "civeis": [{"numero_cnj": "", "vinculado_a": "", "distribuicao": "", "parte_contraria": "", "valor_causa": "", "sat_estimado": "", "status": ""}],
+    "principais_credores": [{"credor": "", "natureza": "", "valor": "", "garantia_preferencia": "", "status": "", "observacoes": ""}],
+    "pontos_atencao": [{"titulo": "", "texto": "", "referencia": ""}]
+  },
+  "pendencias": [{"pendencia": "", "protocolo": "", "prazo_status": ""}],
   "creditos": [
     {
       "id": "Crédito [Credor]",
@@ -553,10 +836,10 @@ def _build_doc(dados: dict) -> str:
         ("Exequente(s)",                 dados.get("exequentes", "")),
         ("Executado(s)",                 dados.get("executados", "")),
         ("SAT",                          dados.get("sat_total", "R$")),
-        ("Total atingível mapeado — VM", "R$ [___]"),
-        ("Total atingível mapeado — VP", "R$ [___]"),
+        ("Total atingível mapeado — VM", dados.get("total_atingivel_vm", "") or "R$ [___]"),
+        ("Total atingível mapeado — VP", dados.get("total_atingivel_vp", "") or "R$ [___]"),
         ("Passivo total identificado",   passivo_cell),
-        ("Tese(s) principal(is)",        ""),
+        ("Tese(s) principal(is)",        dados.get("teses_principais", "")),
         ("Risco Jurídico",               dados.get("risco_juridico", "")),
     ])
     _spacer(doc)
@@ -564,35 +847,49 @@ def _build_doc(dados: dict) -> str:
     # Visão consolidada dos ativos
     _sub_orange(doc, "VISÃO CONSOLIDADA DOS ATIVOS")
     _note(doc, "Quadro-resumo dos ativos atingíveis por tese. Os valores já descontam os ônus incidentes sobre os ativos.")
+    resumo_ativos = dados.get("visao_consolidada_ativos") or []
+    linhas_resumo = [[
+        item.get("tese", ""),
+        item.get("vm", ""),
+        item.get("vp", ""),
+        item.get("onus", ""),
+        item.get("observacoes", ""),
+    ] for item in resumo_ativos]
+    if not linhas_resumo:
+        linhas_resumo = [
+            ["Penhora Direta", "", "", "", ""],
+            ["IDPJ", "", "", "", ""],
+            ["Fraude à Execução", "", "", "", ""],
+            ["Pauliana", "", "", "", ""],
+        ]
     _grid_table(
         doc,
         ["TESE", "VM (R$)", "VP (R$)", "ÔNUS (R$)", "OBSERVAÇÕES"],
-        [["Penhora Direta", "", "", "", ""],
-         ["IDPJ", "", "", "", ""],
-         ["Fraude à Execução", "", "", "", ""],
-         ["Pauliana", "", "", "", ""]],
+        linhas_resumo,
         [3.5, 2.6, 2.6, 2.6, 5.6],
-        total_row=["TOTAL GERAL", "", "", "", ""],
+        total_row=[
+            "TOTAL GERAL",
+            dados.get("total_atingivel_vm", ""),
+            dados.get("total_atingivel_vp", ""),
+            "",
+            "",
+        ],
     )
     _spacer(doc)
 
-    # Visão geral dos atingíveis (3 tabelas)
+    # Visão geral dos atingíveis em fichas — narrativa não é comprimida em colunas estreitas.
     _sub_orange(doc, "VISÃO GERAL DOS ATINGÍVEIS")
-    cols_at = ["ATIVO / MATRÍCULA", "TIPO DE ATIVO", "ÁREA / HA", "SIT. PRODUTIVA",
-               "LIQUIDEZ", "% ATING.", "ÔNUS (R$)", "OBSERVAÇÕES"]
-    ws_at = [2.6, 2.1, 1.6, 2.2, 1.9, 1.5, 2.0, 3.0]
+    ativos = dados.get("ativos") or []
     for tese in ["Penhora Direta", "IDPJ", "Fraude à Execução"]:
         _sub_gray(doc, tese)
-        _grid_table(doc, cols_at, [], ws_at, min_rows=3)
+        _asset_cards(doc, ativos, tese=tese, placeholder=True)
         _spacer(doc, pts=2)
 
     # Principais considerações
     _sub_orange(doc, "PRINCIPAIS CONSIDERAÇÕES")
     cons = (dados.get("consideracoes_gerais") or "").strip()
     if cons:
-        for para in cons.split("\n"):
-            if para.strip():
-                _body(doc, para.strip())
+        _analysis_cards(doc, cons)
     else:
         _guidance(doc, "Registre aqui: visão geral da operação · principais riscos jurídicos e "
                        "patrimoniais · oportunidades identificadas · pontos críticos para aquisição · "
@@ -740,107 +1037,175 @@ def _build_doc(dados: dict) -> str:
     # ══ 2. TESES DE RECUPERAÇÃO ══════════════════════════════════════════
     _sec_title(doc, "2. TESES DE RECUPERAÇÃO")
 
-    cols_mat = ["Mat.", "Comarca", "Proprietário Atual", "Descrição do Imóvel", "Ônus Vigentes",
-                "Fração", "VM (R$)", "VP (R$)", "Ônus Total (R$)", "Saldo (R$)"]
-    ws_mat = [1.3, 1.7, 2.0, 2.5, 1.9, 1.2, 1.4, 1.4, 1.7, 1.4]
+    teses = dados.get("teses_recuperacao") or {}
 
     # 2.1 Penhora Direta
+    penhora = teses.get("penhora_direta") or {}
     _sub_orange(doc, "2.1 Penhora Direta")
     _sub_gray(doc, "a. Ponderações e Observações Gerais")
-    _guidance(doc, "Descrever aqui: situação geral dos imóveis localizados, gravames identificados, "
-                   "bloqueios de matrícula, imóveis não localizados, pesquisas pendentes e demais "
-                   "observações relevantes.")
+    _analysis_cards(
+        doc,
+        penhora.get("analise"),
+        "Descrever aqui: situação geral dos imóveis localizados, gravames identificados, "
+        "bloqueios de matrícula, imóveis não localizados, pesquisas pendentes e demais "
+        "observações relevantes.",
+    )
     _sub_gray(doc, "b. Matrículas Mapeadas")
-    _grid_table(doc, cols_mat, [], ws_mat, total_row=["TOTAL", "", "", "", "", "", "", "", "", ""], min_rows=2)
+    _asset_cards(doc, ativos, tese="Penhora Direta", placeholder=True)
     _spacer(doc)
 
     # 2.2 IDPJ
+    idpj = teses.get("idpj") or {}
     _sub_orange(doc, "2.2 IDPJ")
     _sub_gray(doc, "a. Resumo da Tese")
-    _guidance(doc, "Fundamento principal · Histórico dos fatos · Objetivo do IDPJ · Principais elementos "
-                   "probatórios identificados (procurações, representação conjunta, declarações em processo, "
-                   "confusão patrimonial, etc.).")
+    _analysis_cards(
+        doc,
+        idpj.get("resumo"),
+        "Fundamento principal · Histórico dos fatos · Objetivo do IDPJ · Principais elementos "
+        "probatórios identificados (procurações, representação conjunta, declarações em processo, "
+        "confusão patrimonial, etc.).",
+    )
     _sub_gray(doc, "b. Empresa-Alvo")
+    empresa = idpj.get("empresa_alvo") or {}
     _kv_table(doc, ["CAMPO", "DADO"], [
-        ("Razão social da empresa-alvo",        ""),
-        ("CNPJ",                                ""),
-        ("Fundamentação da tese",               "Simulação / Desvio de finalidade / Confusão patrimonial"),
-        ("Crédito mais adequado para propositura", ""),
+        ("Razão social da empresa-alvo", empresa.get("razao_social", "")),
+        ("CNPJ", empresa.get("cnpj", "")),
+        ("CNAE principal", empresa.get("cnae_principal", "")),
+        ("Atividades secundárias", empresa.get("atividades_secundarias", "")),
+        ("Sócio atual", empresa.get("socio_atual", "")),
+        ("Endereço fiscal", empresa.get("endereco_fiscal", "")),
+        ("Fundamentação da tese", empresa.get("fundamentacao", "")),
+        ("Crédito mais adequado para propositura", empresa.get("credito_propositura", "")),
     ])
     _spacer(doc, pts=2)
     _sub_gray(doc, "c. Cronologia Societária — Atos Relevantes")
-    _grid_table(doc, ["DATA", "ATO", "DETALHAMENTO"], [], [2.6, 4.5, 9.8], min_rows=2)
+    cronologia = idpj.get("cronologia") or []
+    _grid_table(
+        doc,
+        ["DATA", "ATO", "DETALHAMENTO / FONTE"],
+        [[
+            item.get("data", ""),
+            item.get("ato", ""),
+            " · ".join(x for x in [item.get("detalhamento", ""), item.get("referencia", "")] if x),
+        ] for item in cronologia],
+        [2.6, 4.5, 9.8],
+        min_rows=2,
+    )
     _spacer(doc, pts=2)
     _sub_gray(doc, "d. Evidências de Controle Informal")
-    _guidance(doc, "Espaço destinado à consolidação dos principais elementos probatórios que sustentam a "
-                   "tese: fatos relevantes identificados durante a investigação, documentos, prints, imagens, "
-                   "pesquisas patrimoniais, alterações societárias, procurações, manifestações processuais e "
-                   "demais evidências que demonstrem a viabilidade da medida.")
+    _analysis_cards(
+        doc,
+        idpj.get("evidencias"),
+        "Espaço destinado à consolidação dos principais elementos probatórios que sustentam a "
+        "tese: fatos relevantes identificados durante a investigação, documentos, prints, imagens, "
+        "pesquisas patrimoniais, alterações societárias, procurações, manifestações processuais e "
+        "demais evidências que demonstrem a viabilidade da medida.",
+    )
     _sub_gray(doc, "e. Ativos Atingíveis via IDPJ  —  ~R$ [___] (VM) / ~R$ [___] (VP)")
-    _grid_table(doc, cols_mat, [], ws_mat, total_row=["TOTAL", "", "", "", "", "", "", "", "", ""], min_rows=2)
+    _asset_cards(doc, ativos, tese="IDPJ", placeholder=True)
     _spacer(doc, pts=2)
     _sub_gray(doc, "f. Upside Identificado (se houver)")
-    _guidance(doc, "Descrever eventual upside — ex: recebíveis futuros de compra e venda em andamento, "
-                   "participações societárias, créditos a receber, outros ativos. Indicar valor estimado e "
-                   "prazo de realização.")
+    _analysis_cards(
+        doc,
+        idpj.get("upside"),
+        "Descrever eventual upside — ex: recebíveis futuros de compra e venda em andamento, "
+        "participações societárias, créditos a receber, outros ativos. Indicar valor estimado e "
+        "prazo de realização.",
+    )
     _spacer(doc)
 
     # 2.3 Fraude à Execução
+    fraude = teses.get("fraude_execucao") or {}
     _sub_orange(doc, "2.3 Fraude à Execução")
     _sub_gray(doc, "a. Resumo da Tese")
-    _guidance(doc, "Descrever os negócios jurídicos impugnáveis (doações, transferências, usufruto) "
-                   "praticados no curso ou após o ajuizamento da execução. Indicar a data do ajuizamento e a "
-                   "data de cada ato para enquadramento da tese. Identificar qual crédito é mais adequado "
-                   "para a propositura.")
+    _analysis_cards(
+        doc,
+        fraude.get("resumo"),
+        "Descrever os negócios jurídicos impugnáveis (doações, transferências, usufruto) "
+        "praticados no curso ou após o ajuizamento da execução. Indicar a data do ajuizamento e a "
+        "data de cada ato para enquadramento da tese. Identificar qual crédito é mais adequado "
+        "para a propositura.",
+    )
     _sub_gray(doc, "b. Má-fé e Insolvência")
-    _guidance(doc, "Registrar os elementos que demonstram a má-fé do adquirente (consilium fraudis) e a "
-                   "insolvência do devedor decorrente do ato — pressupostos da fraude à execução / ação pauliana.")
+    _analysis_cards(
+        doc,
+        fraude.get("ma_fe_insolvencia"),
+        "Registrar os elementos que demonstram a má-fé do adquirente (consilium fraudis) e a "
+        "insolvência do devedor decorrente do ato — pressupostos da fraude à execução / ação pauliana.",
+    )
     _sub_gray(doc, "c. Ativos Atingíveis via Fraude à Execução  —  ~R$ [___] (VM) / ~R$ [___] (VP)")
-    _grid_table(doc, cols_mat, [], ws_mat, total_row=["TOTAL", "", "", "", "", "", "", "", "", ""], min_rows=2)
+    _asset_cards(doc, ativos, tese="Fraude à Execução", placeholder=True)
     _spacer(doc)
 
     # 2.4 Outras teses
     _sub_orange(doc, "2.4 Outras teses")
-    _guidance(doc, "Registrar outras teses de recuperação eventualmente aplicáveis ao caso.")
+    _analysis_cards(
+        doc,
+        teses.get("outras"),
+        "Registrar outras teses de recuperação eventualmente aplicáveis ao caso.",
+    )
     _spacer(doc)
 
     # ══ 3. PASSIVO ═══════════════════════════════════════════════════════
     _sec_title(doc, "3. PASSIVO")
     _note(doc, "Mapear o passivo integral dos devedores e das empresas-alvo. O passivo é fator "
                "determinante na avaliação do risco real de recuperação.")
+    passivo = dados.get("passivo") or {}
 
     # 3.1 Passivo Fiscal
     _sub_orange(doc, "3.1 Passivo Fiscal")
     _sub_gray(doc, "e-CAC")
-    _grid_table(doc, ["NOME", "CPF / CNPJ", "SALDO e-CAC (R$)"], [], [7.0, 5.0, 4.9], min_rows=2)
+    e_cac = passivo.get("e_cac") or []
+    _grid_table(
+        doc,
+        ["NOME", "CPF / CNPJ", "SALDO e-CAC (R$)"],
+        [[item.get("nome", ""), item.get("cpf_cnpj", ""), item.get("saldo", "")] for item in e_cac],
+        [7.0, 5.0, 4.9],
+        min_rows=2,
+    )
     _spacer(doc, pts=2)
     _sub_gray(doc, "Execuções Fiscais")
-    cols_exec = ["Nº CNJ", "Vinculado a", "Distribuição", "Exequente", "Valor Causa (R$)", "SAT Est. (R$)", "Status"]
-    ws_exec = [3.0, 2.2, 2.0, 2.8, 2.3, 2.3, 2.3]
-    _grid_table(doc, cols_exec, [], ws_exec, min_rows=2)
+    _process_cards(doc, passivo.get("fiscais") or [], "Exequente")
     _spacer(doc)
 
     # 3.2 Passivo Trabalhista
     _sub_orange(doc, "3.2 Passivo Trabalhista")
-    cols_trab = ["Nº CNJ", "Vinculado a", "Distribuição", "Autor", "Valor Causa (R$)", "SAT Est. (R$)", "Status"]
-    _grid_table(doc, cols_trab, [], ws_exec, min_rows=2)
+    _process_cards(doc, passivo.get("trabalhistas") or [], "Autor / Reclamante")
     _spacer(doc)
 
     # 3.3 Passivo Cível (Terceiros)
     _sub_orange(doc, "3.3 Passivo Cível (Terceiros)")
-    cols_civ = ["Nº CNJ", "Vinculado a", "Distribuição", "Exequente", "Valor Causa (R$)", "SAT Est. (R$)", "Obs."]
-    _grid_table(doc, cols_civ, [], ws_exec, min_rows=2)
+    _process_cards(doc, passivo.get("civeis") or [], "Parte contrária")
     _spacer(doc, pts=2)
 
     # Principais Credores
     _sub_gray(doc, "Principais Credores")
-    _grid_table(
+    credores = passivo.get("principais_credores") or []
+    if credores:
+        for i, credor in enumerate(credores):
+            _kv_table(doc, (credor.get("credor") or f"Credor nº {i + 1}").upper(), [
+                ("Natureza do crédito", credor.get("natureza", "")),
+                ("Valor estimado", credor.get("valor", "")),
+                ("Garantia / preferência", credor.get("garantia_preferencia", "")),
+                ("Status", credor.get("status", "")),
+                ("Observações", credor.get("observacoes", "")),
+            ], w_label=4.3, w_value=12.6)
+            if i < len(credores) - 1:
+                _spacer(doc, pts=3)
+    else:
+        _kv_table(doc, ["CREDOR", "INFORMAÇÃO"], [
+            ("Natureza do crédito", ""),
+            ("Valor estimado", ""),
+            ("Garantia / preferência", ""),
+            ("Status e observações", ""),
+        ], w_label=4.3, w_value=12.6)
+    _sub_gray(doc, "Pontos de Atenção sobre o Passivo")
+    _analysis_cards(
         doc,
-        ["CREDOR", "NATUREZA DO CRÉDITO", "VALOR ESTIMADO (R$)", "GARANTIA / PREFERÊNCIA", "STATUS", "OBSERVAÇÕES"],
-        [], [3.0, 2.9, 2.5, 3.0, 2.1, 3.4], min_rows=2,
+        passivo.get("pontos_atencao"),
+        "Hipotecas preferentes · créditos arrematados por terceiros · passivo oculto potencial · "
+        "ações de reintegração · litígios relevantes.",
     )
-    _note(doc, "Pontos de atenção sobre o passivo: hipotecas preferentes, créditos arrematados por "
-               "terceiros, passivo oculto potencial, ações de reintegração, litígios relevantes, etc.")
     _spacer(doc)
 
     # ══ 5. PENDÊNCIAS ════════════════════════════════════════════════════
@@ -848,7 +1213,14 @@ def _build_doc(dados: dict) -> str:
     _note(doc, "Campo destinado ao registro de pendências relacionadas à pesquisa de bens, obtenção de "
                "escrituras, avaliações de imóveis e demais diligências ainda necessárias para a conclusão "
                "da análise do caso.")
-    _grid_table(doc, ["PENDÊNCIA", "PROTOCOLO", "PRAZO / STATUS"], [], [8.9, 4.0, 4.0], min_rows=2)
+    pendencias = dados.get("pendencias") or []
+    _grid_table(
+        doc,
+        ["PENDÊNCIA", "PROTOCOLO", "PRAZO / STATUS"],
+        [[p.get("pendencia", ""), p.get("protocolo", ""), p.get("prazo_status", "")] for p in pendencias],
+        [8.9, 4.0, 4.0],
+        min_rows=2,
+    )
     _spacer(doc)
 
     # ══ 6. ELABORAÇÃO E REVISÃO ══════════════════════════════════════════
@@ -914,9 +1286,12 @@ def _proc_to_row(p: dict) -> list:
     ]
 
 
-def _fill_passivo_table(table, registros: list):
-    """Substitui as linhas de dados de uma tabela do passivo (mantém o header)."""
+def _fill_passivo_table(table, registros: list, parte_label: str):
+    """Preenche o passivo novo em cartões e mantém compatibilidade com o modelo antigo."""
     ncols = len(table.columns)
+    if ncols == 2:
+        _fill_process_cards(table, registros, parte_label)
+        return
     larguras = [c.width for c in table.rows[0].cells]
     # remove linhas de dados (mantém a primeira = header laranja)
     for row in list(table.rows)[1:]:
@@ -961,11 +1336,11 @@ def preencher_passivo_dossie(dossie_path, fiscais: list, trabalhistas: list, civ
     for heading, table in _iter_headings_tables(doc):
         h = heading.lower()
         if "execuções fiscais" in h or "execucoes fiscais" in h:
-            _fill_passivo_table(table, [_proc_to_row(p) for p in fiscais])
+            _fill_passivo_table(table, [_proc_to_row(p) for p in fiscais], "Exequente")
         elif "trabalhista" in h:
-            _fill_passivo_table(table, [_proc_to_row(p) for p in trabalhistas])
+            _fill_passivo_table(table, [_proc_to_row(p) for p in trabalhistas], "Autor / Reclamante")
         elif "cível" in h or "civel" in h:
-            _fill_passivo_table(table, [_proc_to_row(p) for p in civeis])
+            _fill_passivo_table(table, [_proc_to_row(p) for p in civeis], "Parte contrária")
 
     caminho = os.path.join(tempfile.gettempdir(), "Dossie_PPA_atualizado.docx")
     doc.save(caminho)

@@ -681,7 +681,9 @@ def proc_gerar_dossie(relatorio: str, extracao: str = ""):
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
-        caminho = gerar_dossie_word(extracao or "", relatorio or "", client, MODEL_PROC_FAST)
+        # O dossiê exige síntese jurídica estruturada e completa; usa o modelo
+        # de consolidação para reduzir omissões e preservar a fundamentação.
+        caminho = gerar_dossie_word(extracao or "", relatorio or "", client, MODEL_PROC_PRO)
         yield gr.update(value=caminho, visible=True), "✅ Dossiê gerado — clique no arquivo para baixar."
     except Exception as e:
         yield gr.update(value=None, visible=False), f"❌ Erro ao gerar dossiê: {e}"
