@@ -1,0 +1,32 @@
+name: Sync branch de teste para Hugging Face (Space de teste)
+
+on:
+  push:
+    branches: [teste-processos-longos]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+      - name: Push to HuggingFace (Space de teste)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          cd /tmp
+          mkdir hf_push_teste && cd hf_push_teste
+          cp -r $GITHUB_WORKSPACE/. .
+          find . -name "*.pyc" -delete
+          find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+          rm -rf .git .github
+          git init
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          git add .
+          git commit -m "deploy (branch de teste: processos longos)"
+          git branch -M main
+          git remote add hf https://olivbernardo:$HF_TOKEN@huggingface.co/spaces/olivbernardo/analise_matriculas_teste
+          git push hf main --force
