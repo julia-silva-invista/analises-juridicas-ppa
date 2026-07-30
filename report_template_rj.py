@@ -1015,3 +1015,57 @@ REPORT_TEMPLATE_RJ = (
     + REPORT_TEMPLATE_PROCESSOS_RELACIONADOS
 ).strip()
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TEMPLATE DE FATOS ESTRUTURADOS POR LOTE (fase MAP da consolidação em duas fases)
+# Usado apenas para processos de RJ muito grandes (muitos chunks), onde o texto
+# bruto de todos os chunks não caberia numa única chamada de consolidação.
+# ══════════════════════════════════════════════════════════════════════════════
+
+TEMPLATE_FATOS_LOTE_RJ = """
+Você recebeu N PARTES de texto extraído de um processo de Recuperação Judicial
+(fragmentos sequenciais de um PDF grande dividido em chunks). Sua tarefa NÃO é redigir
+prosa nem resumir livremente: é produzir uma LISTA ESTRUTURADA DE FATOS, preservando
+100% dos dados objetivos, para que outro modelo consiga depois consolidar o relatório
+final sem perder nenhuma informação jurídica relevante.
+
+REGRAS RÍGIDAS:
+- NÃO resuma, sintetize ou generalize valores, datas, nomes ou números de processo —
+  transcreva-os EXATAMENTE como aparecem.
+- NÃO omita nenhum andamento, crédito, parte, data ou valor mencionado nas PARTES
+  recebidas, mesmo que pareça repetitivo ou pouco relevante — a etapa de julgamento
+  de relevância acontece DEPOIS, na consolidação final, não aqui.
+- Se a mesma informação aparecer em mais de uma PARTE (ex: mesmo andamento citado
+  duas vezes), liste uma única vez, mas não elimine dados diferentes só porque
+  parecem similares.
+- Cada fato deve indicar a PARTE de origem (ex: [PARTE 12]) para rastreabilidade.
+
+FORMATO DE SAÍDA — use exatamente estas seções (omita a seção se não houver nada
+aplicável, mas não invente cabeçalhos novos):
+
+## IDENTIFICAÇÃO DO PROCESSO
+- Número(s) de processo encontrados, vara, tribunal/comarca
+
+## PARTES E REPRESENTAÇÃO
+- Recuperandos (nome, CPF/CNPJ, papel) [PARTE X]
+- Administrador Judicial [PARTE X]
+- Advogados/escritórios (nome, OAB) [PARTE X]
+
+## DATAS E MARCOS PROCESSUAIS
+- DD/MM/AAAA - descrição objetiva do ato (Mov./Evento/fls. conforme o original) [PARTE X]
+(lista cronológica de TODOS os andamentos encontrados nessas PARTES, sem cortes)
+
+## CRÉDITOS, CONTRATOS E GARANTIAS
+- Credor, instrumento (CCB/contrato nº), valor, índice, garantia, avalistas [PARTE X]
+
+## EXECUÇÕES RELACIONADAS
+- Número, partes, valor, status, andamentos [PARTE X]
+
+## IMPUGNAÇÕES, DIVERGÊNCIAS E HABILITAÇÕES
+- Descrição, credor, valor discutido, status [PARTE X]
+
+## OUTROS FATOS RELEVANTES
+- Qualquer informação que não se encaixe nas categorias acima mas conste no template
+  completo de RJ (endividamento fiscal, PRJ, AGC, RMA, QGC, stay period, etc.)
+""".strip()
+

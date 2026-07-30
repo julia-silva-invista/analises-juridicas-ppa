@@ -16,9 +16,10 @@ import gradio as gr
 from google import genai
 from google.genai import types
 
-from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
+from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ, TEMPLATE_FATOS_LOTE_RJ
 from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite
 from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos
+import rj_jobs
 
 CHUNK_MAX_PAGES_RJ    = 400
 MODEL_EXTRACAO_RJ     = os.getenv("GEMINI_MODEL_EXTRACAO", "gemini-2.5-flash")
@@ -28,6 +29,7 @@ MODEL_CONSOLIDACAO_RJ = MODEL_PRO_RJ
 AVG_MIN_POR_CHUNK_RJ  = 3
 MIN_CONSOLIDACAO_RJ   = 8
 COMPRESSAO_PRE_MB_RJ  = 50   # só pré-comprime se puder caber no modo direto
+GROUP_SIZE_RJ         = int(os.getenv("RJ_GROUP_SIZE", "18"))  # chunks por lote na fase MAP
 # MÓDULO — ANÁLISE DE RECUPERAÇÃO JUDICIAL (Teste B)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -247,6 +249,28 @@ def _rj_merge_textos(extracoes: list) -> str:
     return "\n\n".join(partes)
 
 
+def _rj_resumir_lote(client, textos_lote: list, idx_inicio: int, model: str = None) -> str:
+    """Fase MAP da consolidação em duas fases: resume um lote de chunks (textos
+    brutos já extraídos) numa lista estruturada de fatos, preservando datas,
+    valores, nomes e números de processo — usada quando o volume total de
+    chunks é grande demais para caber numa única chamada de consolidação."""
+    model = model or MODEL_RAPIDO_RJ
+    partes_txt = "\n\n".join(
+        f"{'='*40}\nPARTE {idx_inicio + i + 1}\n{'='*40}\n{t}"
+        for i, t in enumerate(textos_lote) if t
+    )
+    prompt = (
+        TEMPLATE_FATOS_LOTE_RJ
+        + f"\n\nA seguir estão as PARTES {idx_inicio + 1} a {idx_inicio + len(textos_lote)}:\n\n"
+        + partes_txt
+    )
+
+    def _fn():
+        return client.models.generate_content(model=model, contents=[prompt]).text
+
+    return _retry(_fn)
+
+
 TEMPLATE_RESUMIDO_RJ = """\
 MODO RESUMO PROCESSUAL — siga rigorosamente este formato curto:
 
@@ -434,6 +458,15 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
     log = []
     model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
 
+    try:
+        rj_jobs.limpar_jobs_antigos()
+    except Exception:
+        pass
+    try:
+        job_id = rj_jobs.calcular_job_id(pdf_paths, instrucoes, versao_resumida, usar_gemini_pro)
+    except Exception:
+        job_id = None
+
     log.append(f"Arquivo(s) recebido(s): {len(pdf_paths)}")
     for p in pdf_paths:
         mb = Path(p).stat().st_size / 1_048_576
@@ -500,13 +533,34 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
 
     texto_merged = ""  # disponivel no finally para o Excel de credores
 
-    try:
-        # Extração paralela via File API — 4 workers
-        log.append(f"\nExtraindo {n} chunk(s) em paralelo (4 workers · File API)...")
-        log.append(_barra_progresso(0, n))
-        yield "\n".join(log), "", "", ""
+    manifest = None
+    if job_id:
+        manifest = rj_jobs.carregar_manifest(job_id)
+        if not manifest or manifest.get("n_chunks") != n:
+            # sem job anterior, ou PDFs/chunking mudaram — comeca do zero
+            manifest = rj_jobs.novo_manifest(job_id, [Path(p).name for p in pdf_paths], n, CHUNK_MAX_PAGES_RJ)
+            rj_jobs.salvar_manifest(job_id, manifest)
 
+    try:
         parciais: dict = {}
+        pendentes = list(range(n))
+        if job_id and manifest:
+            ja_prontos = 0
+            pendentes = []
+            for i in range(n):
+                if manifest["chunks_status"].get(str(i)) == "ok":
+                    parciais[i] = rj_jobs.carregar_chunk(job_id, i)
+                    ja_prontos += 1
+                else:
+                    pendentes.append(i)
+            if ja_prontos:
+                log.append(f"\nJob retomado ({job_id[:8]}): {ja_prontos}/{n} chunk(s) ja extraidos em execucao anterior.")
+                yield "\n".join(log), "", "", ""
+
+        # Extração paralela via File API — 4 workers
+        log.append(f"\nExtraindo {len(pendentes)} chunk(s) pendente(s) em paralelo (4 workers · File API)...")
+        log.append(_barra_progresso(n - len(pendentes), n))
+        yield "\n".join(log), "", "", ""
 
         def _worker_rj(idx):
             cp, offset, total_pg, _ = todos_chunks[idx]
@@ -523,13 +577,22 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
                     return ri, res, (nota + " | " if nota else "") + "fallback inline"
                 raise
 
+        def _salvar_status_chunk(idx, status, texto=None):
+            if not (job_id and manifest):
+                return
+            if texto is not None:
+                rj_jobs.salvar_chunk(job_id, idx, texto)
+            manifest["chunks_status"][str(idx)] = status
+            rj_jobs.salvar_manifest(job_id, manifest)
+
         t_extr = time.time()
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-            futures = {ex.submit(_worker_rj, i): i for i in range(n)}
+            futures = {ex.submit(_worker_rj, i): i for i in pendentes}
             for future in concurrent.futures.as_completed(futures):
                 try:
                     idx, res, nota = future.result()
                     parciais[idx] = res
+                    _salvar_status_chunk(idx, "ok", res)
                     c = len(parciais)
                     log[-1] = _barra_progresso(c, n)
                     rounds_left = math.ceil((n - c) / 4)
@@ -541,6 +604,7 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
                     )
                 except Exception as e:
                     i_f = futures[future]
+                    _salvar_status_chunk(i_f, "erro")
                     log.append(f"   Erro no chunk {i_f+1}: {e}")
                 yield "\n".join(log), "", "", ""
 
@@ -548,13 +612,109 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         log.append(f"   Extracao total: {t_extr_s//60}min{t_extr_s%60:02d}s")
         yield "\n".join(log), "", "", ""
 
-        # Merge
+        # Segunda tentativa automatica para chunks que falharam na 1a rodada
+        falharam = [i for i in range(n) if i not in parciais]
+        if job_id and manifest:
+            falharam = [i for i in range(n) if manifest["chunks_status"].get(str(i)) == "erro"]
+        if falharam:
+            log.append(f"\nSegunda tentativa para {len(falharam)} chunk(s) com erro: {[i+1 for i in falharam]}")
+            yield "\n".join(log), "", "", ""
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+                futures = {ex.submit(_worker_rj, i): i for i in falharam}
+                for future in concurrent.futures.as_completed(futures):
+                    i_f = futures[future]
+                    try:
+                        idx, res, nota = future.result()
+                        parciais[idx] = res
+                        _salvar_status_chunk(idx, "ok", res)
+                        log.append(f"   Chunk {idx+1}/{n} recuperado na 2a tentativa" + (f" [{nota}]" if nota else ""))
+                    except Exception as e:
+                        _salvar_status_chunk(i_f, "erro_definitivo")
+                        log.append(f"   Chunk {i_f+1}: falha definitiva apos 2a tentativa — {e}")
+                    yield "\n".join(log), "", "", ""
+
+            ainda_falhando = [i + 1 for i in range(n) if i not in parciais]
+            if ainda_falhando:
+                log.append(
+                    f"   AVISO: {len(ainda_falhando)} chunk(s) permanecem sem extracao: {ainda_falhando}. "
+                    f"O relatorio final pode ter lacunas nessas paginas."
+                )
+                yield "\n".join(log), "", "", ""
+
+        # Merge (texto bruto completo — usado no Excel de credores/checklists)
         log.append("\nConsolidando textos extraidos...")
         yield "\n".join(log), "", "", ""
         lista = [parciais.get(i, "") for i in range(n)]
         texto_merged = _rj_merge_textos(lista)
         log.append(f"   {len(texto_merged):,} caracteres de informacao extraida")
         yield "\n".join(log), "", "", ""
+
+        # Consolidacao em duas fases (MAP -> REDUCE) — evita estourar a janela de
+        # contexto do modelo quando ha muitos chunks (casos com dezenas de milhares
+        # de paginas). Para casos pequenos, isso so adiciona 1 lote e 1 chamada extra
+        # ao flash, custo desprezivel perto da extracao.
+        n_lotes = math.ceil(n / GROUP_SIZE_RJ)
+        texto_para_reduce = texto_merged
+        if n_lotes > 1:
+            log.append(f"\nConsolidando em {n_lotes} lote(s) de ate {GROUP_SIZE_RJ} chunk(s) cada (fase MAP, {MODEL_RAPIDO_RJ})...")
+            yield "\n".join(log), "", "", ""
+
+            lotes_prontos = {}
+            if job_id and manifest:
+                for li in range(n_lotes):
+                    if manifest["lotes_status"].get(str(li)) == "ok":
+                        lotes_prontos[li] = rj_jobs.carregar_lote(job_id, li)
+            lotes_pendentes = [li for li in range(n_lotes) if li not in lotes_prontos]
+
+            def _worker_lote(li):
+                ini = li * GROUP_SIZE_RJ
+                fim = min(ini + GROUP_SIZE_RJ, n)
+                cli = client1 if li % 2 == 0 else client2
+                texto = _rj_resumir_lote(cli, lista[ini:fim], ini)
+                return li, texto
+
+            def _salvar_status_lote(li, status, texto=None):
+                if not (job_id and manifest):
+                    return
+                if texto is not None:
+                    rj_jobs.salvar_lote(job_id, li, texto)
+                manifest["lotes_status"][str(li)] = status
+                rj_jobs.salvar_manifest(job_id, manifest)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+                futures = {ex.submit(_worker_lote, li): li for li in lotes_pendentes}
+                for future in concurrent.futures.as_completed(futures):
+                    li = futures[future]
+                    try:
+                        li, texto = future.result()
+                        lotes_prontos[li] = texto
+                        _salvar_status_lote(li, "ok", texto)
+                    except Exception as e:
+                        _salvar_status_lote(li, "erro")
+                        log.append(f"   Erro no lote {li+1}: {e}")
+                    log.append(f"   Lote {li+1}/{n_lotes} consolidado ({len(lotes_prontos)}/{n_lotes} prontos)")
+                    yield "\n".join(log), "", "", ""
+
+            lotes_falhos = [li for li in range(n_lotes) if li not in lotes_prontos]
+            if lotes_falhos:
+                log.append(f"   Segunda tentativa para {len(lotes_falhos)} lote(s) com erro...")
+                yield "\n".join(log), "", "", ""
+                for li in lotes_falhos:
+                    try:
+                        _, texto = _worker_lote(li)
+                        lotes_prontos[li] = texto
+                        _salvar_status_lote(li, "ok", texto)
+                    except Exception as e:
+                        _salvar_status_lote(li, "erro_definitivo")
+                        log.append(f"   Lote {li+1}: falha definitiva — {e}")
+                    yield "\n".join(log), "", "", ""
+
+            lista_resumos = [lotes_prontos.get(li, "") for li in range(n_lotes)]
+            texto_para_reduce = _rj_merge_textos(lista_resumos)
+            log.append(
+                f"   {len(texto_para_reduce):,} caracteres apos MAP (eram {len(texto_merged):,} brutos)"
+            )
+            yield "\n".join(log), "", "", ""
 
         # Cache
         log.append(f"\nConfigurando context cache ({model_cons})...")
@@ -569,9 +729,12 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         log.append(f"   Aguardando {model_cons}... (pode levar alguns minutos)")
         yield "\n".join(log), "", "", ""
 
-        secao_a = _rj_consolidar_secao_a(client1, texto_merged, instrucoes, cache, model_cons, versao_resumida)
+        secao_a = _rj_consolidar_secao_a(client1, texto_para_reduce, instrucoes, cache, model_cons, versao_resumida)
         log[-1] = "   Secao A gerada."
         secoes.append(secao_a)
+        if job_id and manifest:
+            manifest["secao_a_ok"] = True
+            rj_jobs.salvar_manifest(job_id, manifest)
         yield "\n".join(log), "", "", ""
 
         # Processos relacionados
@@ -590,6 +753,9 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         relatorio = "\n\n".join(s for s in secoes if s)
         t_total = int(time.time() - t_inicio)
         log.append(f"\nAnalise concluida em {t_total//60}min{t_total%60:02d}s | {len(relatorio):,} chars")
+        if job_id and manifest:
+            manifest["concluido"] = True
+            rj_jobs.salvar_manifest(job_id, manifest)
         yield "\n".join(log), relatorio, relatorio, texto_merged
 
     except Exception as exc:
