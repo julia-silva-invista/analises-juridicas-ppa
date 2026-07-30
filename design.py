@@ -700,6 +700,8 @@ body,
     min-height: 230px !important;
     max-height: 230px !important;
     border-radius: 16px !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
 }
 
 .equal-input-box textarea {
@@ -718,6 +720,8 @@ body,
     height: 306px !important;
     min-height: 306px !important;
     max-height: 306px !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
 }
 
 .analysis-settings-col {
@@ -1546,7 +1550,8 @@ button[title*="copy"] {
     min-height: clamp(280px, 28vw, 350px) !important;
     max-height: clamp(280px, 28vw, 350px) !important;
     border-radius: 16px !important;
-    overflow: visible !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
 }
 
 .instructions-with-gemini {
