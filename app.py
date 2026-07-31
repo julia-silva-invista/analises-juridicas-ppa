@@ -16,6 +16,14 @@ from processos import proc_analisar, proc_gerar_word, proc_gerar_dossie, proc_re
 from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores, rj_gerar_checklist, rj_gerar_checklist_creditos
 from matriculas import mat_gerar_excel, mat_responder
 from coleta import coleta_gerar, coleta_gerar_dossie
+from timeline_societaria import (
+    timeline_analisar,
+    timeline_toggle_edicao,
+    timeline_ver_tabela,
+    timeline_exportar_imagem,
+    timeline_gerar_word,
+    EDITOR_HEADERS,
+)
 
 os.makedirs("resultados", exist_ok=True)
 os.makedirs("tmp_pdfs", exist_ok=True)
@@ -366,7 +374,77 @@ with gr.Blocks(
                         mat_perguntar_btn = gr.Button("Perguntar", variant="primary")
                 mat_resposta = gr.Textbox(label="Resposta", lines=5, interactive=False)
 
-        # ── Tab 4: Coleta de Informações ─────────────────────────────────────
+        # ── Tab 4: Timeline Societária ────────────────────────────────────────
+        with gr.Tab("Timeline Societária"):
+            with gr.Row():
+                with gr.Column(scale=2):
+                    tl_arquivos = gr.File(
+                        label="Atos societários (PDFs)",
+                        file_types=[".pdf", ".PDF"],
+                        file_count="multiple",
+                    )
+                with gr.Column(scale=1):
+                    gr.Markdown(
+                        "**Como usar:**\n\n"
+                        "1. Faça upload de todos os atos societários (contrato social, "
+                        "alterações, ACS)\n"
+                        "2. Clique em **Analisar timeline societária**\n"
+                        "3. Edite os eventos se necessário\n"
+                        "4. Exporte como imagem ou insira no dossiê em Word\n\n"
+                        "_Suporta documentos escaneados (OCR)._"
+                    )
+
+            with gr.Row(elem_classes=["analysis-action-row"]):
+                tl_analisar_btn = gr.Button(
+                    "Analisar timeline societária", variant="primary", elem_classes=["analysis-run-btn"]
+                )
+
+            tl_status = gr.Textbox(
+                label="Status",
+                lines=2,
+                interactive=False,
+                elem_classes=["log-area"],
+                placeholder="O andamento da análise aparecerá aqui...",
+            )
+            tl_timeline_html = gr.HTML()
+            tl_data_state = gr.State({})
+            tl_editando_state = gr.State(False)
+
+            tl_editor = gr.Dataframe(
+                headers=EDITOR_HEADERS,
+                interactive=True,
+                visible=False,
+                wrap=True,
+                label="Edição dos eventos",
+            )
+            tl_edicao_status = gr.Markdown("")
+
+            with gr.Row():
+                tl_editar_btn = gr.Button("Editar", variant="secondary")
+                tl_ver_tabela_btn = gr.Button("Ver tabela (para Word)", variant="secondary")
+                tl_exportar_img_btn = gr.Button("Exportar imagem", variant="secondary")
+
+            tl_tabela_word = gr.Dataframe(
+                headers=["Data", "Ato / ACS", "Detalhamento"],
+                interactive=False,
+                visible=False,
+                wrap=True,
+                label="Tabela para o dossiê",
+            )
+            tl_imagem = gr.File(label="Imagem da timeline", interactive=False, visible=True)
+
+            gr.HTML('<hr class="inv-divider">')
+            with gr.Row():
+                tl_dossie_in = gr.File(
+                    label="Dossiê PPA em Word (opcional — insere a cronologia nele)",
+                    file_types=[".docx"],
+                )
+                tl_gerar_word_btn = gr.Button(
+                    "Gerar Word", variant="secondary", elem_classes=["word-download-btn"]
+                )
+            tl_word_file = gr.File(label="Cronologia societária (Word)", interactive=False, visible=False)
+
+        # ── Tab 5: Coleta de Informações ─────────────────────────────────────
         with gr.Tab("Coleta de Informações"):
             with gr.Row():
                 with gr.Column(scale=2):
@@ -409,7 +487,7 @@ with gr.Blocks(
                     coleta_excel_out = gr.File(label="Planilha preenchida", interactive=False)
                     coleta_dossie_out = gr.File(label="Dossiê atualizado (passivo)", interactive=False)
 
-        # ── Tab 5: Sugestões e Feedbacks ─────────────────────────────────────
+        # ── Tab 6: Sugestões e Feedbacks ─────────────────────────────────────
         with gr.Tab("Feedbacks"):
             gr.HTML("""
             <div class="feedback-intro">
@@ -505,6 +583,28 @@ with gr.Blocks(
     )
     mat_perguntar_btn.click(
         fn=mat_responder, inputs=[mat_pergunta, mat_log], outputs=[mat_resposta]
+    )
+
+    # Timeline Societária
+    tl_analisar_btn.click(
+        fn=timeline_analisar,
+        inputs=[tl_arquivos],
+        outputs=[tl_status, tl_timeline_html, tl_editor, tl_data_state],
+        concurrency_limit=3,
+    )
+    tl_editar_btn.click(
+        fn=timeline_toggle_edicao,
+        inputs=[tl_editando_state, tl_editor, tl_data_state],
+        outputs=[tl_editando_state, tl_editar_btn, tl_editor, tl_timeline_html, tl_data_state, tl_edicao_status],
+    )
+    tl_ver_tabela_btn.click(
+        fn=timeline_ver_tabela, inputs=[tl_data_state], outputs=[tl_tabela_word]
+    )
+    tl_exportar_img_btn.click(
+        fn=timeline_exportar_imagem, inputs=[tl_data_state], outputs=[tl_imagem]
+    )
+    tl_gerar_word_btn.click(
+        fn=timeline_gerar_word, inputs=[tl_data_state, tl_dossie_in], outputs=[tl_word_file]
     )
 
     # Coleta de Informações
