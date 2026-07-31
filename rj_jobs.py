@@ -33,9 +33,15 @@ RETENCAO_DIAS_RJ_CONCLUIDO = int(os.getenv("RJ_JOB_RETENCAO_DIAS_CONCLUIDO", "2"
 def calcular_job_id(pdf_paths, instrucoes: str, versao_resumida: bool, usar_gemini_pro: bool) -> str:
     """Hash estavel: conteudo dos PDFs (ordenados) + parametros que mudam o resultado.
     Usa bytes dos arquivos (nao nome/caminho, que muda a cada upload no Gradio)
-    para sobreviver a reenvio do mesmo PDF apos reinicio do processo."""
+    para sobreviver a reenvio do mesmo PDF apos reinicio do processo.
+
+    Importante: a ordenacao usa o NOME do arquivo (Path(p).name), nao o caminho
+    completo — o caminho temporario que o Gradio atribui a cada upload muda a
+    cada sessao (pasta de cache aleatoria), entao ordenar pelo caminho completo
+    produzia uma ordem diferente a cada reenvio dos MESMOS arquivos, gerando um
+    job_id diferente e impedindo a retomada."""
     h = hashlib.sha256()
-    for p in sorted(pdf_paths):
+    for p in sorted(pdf_paths, key=lambda x: Path(x).name):
         h.update(Path(p).name.encode("utf-8", "ignore"))
         with open(p, "rb") as f:
             while True:
