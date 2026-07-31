@@ -1855,6 +1855,8 @@ button[title*="copy"] {
 }
 .tl2-moves { margin-top: 18px; display: flex; flex-direction: column; gap: 7px; }
 .tl2-move { padding: 8px 9px; border-left: 3px solid #77817a; background: #f6f6f4; }
+.tl2-move-constituicao { border-left-color: #2f6b3a; background: rgba(47, 107, 58, .07); }
+.tl2-move-constituicao .tl2-move-label { color: #2f6b3a; }
 .tl2-move-label {
     display: block; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
     color: #77817a;
@@ -1870,8 +1872,8 @@ button[title*="copy"] {
 .tl2-move-saida .tl2-move-label { color: #dc4405; }
 .tl2-move-cessao { border-left-color: #1c6e8c; background: rgba(28, 110, 140, .07); }
 .tl2-move-cessao .tl2-move-label { color: #1c6e8c; }
-.tl2-move-imovel { border-left-color: #8a6a45; background: rgba(138, 106, 69, .08); }
-.tl2-move-imovel .tl2-move-label { color: #8a6a45; }
+.tl2-move-imovel { border-left-color: #a6486a; background: rgba(166, 72, 106, .08); }
+.tl2-move-imovel .tl2-move-label { color: #a6486a; }
 .tl2-move-imovel-saida { border-left-color: #dc4405; background: rgba(220, 68, 5, .07); }
 .tl2-move-imovel-saida .tl2-move-label { color: #dc4405; }
 .tl2-move-admin { border-left-color: #1c6e8c; background: rgba(28, 110, 140, .07); }
@@ -1880,8 +1882,10 @@ button[title*="copy"] {
 .tl2-move-capital-up .tl2-move-label { color: #2f6b3a; }
 .tl2-move-capital-down { border-left-color: #dc4405; background: rgba(220, 68, 5, .07); }
 .tl2-move-capital-down .tl2-move-label { color: #dc4405; }
-.tl2-move-sede, .tl2-move-objeto { border-left-color: #9a7b2f; background: rgba(154, 123, 47, .08); }
-.tl2-move-sede .tl2-move-label, .tl2-move-objeto .tl2-move-label { color: #9a7b2f; }
+.tl2-move-sede { border-left-color: #dc4405; background: rgba(220, 68, 5, .07); }
+.tl2-move-sede .tl2-move-label { color: #dc4405; }
+.tl2-move-objeto { border-left-color: #9a7b2f; background: rgba(154, 123, 47, .08); }
+.tl2-move-objeto .tl2-move-label { color: #9a7b2f; }
 .tl2-move-filial { border-left-color: #77636a; background: rgba(119, 99, 106, .08); }
 .tl2-move-filial .tl2-move-label { color: #77636a; }
 .tl2-quadro {
