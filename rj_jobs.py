@@ -40,6 +40,7 @@ def caminho_job(job_id: str) -> Path:
     d = BASE_DIR_RJ_JOBS / job_id
     (d / "chunks").mkdir(parents=True, exist_ok=True)
     (d / "lotes").mkdir(parents=True, exist_ok=True)
+    (d / "pdf_chunks").mkdir(parents=True, exist_ok=True)
     return d
 
 
@@ -73,11 +74,27 @@ def novo_manifest(job_id: str, arquivos: list, n_chunks: int, chunk_max_pages: i
         "arquivos": arquivos,
         "n_chunks": n_chunks,
         "chunk_max_pages": chunk_max_pages,
-        "chunks_status": {},
+        "arquivos_status": {},   # nome do arquivo -> "ok" (dividido/comprimido) — fase de divisao
+        "chunks_index": [],      # [{"arquivo":..., "offset":..., "total":..., "chunk_pdf": "pdf_chunks/xx.pdf"}, ...]
+        "chunks_status": {},     # str(indice) -> "ok"/"erro"/"erro_definitivo" — fase de extracao
         "lotes_status": {},
         "secao_a_ok": False,
         "concluido": False,
     }
+
+
+def salvar_pdf_chunk(job_id: str, nome_rel: str, src_path: str) -> str:
+    """Copia um PDF-chunk (resultado de _rj_dividir_pdf) para dentro do diretorio
+    do job, para sobreviver a reinicio do container (diferente de tempfile no /tmp
+    do SO, que pode ser perdido se o Space reiniciar)."""
+    dest = caminho_job(job_id) / "pdf_chunks" / nome_rel
+    if os.path.abspath(src_path) != os.path.abspath(dest):
+        shutil.copyfile(src_path, dest)
+    return str(dest)
+
+
+def caminho_pdf_chunk(job_id: str, nome_rel: str) -> str:
+    return str(caminho_job(job_id) / "pdf_chunks" / nome_rel)
 
 
 def salvar_chunk(job_id: str, idx: int, texto: str) -> None:

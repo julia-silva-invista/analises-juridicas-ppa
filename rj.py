@@ -467,6 +467,13 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
     except Exception:
         job_id = None
 
+    manifest = None
+    if job_id:
+        manifest = rj_jobs.carregar_manifest(job_id)
+        if not manifest:
+            manifest = rj_jobs.novo_manifest(job_id, [Path(p).name for p in pdf_paths], 0, CHUNK_MAX_PAGES_RJ)
+            rj_jobs.salvar_manifest(job_id, manifest)
+
     log.append(f"Arquivo(s) recebido(s): {len(pdf_paths)}")
     for p in pdf_paths:
         mb = Path(p).stat().st_size / 1_048_576
@@ -481,8 +488,22 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
 
     todos_chunks = []
     _temp_comprimidos: list = []
-    for path in pdf_paths:
+    for f_idx, path in enumerate(pdf_paths):
         nome = Path(path).name
+
+        # Retomada: se este arquivo ja foi dividido/comprimido numa execucao
+        # anterior do mesmo job, reaproveita os PDF-chunks ja persistidos em
+        # disco em vez de recomprimir/redividir (fase cara para arquivos com
+        # muitas paginas escaneadas).
+        if job_id and manifest and manifest["arquivos_status"].get(nome) == "ok":
+            entradas = [c for c in manifest["chunks_index"] if c["arquivo"] == nome]
+            log.append(f"   · {nome}: reaproveitado de execucao anterior ({len(entradas)} parte(s))")
+            yield "\n".join(log), "", "", ""
+            for c in entradas:
+                cp = rj_jobs.caminho_pdf_chunk(job_id, c["chunk_pdf"])
+                todos_chunks.append((cp, c["offset"], c["total"], path))
+            continue
+
         mb_orig = Path(path).stat().st_size / 1_048_576
 
         path_proc = path
@@ -520,8 +541,28 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         log.append(f"   · {nome}: {total_pg} pag. — {info_scan}")
         if len(chunks) > 1:
             log.append(f"     Dividido em {len(chunks)} partes ({CHUNK_MAX_PAGES_RJ} pag. cada)")
-        for chunk_path, offset, total in chunks:
-            todos_chunks.append((chunk_path, offset, total, path))
+        yield "\n".join(log), "", "", ""
+
+        entradas_arquivo = []
+        for c_idx, (chunk_path, offset, total) in enumerate(chunks):
+            path_persistido = chunk_path
+            if job_id:
+                nome_rel = f"f{f_idx:03d}_c{c_idx:04d}.pdf"
+                try:
+                    path_persistido = rj_jobs.salvar_pdf_chunk(job_id, nome_rel, chunk_path)
+                    entradas_arquivo.append({"arquivo": nome, "offset": offset, "total": total, "chunk_pdf": nome_rel})
+                    if chunk_path != path_proc and chunk_path != path_persistido:
+                        # tempfile de origem ja copiado para o job — remove o duplicado
+                        try: os.remove(chunk_path)
+                        except: pass
+                except Exception:
+                    pass  # sem persistencia neste chunk — segue usando o path temporario
+            todos_chunks.append((path_persistido, offset, total, path))
+
+        if job_id and manifest:
+            manifest["arquivos_status"][nome] = "ok"
+            manifest["chunks_index"].extend(entradas_arquivo)
+            rj_jobs.salvar_manifest(job_id, manifest)
 
     n = len(todos_chunks)
     n_rodadas = math.ceil(n / 4)
@@ -533,13 +574,9 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
 
     texto_merged = ""  # disponivel no finally para o Excel de credores
 
-    manifest = None
-    if job_id:
-        manifest = rj_jobs.carregar_manifest(job_id)
-        if not manifest or manifest.get("n_chunks") != n:
-            # sem job anterior, ou PDFs/chunking mudaram — comeca do zero
-            manifest = rj_jobs.novo_manifest(job_id, [Path(p).name for p in pdf_paths], n, CHUNK_MAX_PAGES_RJ)
-            rj_jobs.salvar_manifest(job_id, manifest)
+    if job_id and manifest:
+        manifest["n_chunks"] = n
+        rj_jobs.salvar_manifest(job_id, manifest)
 
     try:
         parciais: dict = {}
@@ -763,8 +800,13 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
         yield "\n".join(log), f"Erro:\n{exc}", "", ""
 
     finally:
+        # Chunks persistidos no diretorio do job (resultados/rj_jobs/<job_id>/pdf_chunks/)
+        # NAO sao removidos aqui — ficam disponiveis para retomada caso a analise
+        # seja interrompida; a limpeza deles e feita por rj_jobs.limpar_jobs_antigos()
+        # apos o job concluir/expirar.
+        job_dir_str = os.path.abspath(str(rj_jobs.caminho_job(job_id))) if job_id else None
         for cp, _, _, orig in todos_chunks:
-            if cp != orig:
+            if cp != orig and not (job_dir_str and os.path.abspath(cp).startswith(job_dir_str)):
                 try: os.remove(cp)
                 except: pass
         for cp in _temp_comprimidos:
