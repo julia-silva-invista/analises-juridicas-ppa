@@ -22,6 +22,7 @@ from timeline_societaria import (
     timeline_ver_tabela,
     timeline_exportar_imagem,
     timeline_gerar_word,
+    timeline_exportar_html,
     EDITOR_HEADERS,
 )
 
@@ -423,6 +424,7 @@ with gr.Blocks(
                 tl_editar_btn = gr.Button("Editar", variant="secondary")
                 tl_ver_tabela_btn = gr.Button("Ver tabela (para Word)", variant="secondary")
                 tl_exportar_img_btn = gr.Button("Exportar imagem", variant="secondary")
+                tl_exportar_html_btn = gr.Button("Exportar HTML interativo", variant="secondary")
 
             tl_tabela_word = gr.Dataframe(
                 headers=["Data", "Ato / ACS", "Detalhamento"],
@@ -432,6 +434,7 @@ with gr.Blocks(
                 label="Tabela para o dossiê",
             )
             tl_imagem = gr.File(label="Imagem da timeline", interactive=False, visible=True)
+            tl_html_file = gr.File(label="HTML interativo da timeline", interactive=False, visible=True)
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Row():
@@ -602,6 +605,9 @@ with gr.Blocks(
     )
     tl_exportar_img_btn.click(
         fn=timeline_exportar_imagem, inputs=[tl_data_state], outputs=[tl_imagem]
+    )
+    tl_exportar_html_btn.click(
+        fn=timeline_exportar_html, inputs=[tl_data_state], outputs=[tl_html_file]
     )
     tl_gerar_word_btn.click(
         fn=timeline_gerar_word, inputs=[tl_data_state, tl_dossie_in], outputs=[tl_word_file]
