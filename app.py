@@ -423,8 +423,12 @@ with gr.Blocks(
             with gr.Row():
                 tl_editar_btn = gr.Button("Editar", variant="secondary")
                 tl_exportar_html_btn = gr.DownloadButton("Exportar HTML", variant="secondary")
-                tl_gerar_tabela_btn = gr.DownloadButton("Gerar tabela (Word)", variant="secondary")
-                tl_exportar_img_btn = gr.DownloadButton("Exportar imagem", variant="secondary")
+                tl_gerar_tabela_btn = gr.Button("Gerar tabela (Word)", variant="secondary")
+                tl_exportar_img_btn = gr.Button("Exportar imagem", variant="secondary")
+
+            with gr.Row():
+                tl_tabela_word_file = gr.File(label="Tabela em Word", interactive=False, visible=True)
+                tl_imagem_file = gr.File(label="Imagem da timeline", interactive=False, visible=True)
 
         # ── Tab 5: Coleta de Informações ─────────────────────────────────────
         with gr.Tab("Coleta de Informações"):
@@ -580,7 +584,7 @@ with gr.Blocks(
         outputs=[tl_editando_state, tl_editar_btn, tl_editor, tl_timeline_html, tl_data_state, tl_edicao_status],
     )
     tl_exportar_img_btn.click(
-        fn=timeline_exportar_imagem_vertical, inputs=[tl_data_state], outputs=[tl_exportar_img_btn]
+        fn=timeline_exportar_imagem_vertical, inputs=[tl_data_state], outputs=[tl_imagem_file]
     )
     tl_exportar_html_btn.click(
         fn=timeline_exportar_html, inputs=[tl_data_state], outputs=[tl_exportar_html_btn]
@@ -588,7 +592,7 @@ with gr.Blocks(
     tl_gerar_tabela_btn.click(
         fn=lambda data: timeline_gerar_word(data, None),
         inputs=[tl_data_state],
-        outputs=[tl_gerar_tabela_btn],
+        outputs=[tl_tabela_word_file],
     )
 
     # Coleta de Informações
