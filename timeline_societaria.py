@@ -958,15 +958,7 @@ def timeline_exportar_imagem(data: dict) -> str:
 
 
 
-def timeline_exportar_imagem_vertical(data: dict) -> str:
-    """Cronologia em layout vertical (cards coloridos, mesma linguagem visual da versão horizontal),
-    pensada para colar no dossiê em Word — altura livre, sem cortes."""
-    events = (data or {}).get("eventos", [])
-    if not events:
-        raise gr.Error("Gere a timeline antes de exportar.")
-
-    scale = 2
-    width = 1000 * scale
+def _medir_timeline_vertical(events: list[dict], scale: float, width: int):
     pad = 34 * scale
     axis_x = pad + 6 * scale
     content_x = axis_x + 26 * scale
@@ -974,27 +966,27 @@ def timeline_exportar_imagem_vertical(data: dict) -> str:
     header_h = 118 * scale
     gap_evento = 22 * scale
 
-    text, muted, line, azul = "#2C302C", "#737670", "#E4E4E0", "#1A56A0"
-
     probe = Image.new("RGB", (10, 10))
     draw = ImageDraw.Draw(probe)
-    f_kicker = _font(9 * scale, True)
-    f_titulo = _font(19 * scale, True)
-    f_meta = _font(11 * scale)
-    f_data = _font(13 * scale, True)
-    f_ato = _font(9 * scale, True)
-    f_rotulo = _font(8 * scale, True)
-    f_nome = _font(10 * scale, True)
-    f_extra = _font(8 * scale)
-    f_quadro = _font(9 * scale)
+    fontes = {
+        "kicker": _font(round(9 * scale), True),
+        "titulo": _font(round(19 * scale), True),
+        "meta": _font(round(11 * scale)),
+        "data": _font(round(13 * scale), True),
+        "ato": _font(round(9 * scale), True),
+        "rotulo": _font(round(8 * scale), True),
+        "nome": _font(round(10 * scale), True),
+        "extra": _font(round(8 * scale)),
+        "quadro": _font(round(9 * scale)),
+    }
 
     itens = []
     for idx, event in enumerate(events):
         prev = events[idx - 1] if idx else None
         blocos = []
         for mov in movimentos_do_ato(event, prev):
-            nome_linhas = _wrap(draw, mov["nome"], f_nome, content_w - 16 * scale, 4)
-            extra_linhas = _wrap(draw, mov.get("extra", ""), f_extra, content_w - 16 * scale, 3)
+            nome_linhas = _wrap(draw, mov["nome"], fontes["nome"], content_w - 16 * scale, 4)
+            extra_linhas = _wrap(draw, mov.get("extra", ""), fontes["extra"], content_w - 16 * scale, 3)
             bloco_h = (
                 9 * scale
                 + 12 * scale
@@ -1011,14 +1003,46 @@ def timeline_exportar_imagem_vertical(data: dict) -> str:
                     "altura": bloco_h,
                 }
             )
-        quadro_linhas = _wrap(draw, _quadro_resumo(event), f_quadro, content_w, 4)
+        quadro_linhas = _wrap(draw, _quadro_resumo(event), fontes["quadro"], content_w, 4)
         altura = 20 * scale + sum(b["altura"] + 8 * scale for b in blocos) + 16 * scale + len(quadro_linhas) * 13 * scale
         itens.append({"event": event, "blocos": blocos, "quadro": quadro_linhas, "altura": altura})
 
     body_h = sum(item["altura"] for item in itens) + gap_evento * max(0, len(itens) - 1)
     height = header_h + body_h + pad
+    return {
+        "scale": scale, "width": width, "height": height, "pad": pad, "axis_x": axis_x,
+        "content_x": content_x, "content_w": content_w, "header_h": header_h,
+        "gap_evento": gap_evento, "body_h": body_h, "itens": itens, "fontes": fontes,
+    }
 
-    image = Image.new("RGB", (width, height), "#FFFFFF")
+
+def timeline_exportar_imagem_vertical(data: dict) -> str:
+    """Cronologia em layout vertical (cards coloridos, mesma linguagem visual da versão horizontal),
+    dimensionada para caber em uma página A4 vertical do Word."""
+    events = (data or {}).get("eventos", [])
+    if not events:
+        raise gr.Error("Gere a timeline antes de exportar.")
+
+    width = 2000
+    info = _medir_timeline_vertical(events, 2.0, width)
+    a4_ratio = 297 / 210  # altura/largura de uma folha A4 vertical
+    limite = width * a4_ratio
+    if info["height"] > limite:
+        fator = max(0.45, limite / info["height"])
+        info = _medir_timeline_vertical(events, 2.0 * fator, width)
+
+    scale = info["scale"]
+    pad, axis_x, content_x, content_w = info["pad"], info["axis_x"], info["content_x"], info["content_w"]
+    header_h, gap_evento, body_h, itens, fontes = (
+        info["header_h"], info["gap_evento"], info["body_h"], info["itens"], info["fontes"]
+    )
+    f_kicker, f_titulo, f_meta = fontes["kicker"], fontes["titulo"], fontes["meta"]
+    f_data, f_ato = fontes["data"], fontes["ato"]
+    f_rotulo, f_nome, f_extra, f_quadro = fontes["rotulo"], fontes["nome"], fontes["extra"], fontes["quadro"]
+
+    text, muted, line, azul = "#2C302C", "#737670", "#E4E4E0", "#1A56A0"
+
+    image = Image.new("RGB", (width, round(info["height"])), "#FFFFFF")
     draw = ImageDraw.Draw(image)
 
     draw.text((pad, 30 * scale), "CRONOLOGIA SOCIETÁRIA", fill=azul, font=f_kicker)
@@ -1033,8 +1057,8 @@ def timeline_exportar_imagem_vertical(data: dict) -> str:
         if x
     )
     draw.text((pad, 78 * scale), meta, fill=muted, font=f_meta)
-    draw.line((pad, header_h - 22 * scale, width - pad, header_h - 22 * scale), fill="#1F211F", width=2 * scale)
-    draw.line((axis_x, header_h, axis_x, header_h + body_h), fill=line, width=2 * scale)
+    draw.line((pad, header_h - 22 * scale, width - pad, header_h - 22 * scale), fill="#1F211F", width=max(1, round(2 * scale)))
+    draw.line((axis_x, header_h, axis_x, header_h + body_h), fill=line, width=max(1, round(2 * scale)))
 
     y = header_h
     for item in itens:
