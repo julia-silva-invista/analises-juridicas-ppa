@@ -957,6 +957,97 @@ def timeline_exportar_imagem(data: dict) -> str:
     return str(output)
 
 
+
+def timeline_exportar_imagem_vertical(data: dict) -> str:
+    """Cronologia em layout vertical, dimensionada para caber em uma folha A4 (retrato)."""
+    events = (data or {}).get("eventos", [])
+    if not events:
+        raise gr.Error("Gere a timeline antes de exportar.")
+
+    width, height = 1654, 2339  # A4 retrato, ~200 dpi
+    pad = 46
+    header_h = 150
+    footer_h = 30
+    body_top = header_h
+    body_h = height - header_h - footer_h - pad
+    n = len(events)
+    band_h = body_h / n
+
+    axis_x = pad + 8
+    content_x = axis_x + 28
+    content_w = width - content_x - pad
+
+    image = Image.new("RGB", (width, height), "#FFFFFF")
+    draw = ImageDraw.Draw(image)
+
+    f_kicker = _font(15, True)
+    f_titulo = _font(30, True)
+    f_meta = _font(15)
+    f_data = _font(17, True)
+    f_ato = _font(13, True)
+    f_nome = _font(13, True)
+    f_extra = _font(11)
+    f_quadro = _font(12)
+
+    draw.text((pad, 34), "CRONOLOGIA SOCIETÁRIA", fill="#1C4D6B", font=f_kicker)
+    draw.text((pad, 56), str(data.get("empresa", "") or "Sociedade analisada"), fill="#1F211F", font=f_titulo)
+    meta = " · ".join(
+        x
+        for x in [
+            ("CNPJ " + str(data.get("cnpj", ""))) if data.get("cnpj") else "",
+            f"{n} atos",
+            _periodo(events),
+        ]
+        if x
+    )
+    draw.text((pad, 100), meta, fill="#737670", font=f_meta)
+    draw.line((pad, header_h - 14, width - pad, header_h - 14), fill="#1F211F", width=2)
+    draw.line((axis_x, body_top, axis_x, body_top + body_h), fill="#E4E4E0", width=3)
+
+    y = body_top
+    for idx, event in enumerate(events):
+        prev = events[idx - 1] if idx else None
+        band_top, band_bottom = y, y + band_h
+
+        r = 7
+        draw.ellipse((axis_x - r, band_top + 22 - r, axis_x + r, band_top + 22 + r), fill="#1C4D6B")
+
+        cy = band_top
+        draw.text((content_x, cy), str(event.get("data", "") or "—"), fill="#1F211F", font=f_data)
+        draw.text((content_x + 130, cy + 2), str(event.get("ato", "") or "Ato societário").upper(), fill="#737670", font=f_ato)
+        cy += 22
+
+        movs = movimentos_do_ato(event, prev)
+        max_lines_avail = max(1, int((band_h - 22 - 16) // 15))
+        drawn = 0
+        for mov in movs:
+            if drawn >= max_lines_avail:
+                break
+            linha = f'{mov["rotulo"]}: {mov["nome"]}' + (f' ({mov["extra"]})' if mov.get("extra") else "")
+            wrapped = _wrap(draw, linha, f_nome, content_w, max_lines=1)
+            texto = wrapped[0] if wrapped else linha[:80]
+            draw.text((content_x, cy), "• " + texto, fill="#3F423E", font=f_nome)
+            cy += 15
+            drawn += 1
+        omitidos = len(movs) - drawn
+        if omitidos > 0 and cy < band_bottom - 13:
+            draw.text((content_x, cy), f"+ {omitidos} mais…", fill="#9A9C98", font=f_extra)
+            cy += 13
+
+        if cy < band_bottom - 13:
+            linha_q = _wrap(draw, "Quadro: " + _quadro_resumo(event), f_quadro, content_w, max_lines=1)
+            if linha_q:
+                draw.text((content_x, cy), linha_q[0], fill="#5C5A54", font=f_quadro)
+
+        if idx < n - 1:
+            draw.line((pad, band_bottom, width - pad, band_bottom), fill="#EFEFEC", width=1)
+        y = band_bottom
+
+    output = Path(tempfile.gettempdir()) / "timeline_societaria_vertical_a4.png"
+    image.save(output, format="PNG", optimize=True, dpi=(200, 200))
+    return str(output)
+
+
 TL2_CSS = """
 .timeline-empty, .timeline-loading {
     margin: 18px 0; padding: 44px 24px; text-align: center; background: #f5f4f1;
@@ -972,7 +1063,7 @@ TL2_CSS = """
 }
 .tl2-head { padding: 24px 28px 20px; border-bottom: 1px solid #dededb; }
 .tl2-kicker {
-    display: block; color: #dc4405; font-size: 11px; font-weight: 800; letter-spacing: .14em;
+    display: block; color: #1c4d6b; font-size: 11px; font-weight: 800; letter-spacing: .14em;
     text-transform: uppercase;
 }
 .tl2-head h2 { margin: 6px 0 4px; font-size: 25px; font-weight: 700; color: #2c302c; }
@@ -994,8 +1085,8 @@ TL2_CSS = """
     justify-content: center;
 }
 .tl2-pin {
-    width: 13px; height: 13px; border-radius: 50%; background: #dc4405; border: 2px solid #fff;
-    box-shadow: 0 0 0 1px #dc4405;
+    width: 13px; height: 13px; border-radius: 50%; background: #1c4d6b; border: 2px solid #fff;
+    box-shadow: 0 0 0 1px #1c4d6b;
 }
 .tl2-moves { margin-top: 18px; display: flex; flex-direction: column; gap: 7px; }
 .tl2-move { padding: 8px 9px; border-left: 3px solid #77817a; background: #f6f6f4; }

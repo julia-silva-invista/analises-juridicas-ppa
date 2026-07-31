@@ -1828,7 +1828,7 @@ button[title*="copy"] {
 }
 .tl2-head { padding: 24px 28px 20px; border-bottom: 1px solid #dededb; }
 .tl2-kicker {
-    display: block; color: #dc4405; font-size: 11px; font-weight: 800; letter-spacing: .14em;
+    display: block; color: #1c4d6b; font-size: 11px; font-weight: 800; letter-spacing: .14em;
     text-transform: uppercase;
 }
 .tl2-head h2 { margin: 6px 0 4px; font-size: 25px; font-weight: 700; color: #2c302c; }
@@ -1850,8 +1850,8 @@ button[title*="copy"] {
     justify-content: center;
 }
 .tl2-pin {
-    width: 13px; height: 13px; border-radius: 50%; background: #dc4405; border: 2px solid #fff;
-    box-shadow: 0 0 0 1px #dc4405;
+    width: 13px; height: 13px; border-radius: 50%; background: #1c4d6b; border: 2px solid #fff;
+    box-shadow: 0 0 0 1px #1c4d6b;
 }
 .tl2-moves { margin-top: 18px; display: flex; flex-direction: column; gap: 7px; }
 .tl2-move { padding: 8px 9px; border-left: 3px solid #77817a; background: #f6f6f4; }
