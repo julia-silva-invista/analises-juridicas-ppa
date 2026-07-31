@@ -146,46 +146,61 @@ _DOCS_ITEM6 = [
     ("atas_agc",              "Atas, laudo de credenciamento e de votação da AGC",  ["Anexado", "Não existente"]),
 ]
 
-_PROMPT_RJ = """\
-Você está analisando o texto COMPLETO extraído de um processo de Recuperação Judicial (RJ).
+_PROMPT_RJ = """Você está analisando o texto COMPLETO extraído de um processo de Recuperação Judicial (RJ).
 Analise TODO o texto (não só um resumo) para preencher o Checklist de RJ no formato JSON abaixo.
 NÃO invente.
 
-═══ REGRA — REFERÊNCIA OBRIGATÓRIA DA FONTE ═══
-Para CADA informação (matrícula, deferimento, blindagem, stay, valores, datas, etc.), inclua ao final,
-entre parênteses, ONDE ela foi extraída — a fls. do PDF e o parâmetro do tribunal (Mov./ID/fls./Evento).
-Ex.: "Deferido em 20/01/2023 (fls. 340 · Mov. 12)", "Ativo (fls. 350)", "Matrícula 12.454 (fls. 88)".
-Se em campo de escolha, mantenha a opção seguida da referência: "Deferido (fls. 340)".
+═══ REGRA — SISTEMA DO TRIBUNAL ═══
+Primeiro identifique, pelo cabeçalho/rodapé/numeração do PDF, qual sistema processual gerou o
+documento, e use SEMPRE o rótulo correspondente nas referências:
+  - PJe                → "Mov. <nº>"
+  - eSAJ / físico       → "fls. <nº>"
+  - Eproc               → "Evento <nº>"
+  - Projudi / outro     → "ID <nº>"
+Use o MESMO rótulo em todo o documento (não misture "fls." com "Mov." sem necessidade).
+
+═══ REGRA — REFERÊNCIA OBRIGATÓRIA DA FONTE (SEM EXCEÇÃO) ═══
+TODA informação que você preencher — cada campo, cada linha de cada tabela, cada valor, data, nome,
+matrícula, condição do PRJ, classe do QGC, situação da AGC, endividamento, etc. — deve trazer ao final,
+entre parênteses, a referência exata de onde foi extraída (ex.: "(Mov. 340)", "(fls. 88)",
+"(Evento 12)"). Isso vale para TODOS os campos do JSON abaixo, mesmo os que não têm um exemplo de
+referência escrito explicitamente — o exemplo "(fls.)"/"(Mov./ID/fls./Evento)" que aparece no molde
+abaixo é só uma INSTRUÇÃO DE FORMATO PARA VOCÊ, não é texto para copiar. Você deve SEMPRE substituí-lo
+pela referência real e específica daquele dado.
+NUNCA devolva a anotação de formato vazia ou literal (nunca escreva "(fls.)" sozinho, sem número, nem
+"(Mov./ID/fls./Evento)" literalmente). Se um campo tiver informação mas você não conseguir localizar a
+página/movimentação exata dele, ainda assim preencha o valor e finalize com "(referência não localizada)"
+em vez de inventar um número.
 
 ═══ REGRA — CAMPO NÃO ENCONTRADO ═══
-Se um dado factual não constar em NENHUMA parte do processo, preencha com "Não consta".
-Em campos de escolha, responda com a opção EXATA e ÚNICA (ex: "Deferido"). NUNCA marque mais de uma
-opção; se não houver informação, deixe "".
+Se um dado factual não constar em NENHUMA parte do processo, preencha com "Não consta" (sem parênteses).
+Em campos de escolha, responda com a opção EXATA e ÚNICA (ex: "Deferido (Mov. 12)"). NUNCA marque mais de
+uma opção; se não houver informação, deixe "" (nenhuma opção marcada).
 
 Responda SOMENTE com o JSON.
 
 {
   "rj_numero": "", "vara": "", "data_analise": "",
-  "requerentes": "Nome · CPF/CNPJ ... (fls.)",
-  "advogados_requerentes": "(fls.)",
-  "administrador_judicial": "Nome (fls./Mov.)",
-  "data_pedido": "DD/MM/AAAA (fls.)", "data_deferimento": "DD/MM/AAAA (fls./Mov.)",
-  "consolidacao_substancial": "Deferido/Indeferido/... (fls.)",
-  "periodo_blindagem": "Ativo/Inativo (fls.)",
-  "previsao_encerramento_stay": "DD/MM/AAAA (fls.)",
-  "stay_prorrogavel": "Sim | Não | ''",
-  "recursos_relevantes": [{"recurso": "(fls.)", "status": ""}],
-  "imoveis_requerentes": [{"matricula": "nº (fls.)", "cartorio": "", "descricao": "", "proprietario": ""}],
-  "imoveis_essenciais": [{"matricula": "nº (fls.)", "cartorio": "", "descricao": "", "proprietario": ""}],
-  "prj_classe_ii": {"desagio": "(fls.)", "carencia": "", "parcelas": "", "juros": "", "correcao": ""},
-  "prj_classe_iii": {"desagio": "(fls.)", "carencia": "", "parcelas": "", "juros": "", "correcao": ""},
-  "qgc": {"classe_i": "R$ (fls.)", "classe_ii": "R$ (fls.)", "classe_iii": "R$ (fls.)", "classe_iv": "R$ (fls.)", "total": "R$ (fls.)"},
-  "agc_situacao": "opção (fls.)",
-  "agc_1a": "DD/MM/AAAA (fls.)", "agc_2a": "DD/MM/AAAA (fls.)", "agc_continuacao": "(fls.)",
-  "recuperandos": [{"nome": "", "ecac": "R$ (fls.)", "divida_ativa": "R$ (fls.)"}],
-  "endividamento_fiscal_total": "R$",
+  "requerentes": "Nome · CPF/CNPJ ... (referência)",
+  "advogados_requerentes": "(referência)",
+  "administrador_judicial": "Nome (referência)",
+  "data_pedido": "DD/MM/AAAA (referência)", "data_deferimento": "DD/MM/AAAA (referência)",
+  "consolidacao_substancial": "Deferido/Indeferido/... (referência)",
+  "periodo_blindagem": "Ativo/Inativo (referência)",
+  "previsao_encerramento_stay": "DD/MM/AAAA (referência)",
+  "stay_prorrogavel": "Sim (referência) | Não (referência) | ''",
+  "recursos_relevantes": [{"recurso": "(referência)", "status": "(referência)"}],
+  "imoveis_requerentes": [{"matricula": "nº (referência)", "cartorio": "(referência)", "descricao": "(referência)", "proprietario": "(referência)"}],
+  "imoveis_essenciais": [{"matricula": "nº (referência)", "cartorio": "(referência)", "descricao": "(referência)", "proprietario": "(referência)"}],
+  "prj_classe_ii": {"desagio": "(referência)", "carencia": "(referência)", "parcelas": "(referência)", "juros": "(referência)", "correcao": "(referência)"},
+  "prj_classe_iii": {"desagio": "(referência)", "carencia": "(referência)", "parcelas": "(referência)", "juros": "(referência)", "correcao": "(referência)"},
+  "qgc": {"classe_i": "R$ (referência)", "classe_ii": "R$ (referência)", "classe_iii": "R$ (referência)", "classe_iv": "R$ (referência)", "total": "R$ (referência)"},
+  "agc_situacao": "opção (referência)",
+  "agc_1a": "DD/MM/AAAA (referência)", "agc_2a": "DD/MM/AAAA (referência)", "agc_continuacao": "(referência)",
+  "recuperandos": [{"nome": "(referência)", "ecac": "R$ (referência)", "divida_ativa": "R$ (referência)"}],
+  "endividamento_fiscal_total": "R$ (referência)",
   "documentos_salvos": {
-    "peticao_inicial":       {"status": "Salvo | Pendente", "folhas": "fls./Mov. onde consta"},
+    "peticao_inicial":       {"status": "Salvo | Pendente", "folhas": "referência exata onde consta"},
     "quadro_ativos":         {"status": "Anexado | Não existente", "folhas": ""},
     "pericia_previa":        {"status": "Anexado | Não existente", "folhas": ""},
     "laudo_imoveis":         {"status": "Anexado | Não existente", "folhas": ""},
@@ -198,8 +213,11 @@ Responda SOMENTE com o JSON.
   }
 }
 
-Para documentos_salvos: informe, para cada documento, se ele está anexado/salvo no processo e em quais
-folhas (fls.) ou movimentação (Mov./ID/Evento) ele aparece. Se não aparecer, status "Não existente".
+Para documentos_salvos: informe, para cada documento, se ele está anexado/salvo no processo e a
+referência exata (fls./Mov./ID/Evento) onde ele aparece — sem os colchetes do molde de preenchimento
+manual ("[caso haja, indicar páginas]"): esse texto é só a instrução do molde para humanos e NUNCA deve
+aparecer no seu JSON; escreva o número/referência real, ou deixe "folhas" vazio se o documento não
+existir no processo (status "Não existente").
 
 TEXTO:
 """
@@ -269,7 +287,7 @@ def _build_checklist_rj(dados: dict) -> str:
     _spacer(doc)
 
     # ── 3. QUADRO GERAL DE CREDORES (QGC) ────────────────────────────────
-    _sec_title(doc, "3. QUADRO GERAL DE CREDORES (QGC)")
+    _sec_title(doc, "3. QUADRO GERAL DE CREDORES (QGC):")
     qgc = dados.get("qgc") or {}
     _kv_table(doc, ["CLASSE", "VALOR"], [
         ("Classe I",   qgc.get("classe_i", "R$")),
@@ -296,7 +314,7 @@ def _build_checklist_rj(dados: dict) -> str:
     _sec_title(doc, "5. ENDIVIDAMENTO GERAL")
     recuperandos = dados.get("recuperandos") or [{}]
     for i, rec in enumerate(recuperandos, 1):
-        nome = rec.get("nome", "") or "[Nome / CPF-CNPJ]"
+        nome = rec.get("nome", "") or "Não consta"
         _sub_gray(doc, f"RECUPERANDO {i} — {nome}")
         _kv_table(doc, ["ENDIVIDAMENTO FISCAL", "VALOR / STATUS"], [
             ("Endividamento Fiscal — e-CAC",
@@ -319,7 +337,7 @@ def _build_checklist_rj(dados: dict) -> str:
     for key, label, opts in _DOCS_ITEM6:
         info = docs_salvos.get(key) or {}
         rows6.append((label, _cb(opts, info.get("status", "")), info.get("folhas", "")))
-    _grid_table(doc, ["DOCUMENTO", "STATUS", "FOLHAS"], rows6, [8.0, 5.9, 3.0])
+    _grid_table(doc, ["DOCUMENTO", "STATUS", "REFERÊNCIA"], rows6, [8.0, 5.9, 3.0])
 
     _rodape_conf(doc)
     return _salvar(doc, "Checklist_RJ", dados)
