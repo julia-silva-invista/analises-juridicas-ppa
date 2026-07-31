@@ -12,7 +12,20 @@ import hashlib
 from pathlib import Path
 from typing import Optional
 
-BASE_DIR_RJ_JOBS = Path("resultados") / "rj_jobs"
+def _detectar_base_dir() -> Path:
+    """Usa um Storage Bucket montado em /data (persistente entre restarts do
+    Space) quando disponivel; caso contrario cai para resultados/ local
+    (comportamento original, usado tambem quando rodando fora do Space)."""
+    override = os.getenv("RJ_JOBS_DIR")
+    if override:
+        return Path(override)
+    data_dir = Path("/data")
+    if data_dir.exists() and data_dir.is_dir():
+        return data_dir / "rj_jobs"
+    return Path("resultados") / "rj_jobs"
+
+
+BASE_DIR_RJ_JOBS = _detectar_base_dir()
 RETENCAO_DIAS_RJ = int(os.getenv("RJ_JOB_RETENCAO_DIAS", "7"))
 RETENCAO_DIAS_RJ_CONCLUIDO = int(os.getenv("RJ_JOB_RETENCAO_DIAS_CONCLUIDO", "2"))
 

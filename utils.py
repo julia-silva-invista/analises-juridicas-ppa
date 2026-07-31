@@ -18,6 +18,13 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 # 10 min cobre folgado ate a consolidacao; acima disso e hang de verdade.
 GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "600000"))
 
+# DPI/qualidade JPEG usados ao re-renderizar paginas escaneadas na compressao.
+# Reduzidos do padrao anterior (110/48) para aliviar uso de memoria/CPU em
+# volumes muito grandes (muitos arquivos/paginas escaneadas em paralelo) —
+# ainda legivel pela IA, so um pouco menos nitido visualmente.
+SCAN_DPI           = int(os.getenv("SCAN_DPI", "90"))
+SCAN_JPEG_QUALITY   = int(os.getenv("SCAN_JPEG_QUALITY", "40"))
+
 
 def _get_clients_rj():
     k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
@@ -188,9 +195,9 @@ def _comprimir_pdf_limite(path: str, max_mb: float = 40.0) -> tuple:
         try: os.remove(comp)
         except: pass
 
-    # 110 DPI é o ponto de partida — evita passes desnecessários em 150/130 DPI
-    # que para PDFs de texto raramente cabem no limite
-    for dpi, quality in [(110, 42), (96, 40), (80, 38)]:
+    # Ponto de partida alinhado ao novo padrao mais leve (SCAN_DPI) — evita passes
+    # desnecessarios em DPI mais alto, que para PDFs de texto raramente cabem no limite
+    for dpi, quality in [(SCAN_DPI, 38), (76, 36), (65, 34)]:
         tmp_path = None
         try:
             doc = fitz.open(path)
@@ -222,7 +229,8 @@ def _comprimir_pdf_limite(path: str, max_mb: float = 40.0) -> tuple:
 
 def _comprimir_pdf(path: str) -> tuple:
     """
-    Re-renderiza páginas escaneadas a 110 DPI / JPEG quality 48 (moderado-alto).
+    Re-renderiza páginas escaneadas a SCAN_DPI/SCAN_JPEG_QUALITY (padrão: 90 DPI,
+    qualidade 40 — reduzido para aliviar memória/CPU em volumes muito grandes).
     Páginas de texto são copiadas sem perda. Retorna (path_comprimido, mb_original, mb_comprimido).
     Se a compressão não trouxer ganho ou falhar, devolve o path original.
     """
@@ -231,6 +239,20 @@ def _comprimir_pdf(path: str) -> tuple:
     try:
         doc = fitz.open(path)
         new_doc = fitz.open()
+
+        # Copia paginas de texto em blocos (ranges consecutivos), nao uma a uma —
+        # insert_pdf pagina-por-pagina fica muito lento (custo crescente) em
+        # documentos com milhares de paginas. O bloco pendente e "descarregado"
+        # sempre que aparece uma pagina escaneada ou ao fim do documento; o
+        # conteudo e a ordem finais sao identicos ao metodo pagina-por-pagina.
+        bloco_texto_inicio = None
+
+        def _flush_bloco_texto(fim_exclusivo):
+            nonlocal bloco_texto_inicio
+            if bloco_texto_inicio is not None:
+                new_doc.insert_pdf(doc, from_page=bloco_texto_inicio, to_page=fim_exclusivo - 1)
+                bloco_texto_inicio = None
+
         for pn, page in enumerate(doc):
             txt = page.get_text().strip()
             alfa = sum(c.isalpha() for c in txt) if txt else 0
@@ -240,14 +262,18 @@ def _comprimir_pdf(path: str) -> tuple:
                 and len(txt.split()) >= 30
             )
             if is_text:
-                new_doc.insert_pdf(doc, from_page=pn, to_page=pn)
+                if bloco_texto_inicio is None:
+                    bloco_texto_inicio = pn
             else:
-                mat = fitz.Matrix(110 / 72, 110 / 72)
+                _flush_bloco_texto(pn)
+                mat = fitz.Matrix(SCAN_DPI / 72, SCAN_DPI / 72)
                 pix = page.get_pixmap(matrix=mat)
-                img_bytes = pix.tobytes("jpeg", jpg_quality=48)
+                img_bytes = pix.tobytes("jpeg", jpg_quality=SCAN_JPEG_QUALITY)
                 rect = page.rect
                 new_page = new_doc.new_page(width=rect.width, height=rect.height)
                 new_page.insert_image(rect, stream=img_bytes, keep_proportion=False)
+        _flush_bloco_texto(len(doc))
+
         tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
         tmp_path = tmp.name
         tmp.close()
