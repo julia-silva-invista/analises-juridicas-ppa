@@ -49,6 +49,8 @@ def _cb(options, selected=""):
     'Desfavorável' (favoravel é substring de desfavoravel).
     """
     sel = _norm_cb(selected)
+    if sel.startswith("nao consta"):
+        sel = ""  # sentinel de "informação não encontrada" — nunca é uma opção marcável
     best_i, best_score = -1, 0
     if sel:
         for i, opt in enumerate(options):
@@ -67,6 +69,17 @@ def _cb(options, selected=""):
                 best_score, best_i = score, i
     return "   ".join(("☑ " if i == best_i and best_score > 0 else "☐ ") + opt
                       for i, opt in enumerate(options))
+
+
+def _as_list(value) -> list:
+    """Extração pode devolver tipo errado num campo-lista (PDF ruim/confuso).
+    Nunca deixa isso quebrar a geração do documento."""
+    return value if isinstance(value, list) else []
+
+
+def _as_dict(value) -> dict:
+    """Mesma defesa de _as_list, para campos que devem ser dict."""
+    return value if isinstance(value, dict) else {}
 
 
 def _titulo(doc, titulo, subtitulo="PPA Invista"):
@@ -122,7 +135,8 @@ def _extrair(prompt_base, fonte, client, model):
         raw = _retry(_fn, tentativas=3, espera_base=10)
         raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.IGNORECASE)
         raw = re.sub(r"\n?```$", "", raw.strip())
-        return json.loads(raw)
+        dados = json.loads(raw)
+        return dados if isinstance(dados, dict) else {}
     except Exception:
         return {}
 
@@ -250,7 +264,7 @@ def _build_checklist_rj(dados: dict) -> str:
     _sub_gray(doc, "Recursos Relevantes")
     _grid_table(
         doc, ["RECURSO RELEVANTE", "STATUS"],
-        [[r.get("recurso", ""), r.get("status", "")] for r in (dados.get("recursos_relevantes") or [])],
+        [[_as_dict(r).get("recurso", ""), _as_dict(r).get("status", "")] for r in _as_list(dados.get("recursos_relevantes"))],
         [10.9, 6.0], min_rows=1,
     )
     _spacer(doc, pts=2)
@@ -260,14 +274,16 @@ def _build_checklist_rj(dados: dict) -> str:
     ws_imo = [3.0, 3.5, 6.4, 4.0]
     _sub_gray(doc, "Imóveis dos Requerentes")
     _grid_table(doc, cols_imo,
-                [[i.get("matricula", ""), i.get("cartorio", ""), i.get("descricao", ""), i.get("proprietario", "")]
-                 for i in (dados.get("imoveis_requerentes") or [])],
+                [[_as_dict(i).get("matricula", ""), _as_dict(i).get("cartorio", ""),
+                  _as_dict(i).get("descricao", ""), _as_dict(i).get("proprietario", "")]
+                 for i in _as_list(dados.get("imoveis_requerentes"))],
                 ws_imo, min_rows=2)
     _spacer(doc, pts=2)
     _sub_gray(doc, "Imóveis Essenciais")
     _grid_table(doc, cols_imo,
-                [[i.get("matricula", ""), i.get("cartorio", ""), i.get("descricao", ""), i.get("proprietario", "")]
-                 for i in (dados.get("imoveis_essenciais") or [])],
+                [[_as_dict(i).get("matricula", ""), _as_dict(i).get("cartorio", ""),
+                  _as_dict(i).get("descricao", ""), _as_dict(i).get("proprietario", "")]
+                 for i in _as_list(dados.get("imoveis_essenciais"))],
                 ws_imo, min_rows=2)
     _spacer(doc)
 
@@ -278,7 +294,7 @@ def _build_checklist_rj(dados: dict) -> str:
     for classe, key in [("Condições da Classe II", "prj_classe_ii"),
                         ("Condições da Classe III", "prj_classe_iii")]:
         _sub_gray(doc, classe)
-        c = dados.get(key) or {}
+        c = _as_dict(dados.get(key))
         _grid_table(doc, cols_cond,
                     [[c.get("desagio", ""), c.get("carencia", ""), c.get("parcelas", ""),
                       c.get("juros", ""), c.get("correcao", "")]],
@@ -288,7 +304,7 @@ def _build_checklist_rj(dados: dict) -> str:
 
     # ── 3. QUADRO GERAL DE CREDORES (QGC) ────────────────────────────────
     _sec_title(doc, "3. QUADRO GERAL DE CREDORES (QGC):")
-    qgc = dados.get("qgc") or {}
+    qgc = _as_dict(dados.get("qgc"))
     _kv_table(doc, ["CLASSE", "VALOR"], [
         ("Classe I",   qgc.get("classe_i", "R$")),
         ("Classe II",  qgc.get("classe_ii", "R$")),
@@ -312,8 +328,9 @@ def _build_checklist_rj(dados: dict) -> str:
 
     # ── 5. ENDIVIDAMENTO GERAL ───────────────────────────────────────────
     _sec_title(doc, "5. ENDIVIDAMENTO GERAL")
-    recuperandos = dados.get("recuperandos") or [{}]
+    recuperandos = _as_list(dados.get("recuperandos")) or [{}]
     for i, rec in enumerate(recuperandos, 1):
+        rec = _as_dict(rec)
         nome = rec.get("nome", "") or "Não consta"
         _sub_gray(doc, f"RECUPERANDO {i} — {nome}")
         _kv_table(doc, ["ENDIVIDAMENTO FISCAL", "VALOR / STATUS"], [
@@ -332,10 +349,10 @@ def _build_checklist_rj(dados: dict) -> str:
 
     # ── 6. CHECKLIST DOS DOCUMENTOS SALVOS ───────────────────────────────
     _sec_title(doc, "6. CHECKLIST DOS DOCUMENTOS SALVOS")
-    docs_salvos = dados.get("documentos_salvos") or {}
+    docs_salvos = _as_dict(dados.get("documentos_salvos"))
     rows6 = []
     for key, label, opts in _DOCS_ITEM6:
-        info = docs_salvos.get(key) or {}
+        info = _as_dict(docs_salvos.get(key))
         rows6.append((label, _cb(opts, info.get("status", "")), info.get("folhas", "")))
     _grid_table(doc, ["DOCUMENTO", "STATUS", "REFERÊNCIA"], rows6, [8.0, 5.9, 3.0])
 
