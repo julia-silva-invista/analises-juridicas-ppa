@@ -67,8 +67,15 @@ def _cb(options, selected=""):
                 score = 0
             if score > best_score:
                 best_score, best_i = score, i
-    return "   ".join(("☑ " if i == best_i and best_score > 0 else "☐ ") + opt
-                      for i, opt in enumerate(options))
+    linha = "   ".join(("☑ " if i == best_i and best_score > 0 else "☐ ") + opt
+                       for i, opt in enumerate(options))
+    # Preserva a referência (Mov./fls./ID/Evento) que o modelo anexou ao valor
+    # extraído — sem isso, campos de escolha perdiam a referência ao virar
+    # só símbolos de checkbox.
+    ref = re.search(r"\([^()]*\)\s*$", str(selected or ""))
+    if ref and best_score > 0:
+        linha += "  " + ref.group(0)
+    return linha
 
 
 def _as_list(value) -> list:

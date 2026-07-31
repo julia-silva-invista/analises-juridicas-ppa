@@ -16,6 +16,11 @@ import types as pytypes
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# Console do Windows às vezes usa cp1252 e não imprime ☑/☐ — evita crash no print.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 # ── Stubs de dependências externas (não precisamos de rede/API key) ────────
 try:
     import gradio  # noqa: F401
@@ -58,10 +63,12 @@ class FakeClient:
     def __init__(self, resposta: str):
         self._resposta = resposta
         self.chamadas = 0
+        self.ultima_chamada_kwargs = None
         self.models = self
 
     def generate_content(self, **kwargs):
         self.chamadas += 1
+        self.ultima_chamada_kwargs = kwargs
         resp = pytypes.SimpleNamespace()
         resp.text = self._resposta
         return resp
@@ -94,7 +101,20 @@ _PADROES_VAZAMENTO = [
     r"\[Nome",
 ]
 _REGEX_VAZAMENTO = re.compile("|".join(_PADROES_VAZAMENTO), re.IGNORECASE)
-_REGEX_REFERENCIA_REAL = re.compile(r"\((?:Mov\.|fls\.|Evento|ID)\s+\S+", re.IGNORECASE)
+
+# Ruído estrutural: marcadores de separação de chunk (rj._rj_merge_textos) que,
+# num processo gigante dividido em muitas partes, podem acabar ecoados pelo
+# modelo dentro de um campo em vez de filtrados — não é uma instrução de
+# formato, mas também não deveria aparecer no documento final.
+_REGEX_RUIDO_ESTRUTURAL = re.compile(r"={10,}|PARTE\s+\d+\s*/\s*\d+", re.IGNORECASE)
+
+# Referência "de verdade": rótulo do sistema seguido de um número real ou de
+# "s/n" (sem número — comum em processos físicos antigos). Exige \d ou "s/n"
+# para não contar como válida uma referência vazia/garbled tipo "(Mov. )" ou
+# "(fls. -)" que uma digitalização ruim poderia produzir.
+_REGEX_REFERENCIA_REAL = re.compile(
+    r"\((?:Mov\.|fls\.|Evento|ID)\s+(?:\d[\d./-]*|s\.?\s*/\s*n\.?)\b", re.IGNORECASE
+)
 
 
 def _iter_celulas(doc: Document):
@@ -120,6 +140,15 @@ def contar_referencias(docx_path: str) -> int:
         if texto and _REGEX_REFERENCIA_REAL.search(texto):
             total += 1
     return total
+
+
+def achar_ruido_estrutural(docx_path: str):
+    doc = Document(docx_path)
+    achados = []
+    for ti, ri, ci, texto in _iter_celulas(doc):
+        if texto and _REGEX_RUIDO_ESTRUTURAL.search(texto):
+            achados.append((ti, ri, ci, texto.strip()[:120]))
+    return achados
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -239,6 +268,110 @@ def fixture_checkbox_ambiguo() -> dict:
     return dados
 
 
+def fixture_processo_gigante() -> dict:
+    """Processo enorme: muitos recuperandos/imóveis/recursos — checa volume e desempenho."""
+    dados = _base_limpa("Mov.")
+    dados["recuperandos"] = [
+        {"nome": f"Recuperando {i} Participações S.A. (Mov. {1000 + i})",
+         "ecac": f"R$ {i * 12_345},67 (Mov. {2000 + i})",
+         "divida_ativa": f"R$ {i * 6_789},01 (Mov. {3000 + i})"}
+        for i in range(1, 61)
+    ]
+    dados["imoveis_requerentes"] = [
+        {"matricula": f"{50_000 + i} (Mov. {4000 + i})", "cartorio": f"{(i % 12) + 1}º RI (Mov. {4000 + i})",
+         "descricao": f"Fazenda / gleba rural nº {i}, com benfeitorias (Mov. {4000 + i})",
+         "proprietario": f"Recuperando {i} Participações S.A. (Mov. {4000 + i})"}
+        for i in range(1, 121)
+    ]
+    dados["imoveis_essenciais"] = [
+        {"matricula": f"{90_000 + i} (Mov. {5000 + i})", "cartorio": f"{(i % 5) + 1}º RI (Mov. {5000 + i})",
+         "descricao": f"Unidade industrial {i} (Mov. {5000 + i})",
+         "proprietario": f"Recuperando {i} Participações S.A. (Mov. {5000 + i})"}
+        for i in range(1, 31)
+    ]
+    dados["recursos_relevantes"] = [
+        {"recurso": f"Agravo de Instrumento nº {i} (Mov. {6000 + i})", "status": f"Pendente de julgamento (Mov. {6000 + i})"}
+        for i in range(1, 41)
+    ]
+    return dados
+
+
+def fixture_mal_digitalizado_antigo() -> dict:
+    """Processo físico antigo, digitalização ruim: texto quebrado, refs sem número,
+    moeda em formato antigo, campo enorme (parágrafo inteiro colado), muitos "Não consta"."""
+    dados = _base_limpa("fls.")
+    texto_colado = (
+        "Em cumprimento ao despacho de fls. 12, certifico e dou fé que procedi a  ju nta da"
+        " da  do cumen taçao acostada aos autos, referen te ao pedido de recuperaçã0 judicial"
+        " formulado pel a empresa r equer ente, cujos t ermos passo a transcr ever na integra "
+        "para os devidos fins de direi to, ficando consig nado que a numeraçao das folhas pode"
+        " apresentar falhas em razão do estado de conservação dos autos fisicos digitalizados "
+        "neste ato (fls. s/n).  " * 8
+    )
+    dados["requerentes"] = f"Empresa Antiga Textil Ltda (em Recuperação) · CNPJ ilegível (fls. s/n)"
+    dados["advogados_requerentes"] = "Não consta"
+    dados["administrador_judicial"] = texto_colado
+    dados["data_pedido"] = "12/03/2009 (fls. s/n)"
+    dados["data_deferimento"] = "Não consta"
+    dados["consolidacao_substancial"] = "Não consta"
+    dados["periodo_blindagem"] = "Não consta"
+    dados["previsao_encerramento_stay"] = "Não consta"
+    dados["stay_prorrogavel"] = ""
+    dados["agc_situacao"] = "Não consta"
+    dados["agc_1a"] = "Não consta"
+    dados["agc_2a"] = "Não consta"
+    dados["agc_continuacao"] = "Não consta"
+    dados["qgc"] = {
+        "classe_i": "Cr$ 8.000.000,00 (fls. s/n)", "classe_ii": "Não consta",
+        "classe_iii": "Cr$ 45.000.000,00 (fls. 340/342)", "classe_iv": "Não consta",
+        "total": "Não consta",
+    }
+    dados["imoveis_requerentes"] = [
+        {"matricula": "12.454-B (fls. 88/90)", "cartorio": "1º  R I  de   Cuiabá (fls. 88)",
+         "descricao": "Ga lp ão indus trial (fls. 88)", "proprietario": "Emp resa Antiga Textil (fls. 88)"},
+    ]
+    dados["recuperandos"] = [
+        {"nome": "Empresa Antiga Textil Ltda (fls. s/n)", "ecac": "Não consta", "divida_ativa": "Não consta"},
+    ]
+    dados["endividamento_fiscal_total"] = "Não consta"
+    dados["documentos_salvos"] = {
+        "peticao_inicial": {"status": "Salvo", "folhas": "s/n"},
+        "quadro_ativos": {"status": "Não existente/Segredo de Justiça", "folhas": ""},
+        "pericia_previa": {"status": "Não existente", "folhas": ""},
+        "laudo_imoveis": {"status": "Não existente", "folhas": ""},
+        "ultimo_rma": {"status": "Não existente", "folhas": ""},
+        "qgc_recuperando": {"status": "Anexado", "folhas": "340/342"},
+        "qgc_aj": {"status": "Não existente", "folhas": ""},
+        "relatorio_divergencia": {"status": "Não existente", "folhas": ""},
+        "prj_aditivos": {"status": "Não existente", "folhas": ""},
+        "atas_agc": {"status": "Não existente", "folhas": ""},
+    }
+    return dados
+
+
+def fixture_referencias_quebradas() -> dict:
+    """Referências presentes mas vazias/garbled — número perdido na digitalização.
+    Não é um vazamento de placeholder, mas também não é uma referência válida:
+    serve pra medir a precisão do próprio checador de referências."""
+    dados = _base_limpa("Mov.")
+    dados["requerentes"] = "Empresa Teste Ltda (Mov. )"
+    dados["consolidacao_substancial"] = "Deferido (fls. -)"
+    dados["qgc"]["total"] = "R$ 10.600.000,00 (Evento)"
+    return dados
+
+
+def fixture_ruido_estrutural() -> dict:
+    """Simula um processo gigante dividido em muitas partes (rj._rj_merge_textos)
+    cujo separador de chunk vazou para dentro de um campo extraído."""
+    dados = _base_limpa("Mov.")
+    dados["administrador_judicial"] = (
+        "AJ Consultoria (Mov. 15)\n============================================================\n"
+        "PARTE 7/12\n============================================================\n"
+        "continuação da atuação do AJ (Mov. 16)"
+    )
+    return dados
+
+
 def fixture_vazamento_proposital() -> dict:
     dados = _base_limpa("Mov.")
     dados["requerentes"] = "Empresa Teste Ltda (fls.)"
@@ -257,21 +390,30 @@ FIXTURES = {
     "clean_eproc": lambda: _base_limpa("Evento"),
     "clean_projudi": lambda: _base_limpa("ID"),
     "processo_longo_10_recuperandos": fixture_processo_longo,
+    "processo_gigante_60rec_120imoveis": fixture_processo_gigante,
     "ocr_ruim": fixture_ocr_ruim,
+    "mal_digitalizado_antigo": fixture_mal_digitalizado_antigo,
+    "referencias_quebradas": fixture_referencias_quebradas,
+    "ruido_estrutural_chunk": fixture_ruido_estrutural,
     "vazio_total": fixture_vazio_total,
     "tipos_malformados": fixture_tipos_malformados,
     "checkbox_ambiguo": fixture_checkbox_ambiguo,
     "vazamento_proposital": fixture_vazamento_proposital,
 }
 
-# fixtures que DEVEM sair 100% limpas (zero vazamento)
+# fixtures que DEVEM sair 100% limpas (zero vazamento de placeholder)
 FIXTURES_ESPERAM_ZERO_VAZAMENTO = {
     "clean_pje", "clean_esaj", "clean_eproc", "clean_projudi",
-    "processo_longo_10_recuperandos", "ocr_ruim", "vazio_total", "tipos_malformados",
-    "checkbox_ambiguo",
+    "processo_longo_10_recuperandos", "processo_gigante_60rec_120imoveis",
+    "ocr_ruim", "mal_digitalizado_antigo", "referencias_quebradas",
+    "ruido_estrutural_chunk", "vazio_total", "tipos_malformados", "checkbox_ambiguo",
 }
 # fixture que DEVE ter vazamento detectado (prova que o checador funciona)
 FIXTURES_ESPERAM_VAZAMENTO = {"vazamento_proposital"}
+# fixture que DEVE ter ruído estrutural detectado (prova que esse checador funciona)
+FIXTURES_ESPERAM_RUIDO_ESTRUTURAL = {"ruido_estrutural_chunk"}
+# limite de tempo (segundos) pra geração do documento — pega lentidão patológica
+LIMITE_SEGUNDOS_GERACAO = 8.0
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -320,6 +462,11 @@ CASOS_EXTRAIR = [
     ("truncado", '{"rj_numero": "123", "vara":', "FALLBACK_VAZIO"),
     ("vazio", "", "FALLBACK_VAZIO"),
     ("nao_e_objeto", "[1, 2, 3]", "FALLBACK_VAZIO"),
+    ("com_mojibake", '{"requerentes": "Empresa Teste �� Ltda (fls. 10)"}',
+     {"requerentes": "Empresa Teste �� Ltda (fls. 10)"}),
+    ("com_ruido_estrutural_no_valor",
+     '{"administrador_judicial": "AJ (Mov. 15)\\n====\\nPARTE 2/5\\n====\\ncontinua (Mov. 16)"}',
+     {"administrador_judicial": "AJ (Mov. 15)\n====\nPARTE 2/5\n====\ncontinua (Mov. 16)"}),
 ]
 
 
@@ -341,11 +488,36 @@ def testar_extrair():
     return falhas
 
 
+def testar_extrair_fonte_gigante():
+    """Processo gigante: fonte >900k chars — confirma que o truncamento
+    (checklist_rj.py: fonte[:900_000]) funciona e não estoura memória/exceção."""
+    falhas = []
+    prompt_base = "PROMPT_BASE\n"
+    fonte_gigante = "A" * 1_000_000
+    client = FakeClient('{"rj_numero": "OK"}')
+    try:
+        resultado = cr._extrair(prompt_base, fonte_gigante, client, "modelo-fake")
+    except Exception as e:  # noqa: BLE001
+        return [f"_extrair[fonte_gigante] levantou exceção: {e!r}"]
+    if resultado != {"rj_numero": "OK"}:
+        falhas.append(f"_extrair[fonte_gigante] resultado inesperado: {resultado!r}")
+    enviado = client.ultima_chamada_kwargs["contents"][0]["parts"][0]["text"]
+    esperado_len = len(prompt_base) + 900_000
+    if len(enviado) != esperado_len:
+        falhas.append(
+            f"_extrair[fonte_gigante] enviou {len(enviado)} chars ao modelo, "
+            f"esperava exatamente {esperado_len} (prompt_base + fonte truncada em 900_000)"
+        )
+    return falhas
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Execução principal
 # ══════════════════════════════════════════════════════════════════════════
 
 def rodar_bateria():
+    import time
+
     resultados = []
     falhas_totais = []
 
@@ -357,6 +529,10 @@ def rodar_bateria():
     resultados.append(("_extrair (parsing da resposta)", len(CASOS_EXTRAIR), len(falhas_extrair)))
     falhas_totais.extend(f"[_extrair] {f}" for f in falhas_extrair)
 
+    falhas_truncamento = testar_extrair_fonte_gigante()
+    resultados.append(("_extrair (truncamento fonte gigante)", 1, len(falhas_truncamento)))
+    falhas_totais.extend(f"[_extrair] {f}" for f in falhas_truncamento)
+
     print("=" * 78)
     print("BATERIA DE FIDELIDADE — CHECKLIST RJ")
     print("=" * 78)
@@ -365,12 +541,17 @@ def rodar_bateria():
         dados = copy.deepcopy(fabrica())
         erro_build = None
         vazamentos = []
+        ruidos = []
         n_refs = 0
+        inicio = time.perf_counter()
         try:
             caminho = cr._build_checklist_rj(dados)
+            duracao = time.perf_counter() - inicio
             vazamentos = achar_vazamentos(caminho)
+            ruidos = achar_ruido_estrutural(caminho)
             n_refs = contar_referencias(caminho)
         except Exception as e:  # noqa: BLE001
+            duracao = time.perf_counter() - inicio
             erro_build = repr(e)
 
         status = "OK"
@@ -383,14 +564,29 @@ def rodar_bateria():
         elif nome in FIXTURES_ESPERAM_VAZAMENTO and not vazamentos:
             status = "FALHA (checador não detectou vazamento esperado)"
             falhas_totais.append(f"[{nome}] esperava vazamento detectado, não achou nenhum")
+        elif nome in FIXTURES_ESPERAM_RUIDO_ESTRUTURAL and not ruidos:
+            status = "FALHA (checador não detectou ruído estrutural esperado)"
+            falhas_totais.append(f"[{nome}] esperava ruído estrutural detectado, não achou nenhum")
+        elif nome not in FIXTURES_ESPERAM_RUIDO_ESTRUTURAL and ruidos:
+            status = "FALHA (ruído estrutural inesperado)"
+            falhas_totais.append(f"[{nome}] ruído estrutural inesperado: {ruidos}")
+        elif not erro_build and duracao > LIMITE_SEGUNDOS_GERACAO:
+            status = "FALHA (lento)"
+            falhas_totais.append(f"[{nome}] geração levou {duracao:.2f}s (limite {LIMITE_SEGUNDOS_GERACAO}s)")
 
-        print(f"{nome:38s} status={status:38s} refs={n_refs:3d} vazamentos={len(vazamentos)}")
+        print(f"{nome:38s} status={status:38s} refs={n_refs:3d} vazam={len(vazamentos)} ruido={len(ruidos)} {duracao:.2f}s")
         if vazamentos and nome in FIXTURES_ESPERAM_VAZAMENTO:
             for v in vazamentos:
                 print(f"    (esperado) tabela={v[0]} linha={v[1]} col={v[2]}: {v[3]!r}")
         elif vazamentos:
             for v in vazamentos:
                 print(f"    !! tabela={v[0]} linha={v[1]} col={v[2]}: {v[3]!r}")
+        if ruidos and nome in FIXTURES_ESPERAM_RUIDO_ESTRUTURAL:
+            for r in ruidos:
+                print(f"    (esperado) ruído tabela={r[0]} linha={r[1]} col={r[2]}: {r[3]!r}")
+        elif ruidos:
+            for r in ruidos:
+                print(f"    !! ruído tabela={r[0]} linha={r[1]} col={r[2]}: {r[3]!r}")
 
     print("-" * 78)
     for nome, total, n_falhas in resultados:
