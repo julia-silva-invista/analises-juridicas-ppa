@@ -492,9 +492,24 @@ def movimentos_do_ato(event: dict, prev: dict | None) -> list[dict]:
     atual = _socios_map(event)
     anterior = _socios_map(prev) if prev else {}
 
+    cessoes = event.get("cessoes") or []
+    # Sócios cuja entrada/saída já é explicada por uma cessão deste mesmo ato —
+    # evita mostrar "Entrada de sócio"/"Saída de sócio" redundante ao lado do
+    # bloco de "Cessão de quotas" entre as mesmas pessoas.
+    cedentes_que_sairam = {
+        str(c.get("cedente", "")).strip()
+        for c in cessoes
+        if str(c.get("cedente", "")).strip() in anterior and str(c.get("cedente", "")).strip() not in atual
+    }
+    cessionarios_que_entraram = {
+        str(c.get("cessionario", "")).strip()
+        for c in cessoes
+        if str(c.get("cessionario", "")).strip() in atual and str(c.get("cessionario", "")).strip() not in anterior
+    }
+
     if prev:
         for nome, pct in atual.items():
-            if nome not in anterior:
+            if nome not in anterior and nome not in cessionarios_que_entraram:
                 movs.append(
                     {
                         "tipo": "entrada",
@@ -504,7 +519,7 @@ def movimentos_do_ato(event: dict, prev: dict | None) -> list[dict]:
                     }
                 )
         for nome, pct in anterior.items():
-            if nome not in atual:
+            if nome not in atual and nome not in cedentes_que_sairam:
                 movs.append(
                     {
                         "tipo": "saida",
@@ -514,20 +529,21 @@ def movimentos_do_ato(event: dict, prev: dict | None) -> list[dict]:
                     }
                 )
 
-    for cessao in event.get("cessoes") or []:
+    for cessao in cessoes:
         cedente = str(cessao.get("cedente", "")).strip()
         cessionario = str(cessao.get("cessionario", "")).strip()
         if not (cedente or cessionario):
             continue
-        extra = " · ".join(
-            x
-            for x in [
-                str(cessao.get("participacao", "")).strip(),
-                str(cessao.get("valor", "")).strip(),
-                str(cessao.get("observacao", "")).strip(),
-            ]
-            if x
-        )
+        extra_itens = [
+            str(cessao.get("participacao", "")).strip(),
+            str(cessao.get("valor", "")).strip(),
+            str(cessao.get("observacao", "")).strip(),
+        ]
+        if cessionario in cessionarios_que_entraram:
+            extra_itens.append(f"Entrada: {cessionario}")
+        if cedente in cedentes_que_sairam:
+            extra_itens.append(f"Saída: {cedente}")
+        extra = " · ".join(x for x in extra_itens if x)
         movs.append(
             {
                 "tipo": "cessao",
@@ -557,36 +573,9 @@ def movimentos_do_ato(event: dict, prev: dict | None) -> list[dict]:
         )
         movs.append({"tipo": tipo, "rotulo": rotulo, "nome": nome, "extra": extra})
 
-    admin_atual = _joined_people(event.get("administradores_apos", []))
-    admin_anterior = _joined_people((prev or {}).get("administradores_apos", [])) if prev else ""
-    if prev and admin_atual and admin_atual != admin_anterior:
-        movs.append(
-            {
-                "tipo": "admin",
-                "rotulo": "Troca de administração",
-                "nome": f"{admin_anterior or '—'} → {admin_atual}",
-                "extra": "",
-            }
-        )
-
-    capital = str(event.get("capital_social_apos", "")).strip()
-    capital_anterior = str(event.get("capital_social_anterior", "")).strip()
-    if prev and not capital_anterior:
-        capital_anterior = str(prev.get("capital_social_apos", "")).strip()
-    if capital and capital_anterior and capital != capital_anterior:
-        antes, depois = _valor_num(capital_anterior), _valor_num(capital)
-        subiu = antes is not None and depois is not None and depois > antes
-        delta = ""
-        if antes is not None and depois is not None:
-            delta = ("+ " if subiu else "− ") + _moeda(abs(depois - antes))
-        movs.append(
-            {
-                "tipo": "capital-up" if subiu else "capital-down",
-                "rotulo": "Aumento de capital" if subiu else "Redução de capital",
-                "nome": f"{capital_anterior} → {capital}",
-                "extra": delta,
-            }
-        )
+    # Troca de administração e variação de capital não geram mais cartão próprio
+    # na timeline — ficam só no "Ver detalhamento" (modal) e na tabela do Word,
+    # onde já aparecem como parte do estado da sociedade após o ato.
 
     sede = str(event.get("sede_apos", "")).strip()
     sede_anterior = str((prev or {}).get("sede_apos", "")).strip() if prev else ""
@@ -607,12 +596,13 @@ def movimentos_do_ato(event: dict, prev: dict | None) -> list[dict]:
         movs.append({"tipo": "filial", "rotulo": "Filial aberta", "nome": filiais, "extra": ""})
 
     if not movs:
+        capital_apos = str(event.get("capital_social_apos", "")).strip()
         movs.append(
             {
                 "tipo": "base",
                 "rotulo": "Constituição" if not prev else "Sem alteração relevante",
                 "nome": _quadro_resumo(event),
-                "extra": (f"Capital {capital}" if capital else ""),
+                "extra": (f"Capital {capital_apos}" if capital_apos else ""),
             }
         )
     return movs
