@@ -416,6 +416,7 @@ with gr.Blocks(
                 visible=False,
                 wrap=True,
                 label="Edição dos eventos",
+                elem_classes=["tl-editor-table"],
             )
             tl_edicao_status = gr.Markdown("")
 

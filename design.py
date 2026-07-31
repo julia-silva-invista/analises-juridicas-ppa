@@ -1828,7 +1828,7 @@ button[title*="copy"] {
 }
 .tl2-head { padding: 24px 28px 20px; border-bottom: 1px solid #dededb; }
 .tl2-kicker {
-    display: block; color: #1c4d6b; font-size: 11px; font-weight: 800; letter-spacing: .14em;
+    display: block; color: #1A56A0; font-size: 11px; font-weight: 800; letter-spacing: .14em;
     text-transform: uppercase;
 }
 .tl2-head h2 { margin: 6px 0 4px; font-size: 25px; font-weight: 700; color: #2c302c; }
@@ -1850,8 +1850,8 @@ button[title*="copy"] {
     justify-content: center;
 }
 .tl2-pin {
-    width: 13px; height: 13px; border-radius: 50%; background: #1c4d6b; border: 2px solid #fff;
-    box-shadow: 0 0 0 1px #1c4d6b;
+    width: 13px; height: 13px; border-radius: 50%; background: #1A56A0; border: 2px solid #fff;
+    box-shadow: 0 0 0 1px #1A56A0;
 }
 .tl2-moves { margin-top: 18px; display: flex; flex-direction: column; gap: 7px; }
 .tl2-move { padding: 8px 9px; border-left: 3px solid #77817a; background: #f6f6f4; }
@@ -1944,6 +1944,22 @@ button[title*="copy"] {
     .timeline-intro, .tm-heading { align-items: flex-start; flex-direction: column; }
     .timeline-intro-note { min-width: 0; }
     .tm-matrix { grid-template-columns: 220px 1fr; }
+}
+
+/* Reset defensivo — evita qualquer clip/arredondamento herdado deformando a
+   tabela de edição da Timeline Societária (deve ser um retângulo comum, com
+   rolagem horizontal normal). */
+.tl-editor-table,
+.tl-editor-table > *,
+.tl-editor-table .table-wrap,
+.tl-editor-table table {
+    border-radius: 6px !important;
+    clip-path: none !important;
+    -webkit-clip-path: none !important;
+}
+.tl-editor-table .table-wrap {
+    overflow-x: auto !important;
+    overflow-y: visible !important;
 }
 
 """

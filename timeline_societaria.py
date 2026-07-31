@@ -19,7 +19,7 @@ from docx import Document
 from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
-from docx.shared import Pt, RGBColor
+from docx.shared import Inches, Pt, RGBColor
 from google import genai
 from google.genai import types
 from PIL import Image, ImageDraw, ImageFont
@@ -785,7 +785,7 @@ def timeline_ver_tabela(data: dict):
         [
             event.get("data", ""),
             event.get("ato", ""),
-            detalhamento_word(event, events[index - 1] if index else None),
+            " ".join(detalhamento_word(event, events[index - 1] if index else None)),
         ]
         for index, event in enumerate(events)
     ]
@@ -959,92 +959,124 @@ def timeline_exportar_imagem(data: dict) -> str:
 
 
 def timeline_exportar_imagem_vertical(data: dict) -> str:
-    """Cronologia em layout vertical, dimensionada para caber em uma folha A4 (retrato)."""
+    """Cronologia em layout vertical (cards coloridos, mesma linguagem visual da versão horizontal),
+    pensada para colar no dossiê em Word — altura livre, sem cortes."""
     events = (data or {}).get("eventos", [])
     if not events:
         raise gr.Error("Gere a timeline antes de exportar.")
 
-    width, height = 1654, 2339  # A4 retrato, ~200 dpi
-    pad = 46
-    header_h = 150
-    footer_h = 30
-    body_top = header_h
-    body_h = height - header_h - footer_h - pad
-    n = len(events)
-    band_h = body_h / n
-
-    axis_x = pad + 8
-    content_x = axis_x + 28
+    scale = 2
+    width = 1000 * scale
+    pad = 34 * scale
+    axis_x = pad + 6 * scale
+    content_x = axis_x + 26 * scale
     content_w = width - content_x - pad
+    header_h = 118 * scale
+    gap_evento = 22 * scale
+
+    text, muted, line, azul = "#2C302C", "#737670", "#E4E4E0", "#1A56A0"
+
+    probe = Image.new("RGB", (10, 10))
+    draw = ImageDraw.Draw(probe)
+    f_kicker = _font(9 * scale, True)
+    f_titulo = _font(19 * scale, True)
+    f_meta = _font(11 * scale)
+    f_data = _font(13 * scale, True)
+    f_ato = _font(9 * scale, True)
+    f_rotulo = _font(8 * scale, True)
+    f_nome = _font(10 * scale, True)
+    f_extra = _font(8 * scale)
+    f_quadro = _font(9 * scale)
+
+    itens = []
+    for idx, event in enumerate(events):
+        prev = events[idx - 1] if idx else None
+        blocos = []
+        for mov in movimentos_do_ato(event, prev):
+            nome_linhas = _wrap(draw, mov["nome"], f_nome, content_w - 16 * scale, 4)
+            extra_linhas = _wrap(draw, mov.get("extra", ""), f_extra, content_w - 16 * scale, 3)
+            bloco_h = (
+                9 * scale
+                + 12 * scale
+                + len(nome_linhas) * 14 * scale
+                + (len(extra_linhas) * 12 * scale + 3 * scale if extra_linhas else 0)
+                + 9 * scale
+            )
+            blocos.append(
+                {
+                    "cor": MOV_CORES.get(mov["tipo"], "#77817A"),
+                    "rotulo": mov["rotulo"].upper(),
+                    "nome": nome_linhas,
+                    "extra": extra_linhas,
+                    "altura": bloco_h,
+                }
+            )
+        quadro_linhas = _wrap(draw, _quadro_resumo(event), f_quadro, content_w, 4)
+        altura = 20 * scale + sum(b["altura"] + 8 * scale for b in blocos) + 16 * scale + len(quadro_linhas) * 13 * scale
+        itens.append({"event": event, "blocos": blocos, "quadro": quadro_linhas, "altura": altura})
+
+    body_h = sum(item["altura"] for item in itens) + gap_evento * max(0, len(itens) - 1)
+    height = header_h + body_h + pad
 
     image = Image.new("RGB", (width, height), "#FFFFFF")
     draw = ImageDraw.Draw(image)
 
-    f_kicker = _font(15, True)
-    f_titulo = _font(30, True)
-    f_meta = _font(15)
-    f_data = _font(17, True)
-    f_ato = _font(13, True)
-    f_nome = _font(13, True)
-    f_extra = _font(11)
-    f_quadro = _font(12)
-
-    draw.text((pad, 34), "CRONOLOGIA SOCIETÁRIA", fill="#1C4D6B", font=f_kicker)
-    draw.text((pad, 56), str(data.get("empresa", "") or "Sociedade analisada"), fill="#1F211F", font=f_titulo)
+    draw.text((pad, 30 * scale), "CRONOLOGIA SOCIETÁRIA", fill=azul, font=f_kicker)
+    draw.text((pad, 46 * scale), str(data.get("empresa", "") or "Sociedade analisada"), fill="#1F211F", font=f_titulo)
     meta = " · ".join(
         x
         for x in [
             ("CNPJ " + str(data.get("cnpj", ""))) if data.get("cnpj") else "",
-            f"{n} atos",
+            f"{len(events)} atos",
             _periodo(events),
         ]
         if x
     )
-    draw.text((pad, 100), meta, fill="#737670", font=f_meta)
-    draw.line((pad, header_h - 14, width - pad, header_h - 14), fill="#1F211F", width=2)
-    draw.line((axis_x, body_top, axis_x, body_top + body_h), fill="#E4E4E0", width=3)
+    draw.text((pad, 78 * scale), meta, fill=muted, font=f_meta)
+    draw.line((pad, header_h - 22 * scale, width - pad, header_h - 22 * scale), fill="#1F211F", width=2 * scale)
+    draw.line((axis_x, header_h, axis_x, header_h + body_h), fill=line, width=2 * scale)
 
-    y = body_top
-    for idx, event in enumerate(events):
-        prev = events[idx - 1] if idx else None
-        band_top, band_bottom = y, y + band_h
+    y = header_h
+    for item in itens:
+        event = item["event"]
+        r = 6 * scale
+        draw.ellipse((axis_x - r, y + 10 * scale - r, axis_x + r, y + 10 * scale + r), fill=azul)
 
-        r = 7
-        draw.ellipse((axis_x - r, band_top + 22 - r, axis_x + r, band_top + 22 + r), fill="#1C4D6B")
+        draw.text((content_x, y), str(event.get("data", "") or "—"), fill=text, font=f_data)
+        data_w = draw.textbbox((0, 0), str(event.get("data", "") or "—"), font=f_data)[2]
+        draw.text(
+            (content_x + data_w + 10 * scale, y + 2 * scale),
+            str(event.get("ato", "") or "Ato societário").upper(),
+            fill=muted,
+            font=f_ato,
+        )
+        yy = y + 20 * scale
 
-        cy = band_top
-        draw.text((content_x, cy), str(event.get("data", "") or "—"), fill="#1F211F", font=f_data)
-        draw.text((content_x + 130, cy + 2), str(event.get("ato", "") or "Ato societário").upper(), fill="#737670", font=f_ato)
-        cy += 22
+        for bloco in item["blocos"]:
+            draw.rectangle((content_x, yy, content_x + content_w, yy + bloco["altura"]), fill=_tint(bloco["cor"]))
+            draw.rectangle((content_x, yy, content_x + 3 * scale, yy + bloco["altura"]), fill=bloco["cor"])
+            ty = yy + 9 * scale
+            draw.text((content_x + 12 * scale, ty), bloco["rotulo"], fill=bloco["cor"], font=f_rotulo)
+            ty += 14 * scale
+            for linha_texto in bloco["nome"]:
+                draw.text((content_x + 12 * scale, ty), linha_texto, fill="#1F211F", font=f_nome)
+                ty += 14 * scale
+            if bloco["extra"]:
+                ty += 2 * scale
+                for linha_texto in bloco["extra"]:
+                    draw.text((content_x + 12 * scale, ty), linha_texto, fill=muted, font=f_extra)
+                    ty += 12 * scale
+            yy += bloco["altura"] + 8 * scale
 
-        movs = movimentos_do_ato(event, prev)
-        max_lines_avail = max(1, int((band_h - 22 - 16) // 15))
-        drawn = 0
-        for mov in movs:
-            if drawn >= max_lines_avail:
-                break
-            linha = f'{mov["rotulo"]}: {mov["nome"]}' + (f' ({mov["extra"]})' if mov.get("extra") else "")
-            wrapped = _wrap(draw, linha, f_nome, content_w, max_lines=1)
-            texto = wrapped[0] if wrapped else linha[:80]
-            draw.text((content_x, cy), "• " + texto, fill="#3F423E", font=f_nome)
-            cy += 15
-            drawn += 1
-        omitidos = len(movs) - drawn
-        if omitidos > 0 and cy < band_bottom - 13:
-            draw.text((content_x, cy), f"+ {omitidos} mais…", fill="#9A9C98", font=f_extra)
-            cy += 13
+        yy += 6 * scale
+        for linha_texto in item["quadro"]:
+            draw.text((content_x, yy), linha_texto, fill="#3F423E", font=f_quadro)
+            yy += 13 * scale
 
-        if cy < band_bottom - 13:
-            linha_q = _wrap(draw, "Quadro: " + _quadro_resumo(event), f_quadro, content_w, max_lines=1)
-            if linha_q:
-                draw.text((content_x, cy), linha_q[0], fill="#5C5A54", font=f_quadro)
+        y += item["altura"] + gap_evento
 
-        if idx < n - 1:
-            draw.line((pad, band_bottom, width - pad, band_bottom), fill="#EFEFEC", width=1)
-        y = band_bottom
-
-    output = Path(tempfile.gettempdir()) / "timeline_societaria_vertical_a4.png"
-    image.save(output, format="PNG", optimize=True, dpi=(200, 200))
+    output = Path(tempfile.gettempdir()) / "timeline_societaria_vertical.png"
+    image.save(output, format="PNG", optimize=True, dpi=(192, 192))
     return str(output)
 
 
@@ -1063,7 +1095,7 @@ TL2_CSS = """
 }
 .tl2-head { padding: 24px 28px 20px; border-bottom: 1px solid #dededb; }
 .tl2-kicker {
-    display: block; color: #1c4d6b; font-size: 11px; font-weight: 800; letter-spacing: .14em;
+    display: block; color: #1A56A0; font-size: 11px; font-weight: 800; letter-spacing: .14em;
     text-transform: uppercase;
 }
 .tl2-head h2 { margin: 6px 0 4px; font-size: 25px; font-weight: 700; color: #2c302c; }
@@ -1085,8 +1117,8 @@ TL2_CSS = """
     justify-content: center;
 }
 .tl2-pin {
-    width: 13px; height: 13px; border-radius: 50%; background: #1c4d6b; border: 2px solid #fff;
-    box-shadow: 0 0 0 1px #1c4d6b;
+    width: 13px; height: 13px; border-radius: 50%; background: #1A56A0; border: 2px solid #fff;
+    box-shadow: 0 0 0 1px #1A56A0;
 }
 .tl2-moves { margin-top: 18px; display: flex; flex-direction: column; gap: 7px; }
 .tl2-move { padding: 8px 9px; border-left: 3px solid #77817a; background: #f6f6f4; }
@@ -1242,29 +1274,52 @@ def _set_cell(cell, value: str, bold: bool = False, color: str = "555555"):
     run.bold = bold
 
 
-def detalhamento_word(event: dict, prev: dict | None) -> str:
-    """Texto do dossiê: o detalhamento do ato + movimentações objetivas + fonte."""
-    partes = [str(event.get("detalhamento", "")).strip()]
-    movimentos = [
-        f"{m['rotulo']}: {m['nome']}" + (f" ({m['extra']})" if m.get("extra") else "")
-        for m in movimentos_do_ato(event, prev)
-        if m["tipo"] != "base"
-    ]
-    if movimentos:
-        partes.append("Movimentações: " + "; ".join(movimentos) + ".")
+def detalhamento_word(event: dict, prev: dict | None) -> list[str]:
+    """Tópicos do dossiê: detalhamento do ato + movimentações objetivas, sem a fonte."""
+    itens = []
+    detalhe = str(event.get("detalhamento", "")).strip()
+    if detalhe:
+        itens.append(detalhe)
+    for m in movimentos_do_ato(event, prev):
+        if m["tipo"] == "base":
+            continue
+        itens.append(f"{m['rotulo']}: {m['nome']}" + (f" ({m['extra']})" if m.get("extra") else ""))
     quadro = _quadro_resumo(event)
     if quadro and quadro != "Não informado":
-        partes.append("Quadro societário após o ato: " + quadro + ".")
+        itens.append("Quadro societário após o ato: " + quadro)
     admin = _joined_people(event.get("administradores_apos", []))
     if admin:
-        partes.append("Administração: " + admin + ".")
+        itens.append("Administração: " + admin)
     capital = str(event.get("capital_social_apos", "")).strip()
     if capital:
-        partes.append("Capital social: " + capital + ".")
-    fonte = str(event.get("fonte", "")).strip()
-    if fonte:
-        partes.append("Fonte: " + fonte + ".")
-    return " ".join(p for p in partes if p)
+        itens.append("Capital social: " + capital)
+    return itens or ["Sem alterações relevantes registradas."]
+
+
+def _set_cell_bullets(cell, itens: list[str], color: str = "555555"):
+    cell.text = ""
+    cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+    for index, item in enumerate(itens):
+        paragraph = cell.paragraphs[0] if index == 0 else cell.add_paragraph()
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(3)
+        run = paragraph.add_run("• " + str(item))
+        run.font.name = "Arial"
+        run.font.size = Pt(9)
+        run.font.color.rgb = RGBColor.from_string(color)
+
+
+def _set_col_widths(table, widths=(Inches(1.0), Inches(1.1), Inches(4.4))):
+    """Data/Ato mais estreitos; Detalhamento absorve o espaço restante."""
+    table.autofit = False
+    for row in table.rows:
+        for index, width in enumerate(widths):
+            if index < len(row.cells):
+                row.cells[index].width = width
+    for index, width in enumerate(widths):
+        if index < len(table.columns):
+            table.columns[index].width = width
 
 
 def _fill_word_table(table, data: dict):
@@ -1276,15 +1331,17 @@ def _fill_word_table(table, data: dict):
     events = (data or {}).get("eventos", [])
     if not events:
         table._tbl.append(copy.deepcopy(template_row))
+        _set_col_widths(table)
         return
     for index, event in enumerate(events):
         row_xml = copy.deepcopy(template_row)
         table._tbl.append(row_xml)
         row = table.rows[-1]
         prev = events[index - 1] if index else None
-        values = [event.get("data", ""), event.get("ato", ""), detalhamento_word(event, prev)]
-        for cell, value in zip(row.cells, values):
-            _set_cell(cell, value)
+        _set_cell(row.cells[0], event.get("data", ""))
+        _set_cell(row.cells[1], event.get("ato", ""))
+        _set_cell_bullets(row.cells[2], detalhamento_word(event, prev))
+    _set_col_widths(table)
 
 
 def timeline_gerar_word(data: dict, dossie_file: Any = None) -> str:
