@@ -193,34 +193,23 @@ def _base_limpa(rotulo_ref: str) -> dict:
         "agc_situacao": f"Convocada {ref(320)}",
         "agc_1a": f"10/03/2025 {ref(320)}", "agc_2a": f"20/03/2025 {ref(320)}",
         "agc_continuacao": f"27/03/2025 {ref(320)}",
-        "recuperandos": [
-            {"nome": f"Empresa Teste Ltda {ref(10)}", "ecac": f"R$ 300.000,00 {ref(60)}",
-             "divida_ativa": f"R$ 150.000,00 {ref(61)}"},
-        ],
-        "endividamento_fiscal_total": f"R$ 450.000,00 {ref(61)}",
         "documentos_salvos": {
-            "peticao_inicial": {"status": "Salvo", "folhas": ref(1).strip("()")},
-            "quadro_ativos": {"status": "Anexado", "folhas": ref(88).strip("()")},
-            "pericia_previa": {"status": "Não existente", "folhas": ""},
-            "laudo_imoveis": {"status": "Anexado", "folhas": ref(90).strip("()")},
-            "ultimo_rma": {"status": "Anexado", "folhas": ref(95).strip("()")},
-            "qgc_recuperando": {"status": "Anexado", "folhas": ref(300).strip("()")},
-            "qgc_aj": {"status": "Anexado", "folhas": ref(305).strip("()")},
-            "relatorio_divergencia": {"status": "Não existente", "folhas": ""},
-            "prj_aditivos": {"status": "Anexado", "folhas": ref(200).strip("()")},
-            "atas_agc": {"status": "Anexado", "folhas": ref(320).strip("()")},
+            "peticao_inicial": ref(1).strip("()"),
+            "quadro_ativos": ref(88).strip("()"),
+            "pericia_previa": "Não consta",
+            "laudo_imoveis": ref(90).strip("()"),
+            "ultimo_rma": ref(95).strip("()"),
+            "qgc_recuperando": ref(300).strip("()"),
+            "qgc_aj": ref(305).strip("()"),
+            "relatorio_divergencia": "Não consta",
+            "prj_aditivos": ref(200).strip("()"),
+            "atas_agc": ref(320).strip("()"),
         },
     }
 
 
 def fixture_processo_longo() -> dict:
     dados = _base_limpa("Mov.")
-    dados["recuperandos"] = [
-        {"nome": f"Recuperando {i} Ltda (Mov. {100 + i})",
-         "ecac": f"R$ {i * 10_000},00 (Mov. {200 + i})",
-         "divida_ativa": f"R$ {i * 5_000},00 (Mov. {300 + i})"}
-        for i in range(1, 11)
-    ]
     dados["imoveis_requerentes"] = [
         {"matricula": f"{10_000 + i} (Mov. {400 + i})", "cartorio": f"{i}º RI (Mov. {400 + i})",
          "descricao": f"Imóvel rural {i} (Mov. {400 + i})", "proprietario": f"Recuperando {i} (Mov. {400 + i})"}
@@ -256,7 +245,6 @@ def fixture_tipos_malformados() -> dict:
         "imoveis_essenciais": [{"matricula": None, "cartorio": None}],
         "prj_classe_ii": None,
         "qgc": None,
-        "recuperandos": [],
         "documentos_salvos": None,
     }
 
@@ -269,14 +257,8 @@ def fixture_checkbox_ambiguo() -> dict:
 
 
 def fixture_processo_gigante() -> dict:
-    """Processo enorme: muitos recuperandos/imóveis/recursos — checa volume e desempenho."""
+    """Processo enorme: muitos imóveis/recursos — checa volume e desempenho."""
     dados = _base_limpa("Mov.")
-    dados["recuperandos"] = [
-        {"nome": f"Recuperando {i} Participações S.A. (Mov. {1000 + i})",
-         "ecac": f"R$ {i * 12_345},67 (Mov. {2000 + i})",
-         "divida_ativa": f"R$ {i * 6_789},01 (Mov. {3000 + i})"}
-        for i in range(1, 61)
-    ]
     dados["imoveis_requerentes"] = [
         {"matricula": f"{50_000 + i} (Mov. {4000 + i})", "cartorio": f"{(i % 12) + 1}º RI (Mov. {4000 + i})",
          "descricao": f"Fazenda / gleba rural nº {i}, com benfeitorias (Mov. {4000 + i})",
@@ -330,21 +312,17 @@ def fixture_mal_digitalizado_antigo() -> dict:
         {"matricula": "12.454-B (fls. 88/90)", "cartorio": "1º  R I  de   Cuiabá (fls. 88)",
          "descricao": "Ga lp ão indus trial (fls. 88)", "proprietario": "Emp resa Antiga Textil (fls. 88)"},
     ]
-    dados["recuperandos"] = [
-        {"nome": "Empresa Antiga Textil Ltda (fls. s/n)", "ecac": "Não consta", "divida_ativa": "Não consta"},
-    ]
-    dados["endividamento_fiscal_total"] = "Não consta"
     dados["documentos_salvos"] = {
-        "peticao_inicial": {"status": "Salvo", "folhas": "s/n"},
-        "quadro_ativos": {"status": "Não existente/Segredo de Justiça", "folhas": ""},
-        "pericia_previa": {"status": "Não existente", "folhas": ""},
-        "laudo_imoveis": {"status": "Não existente", "folhas": ""},
-        "ultimo_rma": {"status": "Não existente", "folhas": ""},
-        "qgc_recuperando": {"status": "Anexado", "folhas": "340/342"},
-        "qgc_aj": {"status": "Não existente", "folhas": ""},
-        "relatorio_divergencia": {"status": "Não existente", "folhas": ""},
-        "prj_aditivos": {"status": "Não existente", "folhas": ""},
-        "atas_agc": {"status": "Não existente", "folhas": ""},
+        "peticao_inicial": "s/n",
+        "quadro_ativos": "Não consta",
+        "pericia_previa": "Não consta",
+        "laudo_imoveis": "Não consta",
+        "ultimo_rma": "Não consta",
+        "qgc_recuperando": "340/342",
+        "qgc_aj": "Não consta",
+        "relatorio_divergencia": "Não consta",
+        "prj_aditivos": "Não consta",
+        "atas_agc": "Não consta",
     }
     return dados
 
@@ -377,10 +355,18 @@ def fixture_vazamento_proposital() -> dict:
     dados["requerentes"] = "Empresa Teste Ltda (fls.)"
     dados["consolidacao_substancial"] = "Deferido (referência)"
     dados["qgc"]["total"] = "R$ 10.600.000,00 (Mov./ID/fls./Evento)"
-    dados["documentos_salvos"]["peticao_inicial"] = {
-        "status": "Salvo", "folhas": "[caso haja, indicar páginas]",
-    }
-    dados["recuperandos"][0]["nome"] = ""  # deve cair no fallback "Não consta"
+    dados["documentos_salvos"]["peticao_inicial"] = "[caso haja, indicar páginas]"
+    return dados
+
+
+def fixture_agc_vazio() -> dict:
+    """Nenhuma informação de AGC — deve cair no fallback "Sem datas designadas",
+    nunca em "Não consta" (regra específica do AGC)."""
+    dados = _base_limpa("Mov.")
+    dados["agc_situacao"] = "Não consta"
+    dados["agc_1a"] = "Não consta"
+    dados["agc_2a"] = "Não consta"
+    dados["agc_continuacao"] = "Não consta"
     return dados
 
 
@@ -389,8 +375,8 @@ FIXTURES = {
     "clean_esaj": lambda: _base_limpa("fls."),
     "clean_eproc": lambda: _base_limpa("Evento"),
     "clean_projudi": lambda: _base_limpa("ID"),
-    "processo_longo_10_recuperandos": fixture_processo_longo,
-    "processo_gigante_60rec_120imoveis": fixture_processo_gigante,
+    "processo_longo": fixture_processo_longo,
+    "processo_gigante_120imoveis": fixture_processo_gigante,
     "ocr_ruim": fixture_ocr_ruim,
     "mal_digitalizado_antigo": fixture_mal_digitalizado_antigo,
     "referencias_quebradas": fixture_referencias_quebradas,
@@ -399,12 +385,13 @@ FIXTURES = {
     "tipos_malformados": fixture_tipos_malformados,
     "checkbox_ambiguo": fixture_checkbox_ambiguo,
     "vazamento_proposital": fixture_vazamento_proposital,
+    "agc_vazio": fixture_agc_vazio,
 }
 
 # fixtures que DEVEM sair 100% limpas (zero vazamento de placeholder)
 FIXTURES_ESPERAM_ZERO_VAZAMENTO = {
     "clean_pje", "clean_esaj", "clean_eproc", "clean_projudi",
-    "processo_longo_10_recuperandos", "processo_gigante_60rec_120imoveis",
+    "processo_longo", "processo_gigante_120imoveis", "agc_vazio",
     "ocr_ruim", "mal_digitalizado_antigo", "referencias_quebradas",
     "ruido_estrutural_chunk", "vazio_total", "tipos_malformados", "checkbox_ambiguo",
 }
@@ -488,6 +475,41 @@ def testar_extrair():
     return falhas
 
 
+def testar_agc_fallback():
+    """"Não consta"/vazio em agc_situacao deve virar "Sem datas designadas"
+    marcado — nunca "Não consta" nem nenhuma opção marcada."""
+    falhas = []
+    for entrada in ("", "Não consta", "não consta ", None):
+        dados = copy.deepcopy(fixture_agc_vazio())
+        dados["agc_situacao"] = entrada
+        caminho = cr._build_checklist_rj(dados)
+        doc = Document(caminho)
+        achou = any(
+            "☑ Sem datas designadas" in texto
+            for _, _, _, texto in _iter_celulas(doc)
+        )
+        if not achou:
+            falhas.append(f"agc_situacao={entrada!r} não marcou 'Sem datas designadas'")
+    return falhas
+
+
+def testar_montar_fonte_rj():
+    """Relatório é a fonte principal; texto bruto só complementa."""
+    falhas = []
+    fonte = cr._montar_fonte_rj("RELATORIO XYZ", "TEXTO BRUTO ABC")
+    if "RELATORIO XYZ" not in fonte:
+        falhas.append("_montar_fonte_rj não incluiu o relatório")
+    if "TEXTO BRUTO ABC" not in fonte:
+        falhas.append("_montar_fonte_rj não incluiu o texto bruto complementar")
+    if fonte.index("RELATORIO XYZ") > fonte.index("TEXTO BRUTO ABC"):
+        falhas.append("_montar_fonte_rj não colocou o relatório antes do texto bruto")
+    # sem texto bruto — só o relatório, sem quebrar
+    so_relatorio = cr._montar_fonte_rj("RELATORIO XYZ", "")
+    if "RELATORIO XYZ" not in so_relatorio:
+        falhas.append("_montar_fonte_rj sem texto bruto perdeu o relatório")
+    return falhas
+
+
 def testar_extrair_fonte_gigante():
     """Processo gigante: fonte >900k chars — confirma que o truncamento
     (checklist_rj.py: fonte[:900_000]) funciona e não estoura memória/exceção."""
@@ -532,6 +554,14 @@ def rodar_bateria():
     falhas_truncamento = testar_extrair_fonte_gigante()
     resultados.append(("_extrair (truncamento fonte gigante)", 1, len(falhas_truncamento)))
     falhas_totais.extend(f"[_extrair] {f}" for f in falhas_truncamento)
+
+    falhas_fonte = testar_montar_fonte_rj()
+    resultados.append(("_montar_fonte_rj (relatório > texto bruto)", 1, len(falhas_fonte)))
+    falhas_totais.extend(f"[_montar_fonte_rj] {f}" for f in falhas_fonte)
+
+    falhas_agc = testar_agc_fallback()
+    resultados.append(("AGC fallback (Sem datas designadas)", 4, len(falhas_agc)))
+    falhas_totais.extend(f"[agc_fallback] {f}" for f in falhas_agc)
 
     print("=" * 78)
     print("BATERIA DE FIDELIDADE — CHECKLIST RJ")

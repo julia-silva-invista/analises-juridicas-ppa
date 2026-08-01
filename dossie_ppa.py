@@ -86,6 +86,46 @@ _CAMPOS_NARRATIVOS = {
 _RE_PALAVRA = re.compile(
     r"[A-Za-zÀ-ÖØ-öø-ÿ]+(?:[.'’][A-Za-zÀ-ÖØ-öø-ÿ]+)*\.?"
 )
+# Trecho de 2+ palavras em caixa alta seguidas (ex.: "MIRANDA LIMA E LOBO
+# ADVOGADOS" dentro de uma frase mista) — usado quando a string INTEIRA não
+# bate o limiar de 72% maiúsculas (uma célula que mistura nome em caixa alta
+# com texto de referência em minúsculo, por exemplo), mas ainda assim tem um
+# trecho isolado que merece a mesma normalização.
+_RE_TRECHO_MAIUSCULO = re.compile(
+    r"[A-ZÀ-Ö][A-ZÀ-Ö.'’]*\.?(?:\s+[A-ZÀ-Ö][A-ZÀ-Ö.'’]*\.?)+"
+)
+
+
+def _titlecase_palavra(match, indice_ref) -> str:
+    """Normaliza uma palavra pra Title Case, preservando siglas e não
+    capitalizando partículas de nome (de/da/dos/e/...) fora da 1ª posição."""
+    palavra = match.group(0)
+    chave = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ]", "", palavra).upper()
+    minuscula = palavra.lower()
+    if chave in _SIGLAS_PRESERVADAS:
+        resultado = palavra.upper()
+    elif indice_ref[0] > 0 and minuscula.rstrip(".") in _PARTICULAS_NOME:
+        resultado = minuscula
+    else:
+        resultado = minuscula[:1].upper() + minuscula[1:]
+    indice_ref[0] += 1
+    return resultado
+
+
+def _normalizar_trechos_maiusculos(texto: str) -> str:
+    """Normaliza só os TRECHOS em caixa alta (2+ palavras seguidas) dentro de
+    uma string mista — usada quando a string inteira não bate o limiar de
+    maiúsculas de `_normalizar_caixa_alta`/`_normalizar_texto_narrativo`
+    (ex.: célula que combina "MIRANDA LIMA E LOBO ADVOGADOS" com texto de
+    referência em minúsculo — a string toda cai abaixo do limiar, mas o nome
+    embutido continua merecendo a mesma normalização)."""
+    def _sub_trecho(match):
+        indice_ref = [0]
+        return _RE_PALAVRA.sub(lambda m: _titlecase_palavra(m, indice_ref), match.group(0))
+
+    resultado = _RE_TRECHO_MAIUSCULO.sub(_sub_trecho, texto)
+    resultado = re.sub(r"\be-CAC\b", "e-CAC", resultado, flags=re.IGNORECASE)
+    return re.sub(r"\br\s*\$\s*", "R$ ", resultado, flags=re.IGNORECASE)
 
 
 def _normalizar_caixa_alta(texto) -> str:
@@ -104,25 +144,13 @@ def _normalizar_caixa_alta(texto) -> str:
         return valor
     proporcao_maiusculas = sum(c.isupper() for c in letras) / len(letras)
     if proporcao_maiusculas < 0.72:
-        return valor
+        # A string inteira não é predominantemente maiúscula (ex.: mistura
+        # nome em caixa alta com referência/conector em minúsculo) — ainda
+        # assim normaliza qualquer trecho isolado que esteja em caixa alta.
+        return _normalizar_trechos_maiusculos(valor)
 
-    indice = 0
-
-    def _ajustar(match):
-        nonlocal indice
-        palavra = match.group(0)
-        chave = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ]", "", palavra).upper()
-        minuscula = palavra.lower()
-        if chave in _SIGLAS_PRESERVADAS:
-            resultado = palavra.upper()
-        elif indice > 0 and minuscula.rstrip(".") in _PARTICULAS_NOME:
-            resultado = minuscula
-        else:
-            resultado = minuscula[:1].upper() + minuscula[1:]
-        indice += 1
-        return resultado
-
-    resultado = _RE_PALAVRA.sub(_ajustar, valor)
+    indice_ref = [0]
+    resultado = _RE_PALAVRA.sub(lambda m: _titlecase_palavra(m, indice_ref), valor)
     resultado = re.sub(r"\be-CAC\b", "e-CAC", resultado, flags=re.IGNORECASE)
     return re.sub(r"\br\s*\$\s*", "R$ ", resultado, flags=re.IGNORECASE)
 
@@ -135,7 +163,11 @@ def _normalizar_texto_narrativo(texto) -> str:
         return valor
     proporcao_maiusculas = sum(c.isupper() for c in letras) / len(letras)
     if proporcao_maiusculas < 0.72:
-        return valor
+        # Mesmo fallback de _normalizar_caixa_alta: a frase toda não é
+        # predominantemente maiúscula, mas um nome/entidade embutido pode
+        # estar — normaliza só esse trecho (Title Case, não minúsculo de
+        # frase, já que é um nome próprio, não o início de uma sentença).
+        return _normalizar_trechos_maiusculos(valor)
 
     inicio_frase = True
     fim_anterior = 0
@@ -258,6 +290,17 @@ def _widths(row, ws):
         row.cells[i].width = Cm(w)
 
 
+def _lock_widths(table, ws):
+    """Faz a largura de coluna pedida valer de verdade.
+
+    python-docx só respeita w:tcW por célula se a tabela não estiver em
+    autofit — sem isso, o Word redistribui as colunas quase igualmente na
+    hora de renderizar, ignorando a proporção pedida em `ws`."""
+    table.autofit = False
+    for i, w in enumerate(ws):
+        table.columns[i].width = Cm(w)
+
+
 def _orange_header(table, labels, ws=None):
     """Linha de header laranja com texto branco em negrito."""
     row = table.add_row()
@@ -287,6 +330,7 @@ def _kv_table(doc, header, rows, w_label=5.9, w_value=11.0):
     t = doc.add_table(rows=0, cols=2)
     t.style = "Table Grid"
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _lock_widths(t, [w_label, w_value])
     if header:
         if isinstance(header, str):
             _span_header(t, header)
@@ -308,6 +352,7 @@ def _kv_label_table(doc, rows, w_label=5.9, w_value=11.0):
     t = doc.add_table(rows=0, cols=2)
     t.style = "Table Grid"
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _lock_widths(t, [w_label, w_value])
     for label, value in rows:
         r = t.add_row()
         cl, cv = r.cells[0], r.cells[1]
@@ -324,6 +369,7 @@ def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
     t = doc.add_table(rows=0, cols=len(headers))
     t.style = "Table Grid"
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _lock_widths(t, ws)
     _orange_header(t, headers, ws)
     data = list(rows)
     while len(data) < min_rows:
