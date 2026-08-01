@@ -5,8 +5,11 @@ Dois documentos:
   1. Checklist de Recuperação Judicial       -> gerar_checklist_rj
   2. Análise de Créditos em Recuperação Judicial -> gerar_checklist_creditos
 
-Os dados são extraídos preferencialmente do TEXTO OCR COMPLETO da análise
-(não apenas do relatório resumido), pois o relatório omite campos do checklist.
+O Checklist de Recuperação Judicial usa o RELATÓRIO já consolidado (revisado,
+deduplicado, com referências processuais corretas) como fonte principal, e o
+texto bruto extraído do processo só como complemento do que o relatório não
+cobrir. A Análise de Créditos ainda usa só o texto bruto/relatório resumido
+(fonte única) — fica para uma próxima rodada.
 """
 
 import json
@@ -29,7 +32,7 @@ from dossie_ppa import (
     _LARANJA, _CINZA, _BRANCO, _TXT, _TXT_MUTE,
     _write, _apply_font, _orange_header, _grid_table,
     _kv_table, _kv_label_table, _para, _sec_title, _sub_orange, _sub_gray,
-    _note, _spacer, _montar_cabecalho_rodape,
+    _spacer, _montar_cabecalho_rodape,
 )
 
 
@@ -87,6 +90,12 @@ def _as_list(value) -> list:
 def _as_dict(value) -> dict:
     """Mesma defesa de _as_list, para campos que devem ser dict."""
     return value if isinstance(value, dict) else {}
+
+
+def _as_str(value) -> str:
+    """Mesma defesa de _as_list/_as_dict, para campos que devem ser string
+    (ex.: extração devolve um dict/lista onde se esperava texto simples)."""
+    return value if isinstance(value, str) else ""
 
 
 def _titulo(doc, titulo, subtitulo="PPA Invista"):
@@ -167,41 +176,66 @@ _DOCS_ITEM6 = [
     ("atas_agc",              "Atas, laudo de credenciamento e de votação da AGC",  ["Anexado", "Não existente"]),
 ]
 
-_PROMPT_RJ = """Você está analisando o texto COMPLETO extraído de um processo de Recuperação Judicial (RJ).
-Analise TODO o texto (não só um resumo) para preencher o Checklist de RJ no formato JSON abaixo.
-NÃO invente.
+_PROMPT_RJ = """Você vai preencher o Checklist de Recuperação Judicial (RJ) no formato JSON abaixo, a
+partir de duas fontes de texto que serão fornecidas depois deste prompt.
+
+═══ REGRA — PRIORIDADE DE FONTE ═══
+A primeira fonte é o RELATÓRIO CONSOLIDADO — um relatório jurídico já sintetizado, revisado e
+deduplicado sobre este mesmo processo, com as referências processuais corretas (Mov./ID/fls./Evento)
+já embutidas no texto. Use o relatório como fonte PRINCIPAL para todo campo — é a fonte mais confiável
+e mais completa. A segunda fonte é o TEXTO BRUTO EXTRAÍDO — a extração página a página do processo,
+mais volumosa e não deduplicada. Consulte o texto bruto APENAS para complementar informação que o
+relatório não cubra, ou para achar uma referência mais específica de algo que o relatório mencione sem
+citar página exata. Nunca contrarie o relatório com base em uma leitura isolada do texto bruto — se os
+dois divergirem, prefira o relatório.
 
 ═══ REGRA — SISTEMA DO TRIBUNAL ═══
-Primeiro identifique, pelo cabeçalho/rodapé/numeração do PDF, qual sistema processual gerou o
+Identifique, pelo cabeçalho/rodapé/numeração do processo, qual sistema processual gerou o
 documento, e use SEMPRE o rótulo correspondente nas referências:
   - PJe                → "Mov. <nº>"
   - eSAJ / físico       → "fls. <nº>"
   - Eproc               → "Evento <nº>"
   - Projudi / outro     → "ID <nº>"
-Use o MESMO rótulo em todo o documento (não misture "fls." com "Mov." sem necessidade).
+Use o MESMO rótulo em todo o documento (não misture "fls." com "Mov." sem necessidade). O texto bruto
+pode conter marcadores internos do tipo "PARTE i/N" ou "páginas X-Y" — são só limites técnicos de
+divisão do arquivo pelo nosso sistema, NUNCA uma referência processual real. Nunca cite "Parte N" como
+se fosse referência oficial. Se não houver ID/Mov./Evento disponível e só houver número de página, cite
+só a página (ex.: "pág. 340"), tratando o conjunto como um documento contínuo único — a menos que fique
+evidente que são processos ou documentos efetivamente distintos (números de processo diferentes,
+cabeçalhos de arquivo diferentes), caso em que identifique de qual documento veio.
 
-═══ REGRA — REFERÊNCIA OBRIGATÓRIA DA FONTE (SEM EXCEÇÃO) ═══
-TODA informação que você preencher — cada campo, cada linha de cada tabela, cada valor, data, nome,
-matrícula, condição do PRJ, classe do QGC, situação da AGC, endividamento, etc. — deve trazer ao final,
-entre parênteses, a referência exata de onde foi extraída (ex.: "(Mov. 340)", "(fls. 88)",
-"(Evento 12)"). Isso vale para TODOS os campos do JSON abaixo, mesmo os que não têm um exemplo de
-referência escrito explicitamente — o exemplo "(fls.)"/"(Mov./ID/fls./Evento)" que aparece no molde
-abaixo é só uma INSTRUÇÃO DE FORMATO PARA VOCÊ, não é texto para copiar. Você deve SEMPRE substituí-lo
-pela referência real e específica daquele dado.
-NUNCA devolva a anotação de formato vazia ou literal (nunca escreva "(fls.)" sozinho, sem número, nem
-"(Mov./ID/fls./Evento)" literalmente). Se um campo tiver informação mas você não conseguir localizar a
-página/movimentação exata dele, ainda assim preencha o valor e finalize com "(referência não localizada)"
-em vez de inventar um número.
+═══ REGRA — REFERÊNCIA OBRIGATÓRIA, UMA VEZ POR LINHA ═══
+Todo campo com conteúdo deve trazer ao final, entre parênteses, a referência de onde foi extraído
+(ex.: "(Mov. 340)", "(fls. 88)", "(Evento 12)", "(pág. 340)") — EXCETO "rj_numero" e "vara", que vão
+sem nenhuma referência (só o valor). O exemplo "(referência)" que aparece no molde abaixo é só uma
+INSTRUÇÃO DE FORMATO PARA VOCÊ, não é texto para copiar — substitua sempre pela referência real.
+NUNCA devolva a anotação de formato vazia ou literal (nunca escreva "(referência)" ou
+"(Mov./ID/fls./Evento)" literalmente).
+Em uma linha de tabela com várias colunas (ex.: um imóvel com matrícula/cartório/descrição/proprietário,
+ou um recurso com nome/status), coloque a referência SÓ no primeiro campo da linha (ex.: só em
+"matricula") — os demais campos da MESMA linha trazem só o conteúdo, sem repetir a referência.
 
 ═══ REGRA — CAMPO NÃO ENCONTRADO ═══
-Se um dado factual não constar em NENHUMA parte do processo, preencha com "Não consta" (sem parênteses).
-Em campos de escolha, responda com a opção EXATA e ÚNICA (ex: "Deferido (Mov. 12)"). NUNCA marque mais de
-uma opção; se não houver informação, deixe "" (nenhuma opção marcada).
+Se um dado factual não constar em NENHUMA das duas fontes, preencha com "Não consta" — SEM parênteses
+de referência nenhuma (nem vazia, nem "referência não localizada": esse fallback só vale quando HÁ
+conteúdo mas a referência exata não foi localizada, nunca quando o campo inteiro é "Não consta").
+Em campos de escolha, responda com a opção EXATA e ÚNICA (ex: "Deferido (Mov. 12)"). NUNCA marque mais
+de uma opção; se não houver informação, deixe "" (nenhuma opção marcada).
+
+═══ REGRA — AGC SEM DATAS ═══
+Para "agc_situacao" especificamente, se não houver NENHUMA informação de AGC no processo, não escreva
+"Não consta" — escreva "Sem datas designadas" (é a opção correta pra "AGC ainda não convocada").
+
+═══ REGRA — IMÓVEIS ESSENCIAIS ═══
+"Cartório" é sempre o CRI (Cartório de Registro de Imóveis) — use a mesma terminologia do relatório
+("X CRI de Comarca/UF"). Se a mesma matrícula aparecer tanto em "imoveis_requerentes" quanto em
+"imoveis_essenciais", repita o mesmo cartório/CRI e o mesmo proprietário nos dois lugares — é o mesmo
+bem, a essencialidade não muda quem é o dono nem onde está registrado.
 
 Responda SOMENTE com o JSON.
 
 {
-  "rj_numero": "", "vara": "", "data_analise": "",
+  "rj_numero": "", "vara": "",
   "requerentes": "Nome · CPF/CNPJ ... (referência)",
   "advogados_requerentes": "(referência)",
   "administrador_judicial": "Nome (referência)",
@@ -210,38 +244,47 @@ Responda SOMENTE com o JSON.
   "periodo_blindagem": "Ativo/Inativo (referência)",
   "previsao_encerramento_stay": "DD/MM/AAAA (referência)",
   "stay_prorrogavel": "Sim (referência) | Não (referência) | ''",
-  "recursos_relevantes": [{"recurso": "(referência)", "status": "(referência)"}],
-  "imoveis_requerentes": [{"matricula": "nº (referência)", "cartorio": "(referência)", "descricao": "(referência)", "proprietario": "(referência)"}],
-  "imoveis_essenciais": [{"matricula": "nº (referência)", "cartorio": "(referência)", "descricao": "(referência)", "proprietario": "(referência)"}],
-  "prj_classe_ii": {"desagio": "(referência)", "carencia": "(referência)", "parcelas": "(referência)", "juros": "(referência)", "correcao": "(referência)"},
-  "prj_classe_iii": {"desagio": "(referência)", "carencia": "(referência)", "parcelas": "(referência)", "juros": "(referência)", "correcao": "(referência)"},
-  "qgc": {"classe_i": "R$ (referência)", "classe_ii": "R$ (referência)", "classe_iii": "R$ (referência)", "classe_iv": "R$ (referência)", "total": "R$ (referência)"},
+  "recursos_relevantes": [{"recurso": "(referência)", "status": ""}],
+  "imoveis_requerentes": [{"matricula": "nº (referência)", "cartorio": "", "descricao": "", "proprietario": ""}],
+  "imoveis_essenciais": [{"matricula": "nº (referência)", "cartorio": "", "descricao": "", "proprietario": ""}],
+  "prj_classe_ii": {"desagio": "(referência)", "carencia": "", "parcelas": "", "juros": "", "correcao": ""},
+  "prj_classe_iii": {"desagio": "(referência)", "carencia": "", "parcelas": "", "juros": "", "correcao": ""},
+  "qgc": {"classe_i": "R$ (referência)", "classe_ii": "R$", "classe_iii": "R$", "classe_iv": "R$", "total": "R$"},
   "agc_situacao": "opção (referência)",
   "agc_1a": "DD/MM/AAAA (referência)", "agc_2a": "DD/MM/AAAA (referência)", "agc_continuacao": "(referência)",
-  "recuperandos": [{"nome": "(referência)", "ecac": "R$ (referência)", "divida_ativa": "R$ (referência)"}],
-  "endividamento_fiscal_total": "R$ (referência)",
   "documentos_salvos": {
-    "peticao_inicial":       {"status": "Salvo | Pendente", "folhas": "referência exata onde consta"},
-    "quadro_ativos":         {"status": "Anexado | Não existente", "folhas": ""},
-    "pericia_previa":        {"status": "Anexado | Não existente", "folhas": ""},
-    "laudo_imoveis":         {"status": "Anexado | Não existente", "folhas": ""},
-    "ultimo_rma":            {"status": "Anexado | Não existente", "folhas": ""},
-    "qgc_recuperando":       {"status": "Anexado | Não existente", "folhas": ""},
-    "qgc_aj":                {"status": "Anexado | Não existente", "folhas": ""},
-    "relatorio_divergencia": {"status": "Anexado | Não existente", "folhas": ""},
-    "prj_aditivos":          {"status": "Anexado | Não existente", "folhas": ""},
-    "atas_agc":              {"status": "Anexado | Não existente", "folhas": ""}
+    "peticao_inicial":       "referência exata onde consta, ou 'Não consta'",
+    "quadro_ativos":         "referência exata onde consta, ou 'Não consta'",
+    "pericia_previa":        "referência exata onde consta, ou 'Não consta'",
+    "laudo_imoveis":         "referência exata onde consta, ou 'Não consta'",
+    "ultimo_rma":            "referência exata onde consta, ou 'Não consta'",
+    "qgc_recuperando":       "referência exata onde consta, ou 'Não consta'",
+    "qgc_aj":                "referência exata onde consta, ou 'Não consta'",
+    "relatorio_divergencia": "referência exata onde consta, ou 'Não consta'",
+    "prj_aditivos":          "referência exata onde consta, ou 'Não consta'",
+    "atas_agc":              "referência exata onde consta, ou 'Não consta'"
   }
 }
 
-Para documentos_salvos: informe, para cada documento, se ele está anexado/salvo no processo e a
-referência exata (fls./Mov./ID/Evento) onde ele aparece — sem os colchetes do molde de preenchimento
-manual ("[caso haja, indicar páginas]"): esse texto é só a instrução do molde para humanos e NUNCA deve
-aparecer no seu JSON; escreva o número/referência real, ou deixe "folhas" vazio se o documento não
-existir no processo (status "Não existente").
+Para "documentos_salvos": para cada documento, escreva a referência exata (fls./Mov./ID/Evento) de onde
+ele aparece no processo, ou "Não consta" se o documento não existir nas fontes — sem colchetes de
+molde de preenchimento manual, sem status de "anexado/pendente", só a referência ou "Não consta".
 
-TEXTO:
+=== RELATÓRIO CONSOLIDADO (fonte principal) ===
 """
+
+
+def _montar_fonte_rj(relatorio: str, texto_bruto: str) -> str:
+    """Concatena as duas fontes do checklist de RJ: o relatório consolidado
+    (fonte principal, já revisado e com referências corretas) e o texto bruto
+    extraído do processo (fonte complementar, só para o que o relatório não
+    cobrir)."""
+    relatorio = (relatorio or "").strip()[:500_000]
+    texto_bruto = (texto_bruto or "").strip()[:400_000]
+    partes = [relatorio or "(relatório não disponível)"]
+    if texto_bruto:
+        partes.append("\n\n=== TEXTO BRUTO EXTRAÍDO (fonte complementar) ===\n" + texto_bruto)
+    return "\n".join(partes)
 
 
 def _build_checklist_rj(dados: dict) -> str:
@@ -323,51 +366,32 @@ def _build_checklist_rj(dados: dict) -> str:
 
     # ── 4. ASSEMBLEIA GERAL DE CREDORES (AGC) ────────────────────────────
     _sec_title(doc, "4. ASSEMBLEIA GERAL DE CREDORES (AGC)")
+    agc_situacao = str(dados.get("agc_situacao", "") or "").strip()
+    if _norm_cb(agc_situacao) in ("", "nao consta"):
+        agc_situacao = "Sem datas designadas"
     _kv_table(doc, ["CAMPO", "INFORMAÇÃO"], [
         ("Situação da AGC", _cb(["Sem datas designadas", "Convocada", "1ª convocação sem quórum",
                                  "Período de suspensão", "Plano aprovado / rejeitado"],
-                                dados.get("agc_situacao", ""))),
+                                agc_situacao)),
         ("1ª Convocação",              dados.get("agc_1a", "")),
         ("2ª Convocação",              dados.get("agc_2a", "")),
         ("Continuação da 2ª Convocação", dados.get("agc_continuacao", "")),
     ])
     _spacer(doc)
 
-    # ── 5. ENDIVIDAMENTO GERAL ───────────────────────────────────────────
-    _sec_title(doc, "5. ENDIVIDAMENTO GERAL")
-    recuperandos = _as_list(dados.get("recuperandos")) or [{}]
-    for i, rec in enumerate(recuperandos, 1):
-        rec = _as_dict(rec)
-        nome = rec.get("nome", "") or "Não consta"
-        _sub_gray(doc, f"RECUPERANDO {i} — {nome}")
-        _kv_table(doc, ["ENDIVIDAMENTO FISCAL", "VALOR / STATUS"], [
-            ("Endividamento Fiscal — e-CAC",
-             (rec.get("ecac", "") or "R$") + "    " + _cb(["CND na pasta", "Não foi possível emitir"])),
-            ("Endividamento Fiscal — Dívida Ativa",
-             (rec.get("divida_ativa", "") or "R$") + "    " + _cb(["CND na pasta", "Não foi possível emitir"])),
-        ])
-        _spacer(doc, pts=2)
-    _sub_gray(doc, "TOTAL CONSOLIDADO DO GRUPO")
-    _kv_table(doc, ["CAMPO", "VALOR"], [
-        ("Endividamento Fiscal Total", dados.get("endividamento_fiscal_total", "R$")),
-    ])
-    _note(doc, "Soma de e-CAC + Dívida Ativa de todos os recuperandos.")
-    _spacer(doc)
-
     # ── 6. CHECKLIST DOS DOCUMENTOS SALVOS ───────────────────────────────
+    # (o modelo oficial pula do item 4 direto pro 6 — não há item 5 visível)
     _sec_title(doc, "6. CHECKLIST DOS DOCUMENTOS SALVOS")
     docs_salvos = _as_dict(dados.get("documentos_salvos"))
-    rows6 = []
-    for key, label, opts in _DOCS_ITEM6:
-        info = _as_dict(docs_salvos.get(key))
-        rows6.append((label, _cb(opts, info.get("status", "")), info.get("folhas", "")))
-    _grid_table(doc, ["DOCUMENTO", "STATUS", "REFERÊNCIA"], rows6, [8.0, 5.9, 3.0])
+    rows6 = [(label, _as_str(docs_salvos.get(key, "")).strip() or "Não consta") for key, label, _opts in _DOCS_ITEM6]
+    _grid_table(doc, ["DOCUMENTO", "REFERÊNCIA"], rows6, [10.9, 6.0])
 
     _rodape_conf(doc)
     return _salvar(doc, "Checklist_RJ", dados)
 
 
-def gerar_checklist_rj(fonte: str, client, model: str) -> str:
+def gerar_checklist_rj(relatorio: str, texto_bruto: str, client, model: str) -> str:
+    fonte = _montar_fonte_rj(relatorio, texto_bruto)
     dados = _extrair(_PROMPT_RJ, fonte, client, model)
     return _build_checklist_rj(dados)
 

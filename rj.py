@@ -622,14 +622,16 @@ def rj_responder(pergunta: str, relatorio: str):
 
 
 def rj_gerar_checklist(relatorio: str, texto_bruto: str = ""):
-    # Prioriza o texto OCR completo; o relatório resumido omite campos do checklist
-    fonte = texto_bruto.strip() if texto_bruto and texto_bruto.strip() else (relatorio or "").strip()
-    if not fonte:
+    # O relatório (já consolidado, com referências corretas) é a fonte principal;
+    # o texto bruto extraído do processo só complementa o que o relatório não cobrir.
+    relatorio = (relatorio or "").strip()
+    texto_bruto = (texto_bruto or "").strip()
+    if not relatorio and not texto_bruto:
         return gr.update(value=None, visible=False), "Gere uma análise primeiro."
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
-        path = gerar_checklist_rj(fonte, client, MODEL_RAPIDO_RJ)
+        path = gerar_checklist_rj(relatorio, texto_bruto, client, MODEL_RAPIDO_RJ)
         return gr.update(value=path, visible=True), "✅ Checklist RJ gerado — clique no arquivo para baixar."
     except Exception as e:
         return gr.update(value=None, visible=False), f"❌ Erro: {e}"
