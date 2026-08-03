@@ -1863,3 +1863,80 @@ def preencher_passivo_dossie(dossie_path, fiscais: list, trabalhistas: list, civ
     caminho = os.path.join(tempfile.gettempdir(), "Dossie_PPA_atualizado.docx")
     doc.save(caminho)
     return caminho
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Ativos Atingíveis (por Tese, dinâmico) + Passivo — a partir da Coleta de Informações
+# ══════════════════════════════════════════════════════════════════════════
+
+def _preencher_visao_geral_atingiveis_dinamica(doc, ativos_visao_geral: list):
+    """Substitui os blocos fixos título+tabela de 'VISÃO GERAL DOS ATINGÍVEIS' (hoje Penhora
+    Direta/IDPJ/Fraude à Execução) por um bloco por Tese distinta encontrada no Excel de
+    Coleta de Informações — títulos 100% dinâmicos, batendo com o texto exato da Tese.
+
+    Segue o mesmo padrão de clonagem já usado em _preencher_creditos_template: acha o
+    intervalo do bloco original, usa o 1º par (título+tabela) como modelo, remove os
+    originais do corpo do documento e insere uma cópia preenchida por tese antes da âncora
+    (o próximo heading, "PRINCIPAIS CONSIDERAÇÕES")."""
+    if not ativos_visao_geral:
+        return
+    body = doc.element.body
+    elementos = list(body.iterchildren())
+    inicio = _indice_paragrafo(elementos, doc, "VISÃO GERAL DOS ATINGÍVEIS") + 1
+    fim = _indice_paragrafo(elementos, doc, "PRINCIPAIS CONSIDERAÇÕES", inicio)
+
+    padrao = [deepcopy(el) for el in elementos[inicio:inicio + 2]]  # 1 título + 1 tabela
+
+    ancora = elementos[fim]
+    for elemento in elementos[inicio:fim]:
+        body.remove(elemento)
+
+    for item in ativos_visao_geral:
+        bloco = [deepcopy(el) for el in padrao]
+        titulo_par = _DocxParagraph(bloco[0], doc)
+        _substituir_texto_paragrafo(titulo_par, item.get("tese", ""))
+        titulo_par.paragraph_format.keep_with_next = True
+        tabela = _DocxTable(bloco[1], doc)
+        _preencher_tabela_grade(tabela, item.get("linhas") or [], minimo=1)
+        for elemento in bloco:
+            ancora.addprevious(elemento)
+
+
+def preencher_ativos_e_passivo_dossie(dossie_path, resumo_ativos: list, ativos_visao_geral: list,
+                                       fiscais: list, trabalhistas: list, civeis: list, ecac: list) -> str:
+    """
+    Preenche Ativos Atingíveis (Visão Consolidada + Visão Geral, dinâmico por Tese) e Passivo
+    (Fiscal/Trabalhista/Cível/e-CAC) de um dossiê PPA a partir dos dados já extraídos do Excel
+    de Coleta de Informações. Se dossie_path for None, gera um dossiê novo (esqueleto).
+
+    Não mexe nas subseções narrativas de "2. TESES DE RECUPERAÇÃO" (Resumo da Tese,
+    Empresa-Alvo, Cronologia Societária etc.) nem em "Principais Credores" — são conteúdo de
+    análise jurídica manual, não derivável do Excel.
+    """
+    if dossie_path:
+        doc = Document(dossie_path)
+    else:
+        doc = Document(_build_doc({}))
+
+    if resumo_ativos:
+        _preencher_resumo_ativos(doc.tables[2], resumo_ativos, {})
+    if ativos_visao_geral:
+        _preencher_visao_geral_atingiveis_dinamica(doc, ativos_visao_geral)
+
+    for heading, table in _iter_headings_tables(doc):
+        h = heading.lower()
+        if "e-cac" in h:
+            _fill_passivo_table(table, [
+                [e.get("nome", ""), e.get("cpf_cnpj", ""), _fmt_valor_br(e.get("saldo"))]
+                for e in (ecac or [])
+            ])
+        elif "execuções fiscais" in h or "execucoes fiscais" in h:
+            _fill_passivo_table(table, [_proc_to_row(p) for p in (fiscais or [])])
+        elif "trabalhista" in h:
+            _fill_passivo_table(table, [_proc_to_row(p) for p in (trabalhistas or [])])
+        elif "cível" in h or "civel" in h:
+            _fill_passivo_table(table, [_proc_to_row(p) for p in (civeis or [])])
+
+    caminho = os.path.join(tempfile.gettempdir(), "Dossie_PPA_com_coleta.docx")
+    doc.save(caminho)
+    return caminho

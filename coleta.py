@@ -11,7 +11,7 @@ from openpyxl import load_workbook
 from datetime import datetime
 from typing import Optional, Tuple, Any
 
-from dossie_ppa import preencher_passivo_dossie
+from dossie_ppa import preencher_passivo_dossie, preencher_ativos_e_passivo_dossie, _fmt_valor_br
 
 # ── Constantes ───────────────────────────────────────────────────────────────
 
@@ -438,3 +438,219 @@ def coleta_gerar_dossie(excel_files, dossie_file):
     log(f"\n✅ Passivo preenchido: {len(fiscais)} fiscal · {len(trabalhistas)} trabalhista · {len(civeis)} cível.")
     status = f"Passivo preenchido — {len(fiscais)} fiscal, {len(trabalhistas)} trabalhista, {len(civeis)} cível"
     return "\n".join(lines), status, out
+
+
+# ── Excel "Coleta de Informações sobre Caso" (Matrículas + Fiscal & Cível + Trabalhista + E-cac) ──
+# Formato próprio (não Predictus): abas dedicadas já vêm com colunas limpas, sem precisar
+# adivinhar por palavra-chave. Preenche Ativos Atingíveis (agrupados por Tese) + Passivo.
+
+def _achar_aba(wb, *candidatos) -> Optional[str]:
+    """Acha o nome real de uma aba tolerando espaços extras/maiúsculas (ex.: 'Fiscal & Cível ')."""
+    alvo_norm = [c.strip().casefold() for c in candidatos]
+    for nome in wb.sheetnames:
+        if nome.strip().casefold() in alvo_norm:
+            return nome
+    return None
+
+
+_MAX_LINHAS_VAZIAS_SEGUIDAS = 50  # para de ler apos essa sequencia -- evita varrer um "used
+                                  # range" gigante (formatacao ate a ultima linha do Excel)
+                                  # so pra confirmar que so tem linha vazia dali pra frente
+
+
+def _linhas_por_header(ws) -> list:
+    """Lê uma aba com cabeçalho na linha 1, devolvendo uma lista de dicts {header: valor}.
+    Para de ler cedo se encontrar muitas linhas vazias seguidas (aba com "used range" muito
+    maior que os dados reais)."""
+    it = ws.iter_rows(values_only=True)
+    try:
+        header_row = next(it)
+    except StopIteration:
+        return []
+    header = [str(h).strip() if h is not None else "" for h in header_row]
+    registros = []
+    vazias_seguidas = 0
+    for row in it:
+        if all(v is None for v in row):
+            vazias_seguidas += 1
+            if vazias_seguidas >= _MAX_LINHAS_VAZIAS_SEGUIDAS:
+                break
+            continue
+        vazias_seguidas = 0
+        registros.append({header[i]: row[i] for i in range(len(header)) if i < len(row)})
+    return registros
+
+
+def _num(v):
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except Exception:
+        return None
+
+
+def ler_matriculas_coleta(wb) -> list:
+    nome = _achar_aba(wb, "Matrículas", "Matriculas")
+    return _linhas_por_header(wb[nome]) if nome else []
+
+
+def ler_processos_coleta(wb, *nomes_aba) -> list:
+    nome = _achar_aba(wb, *nomes_aba)
+    return _linhas_por_header(wb[nome]) if nome else []
+
+
+def ler_ecac_coleta(wb) -> list:
+    nome = _achar_aba(wb, "E-cac", "e-CAC", "Ecac")
+    return _linhas_por_header(wb[nome]) if nome else []
+
+
+def _agrupar_matriculas_por_tese(linhas: list) -> Tuple[list, list]:
+    """Agrupa as linhas da aba Matrículas pela coluna 'Tese' (ordem de 1ª ocorrência).
+    Devolve (resumo_ativos, ativos_visao_geral) no formato que dossie_ppa.py espera."""
+    grupos: dict = {}
+    ordem: list = []
+    for linha in linhas:
+        tese = str(linha.get("Tese") or "").strip() or "Sem tese identificada"
+        if tese not in grupos:
+            grupos[tese] = []
+            ordem.append(tese)
+        grupos[tese].append(linha)
+
+    resumo_ativos, ativos_visao_geral = [], []
+    for tese in ordem:
+        itens = grupos[tese]
+        vm_vals    = [v for v in (_num(i.get("Valor da Avaliação Definitiva (VM)")) for i in itens) if v is not None]
+        vp_vals    = [v for v in (_num(i.get("Valor da Avaliação Definitiva (VP)")) for i in itens) if v is not None]
+        onus_vals  = [v for v in (_num(i.get("Valor Total do Ônus")) for i in itens) if v is not None]
+
+        resumo_ativos.append({
+            "tese": tese,
+            "vm":   _fmt_valor_br(sum(vm_vals)) if vm_vals else "",
+            "vp":   _fmt_valor_br(sum(vp_vals)) if vp_vals else "",
+            "onus": _fmt_valor_br(sum(onus_vals)) if onus_vals else "",
+            "observacoes": "",
+        })
+
+        linhas_visao_geral = []
+        for i in itens:
+            fracao = i.get("Fração Ideal")
+            onus_item = _num(i.get("Valor Total do Ônus"))
+            linhas_visao_geral.append([
+                str(i.get("Matrícula") or ""),
+                "", "", "", "",  # Tipo de Ativo / Área-Ha / Sit. Produtiva / Liquidez — sem fonte no Excel
+                str(fracao) if fracao not in (None, "") else "",
+                _fmt_valor_br(onus_item) if onus_item is not None else "",
+                str(i.get("Observações") or ""),
+            ])
+        ativos_visao_geral.append({"tese": tese, "linhas": linhas_visao_geral})
+
+    return resumo_ativos, ativos_visao_geral
+
+
+def _linha_processo_coleta(linha: dict) -> dict:
+    return {
+        "cnj":    str(linha.get("Número CNJ") or ""),
+        "vinc":   str(linha.get("Vinculado à") or ""),
+        "data":   _parse_date(str(linha.get("Data da distribuição") or "")) or "",
+        "ativo":  str(linha.get("Polo ativo") or ""),
+        "valor":  _num(linha.get("Valor da causa")),
+        "status": str(linha.get("Situação atual") or ""),
+    }
+
+
+def _classificar_fiscal_civel_coleta(linhas: list) -> Tuple[list, list]:
+    """A aba 'Fiscal & Cível' mistura os dois — separa pela coluna Classe (mesmo
+    critério de _is_fiscal já usado no fluxo da Predictus)."""
+    fiscais, civeis = [], []
+    for linha in linhas:
+        classe = str(linha.get("Classe") or "")
+        proc = _linha_processo_coleta(linha)
+        (fiscais if _is_fiscal("", classe) else civeis).append(proc)
+    return fiscais, civeis
+
+
+def _ler_ecac_processado(linhas: list) -> list:
+    resultado = []
+    for linha in linhas:
+        resultado.append({
+            "nome":     str(linha.get("Nome") or "").strip(),
+            "cpf_cnpj": str(linha.get("CPF/CNPJ") or "").strip(),
+            "saldo":    _num(linha.get("E-cac")),
+        })
+    return resultado
+
+
+def coleta_gerar_dossie_ativos_passivo(excel_coleta_file, dossie_file) -> Tuple[str, str, Any]:
+    """
+    Preenche Ativos Atingíveis (Visão Consolidada + Visão Geral, agrupados por Tese) e
+    Passivo (Fiscal/Trabalhista/Cível/e-CAC) de um dossiê PPA a partir do Excel de
+    "Coleta de Informações sobre Caso" (abas Matrículas / Fiscal & Cível / Trabalhista / E-cac).
+    Retorna: (log_text, status_msg, caminho_do_docx_ou_None).
+    """
+    lines: list = []
+
+    def log(msg: str):
+        lines.append(msg)
+        return "\n".join(lines)
+
+    if not excel_coleta_file:
+        return "Nenhum Excel da Coleta de Informações enviado.", "Erro: nenhum Excel enviado", None
+
+    fp = excel_coleta_file.name if hasattr(excel_coleta_file, "name") else str(excel_coleta_file)
+    log(f"📂 {os.path.basename(fp)}")
+
+    try:
+        # read_only=True evita carregar estilos/dimensoes de abas com "used range" gigante
+        # (ex.: formatacao aplicada ate a ultima linha do Excel) -- sem isso, o carregamento
+        # de planilhas assim pode travar por minutos mesmo com poucas linhas de dado real.
+        wb = load_workbook(fp, data_only=True, read_only=True)
+    except Exception as exc:
+        return log(f"\n❌ Erro ao abrir o Excel: {exc}"), "Erro ao abrir o Excel", None
+
+    linhas_matriculas    = ler_matriculas_coleta(wb)
+    linhas_fiscal_civel  = ler_processos_coleta(wb, "Fiscal & Cível", "Fiscal & Civel")
+    linhas_trabalhista   = ler_processos_coleta(wb, "Trabalhista")
+    linhas_ecac          = ler_ecac_coleta(wb)
+
+    if not linhas_matriculas and not linhas_fiscal_civel and not linhas_trabalhista and not linhas_ecac:
+        return log(
+            "\n⚠️ Nenhuma das abas esperadas (Matrículas / Fiscal & Cível / Trabalhista / E-cac) "
+            "foi encontrada ou está vazia."
+        ), "Nenhum dado encontrado no Excel", None
+
+    resumo_ativos, ativos_visao_geral = _agrupar_matriculas_por_tese(linhas_matriculas)
+    fiscais, civeis = _classificar_fiscal_civel_coleta(linhas_fiscal_civel)
+    trabalhistas = [_linha_processo_coleta(l) for l in linhas_trabalhista]
+    ecac = _ler_ecac_processado(linhas_ecac)
+
+    log(f"   🏠 {len(linhas_matriculas)} matrícula(s) em {len(resumo_ativos)} tese(s)")
+    log(f"   ⚖️  {len(fiscais)} fiscal | {len(trabalhistas)} trabalhista | {len(civeis)} cível")
+    log(f"   💰 {len(ecac)} registro(s) de e-CAC")
+
+    dossie_path = None
+    if dossie_file:
+        dossie_path = dossie_file.name if hasattr(dossie_file, "name") else str(dossie_file)
+        log(f"\n📄 Atualizando dossiê enviado: {os.path.basename(dossie_path)}")
+    else:
+        log("\n📄 Nenhum dossiê enviado — gerando esqueleto com ativos/passivo preenchidos.")
+
+    try:
+        out = preencher_ativos_e_passivo_dossie(
+            dossie_path, resumo_ativos, ativos_visao_geral, fiscais, trabalhistas, civeis, ecac,
+        )
+    except Exception as exc:
+        return log(f"\n❌ Erro ao preencher o dossiê: {exc}"), "Erro ao preencher o dossiê", None
+
+    log(f"\n✅ Ativos ({len(resumo_ativos)} tese(s)) e passivo preenchidos.")
+    status = f"{len(resumo_ativos)} tese(s) de ativos + passivo preenchidos"
+    return "\n".join(lines), status, out
+
+
+def coleta_gerar_dossie_dispatch(excel_predictus_files, excel_coleta_file, dossie_file) -> Tuple[str, str, Any]:
+    """Escolhe o fluxo de preenchimento do dossiê: se o Excel da Coleta de Informações
+    (Matrículas/Fiscal & Cível/Trabalhista/E-cac) foi enviado, usa o fluxo novo (Ativos +
+    Passivo); senão, mantém o fluxo antigo (só Passivo, via Excel da Predictus)."""
+    if excel_coleta_file:
+        return coleta_gerar_dossie_ativos_passivo(excel_coleta_file, dossie_file)
+    return coleta_gerar_dossie(excel_predictus_files, dossie_file)

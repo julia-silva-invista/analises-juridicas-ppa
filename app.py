@@ -16,7 +16,7 @@ from design import CSS, HEADER_HTML, FOOTER_HTML
 from processos import proc_analisar, proc_gerar_word, proc_gerar_dossie, proc_responder
 from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores, rj_gerar_checklist, rj_gerar_checklist_creditos
 from matriculas import mat_gerar_excel, mat_responder
-from coleta import coleta_gerar, coleta_gerar_dossie
+from coleta import coleta_gerar, coleta_gerar_dossie_dispatch
 from timeline_societaria import (
     timeline_analisar,
     timeline_toggle_edicao,
@@ -436,15 +436,20 @@ with gr.Blocks(
         # ── Tab 5: Coleta de Informações ─────────────────────────────────────
         with gr.Tab("Coleta de Informações"):
             with gr.Row():
-                with gr.Column(scale=2):
+                with gr.Column(scale=1):
                     coleta_excel_in = gr.File(
                         label="Excel(s) da Predictus",
                         file_types=[".xlsx", ".xls"],
                         file_count="multiple",
                     )
-                with gr.Column(scale=2):
+                with gr.Column(scale=1):
+                    coleta_excel_coleta_in = gr.File(
+                        label="Excel da Coleta de Informações (Matrículas/Fiscal & Cível/Trabalhista)",
+                        file_types=[".xlsx", ".xls"],
+                    )
+                with gr.Column(scale=1):
                     coleta_dossie_in = gr.File(
-                        label="Dossiê PPA em Word (opcional — para atualizar o passivo)",
+                        label="Dossiê PPA em Word (opcional — para atualizar)",
                         file_types=[".docx"],
                     )
                 with gr.Column(scale=1):
@@ -455,6 +460,10 @@ with gr.Blocks(
                         "3. **Gerar Planilha** → planilha consolidada\n"
                         "4. Ou envie também o dossiê (Word) e clique em **Gerar Dossiê Atualizado** "
                         "para preencher a Seção 3 (Passivo)\n\n"
+                        "5. Já tem o **Excel da Coleta de Informações** (abas Matrículas/Fiscal & "
+                        "Cível/Trabalhista)? Envie-o junto com o Dossiê PPA e clique em **Gerar "
+                        "Dossiê Atualizado** — preenche também os Ativos Atingíveis (agrupados por "
+                        "Tese) além do Passivo.\n\n"
                         "_Suporta múltiplos devedores simultaneamente._"
                     )
 
@@ -616,8 +625,8 @@ with gr.Blocks(
 
     # Coleta de Informações
     coleta_gerar_dossie_btn.click(
-        fn=coleta_gerar_dossie,
-        inputs=[coleta_excel_in, coleta_dossie_in],
+        fn=coleta_gerar_dossie_dispatch,
+        inputs=[coleta_excel_in, coleta_excel_coleta_in, coleta_dossie_in],
         outputs=[coleta_log, coleta_status, coleta_dossie_out],
     )
     coleta_gerar_btn.click(
