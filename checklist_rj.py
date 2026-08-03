@@ -122,8 +122,12 @@ def _info_rj(doc, dados, hoje):
     _spacer(doc)
 
 
-def _salvar(doc, prefixo, dados):
+def _salvar(doc, prefixo, dados, sufixo: str = ""):
     nome = re.sub(r"[^\w\s-]", "", dados.get("rj_numero", "") or "caso").strip().replace(" ", "_")[:40] or "caso"
+    if sufixo:
+        suf = re.sub(r"[^\w\s-]", "", sufixo).strip().replace(" ", "_")[:30]
+        if suf:
+            nome = f"{nome}_{suf}"
     caminho = os.path.join(tempfile.gettempdir(), f"{prefixo}_{nome}.docx")
     doc.save(caminho)
     return caminho
@@ -558,30 +562,14 @@ def _creditor_sections(doc, dados: dict):
         _spacer(doc, pts=2)
 
 
-def _build_checklist_creditos(dados: dict) -> str:
+def _build_checklist_creditos(dados: dict, sufixo: str = "") -> str:
     doc = _base_doc()
     hoje = _date.today().strftime("%d/%m/%Y")
     _titulo(doc, "Análise de Créditos em Recuperação Judicial")
     _info_rj(doc, dados, hoje)
     _creditor_sections(doc, dados)
     _rodape_conf(doc)
-    return _salvar(doc, "Analise_Creditos_RJ", dados)
-
-
-def _build_checklist_creditos_multi(rj_info: dict, lista: list) -> str:
-    """Um único documento com um checklist por credor (quebra de página entre eles)."""
-    doc = _base_doc()
-    hoje = _date.today().strftime("%d/%m/%Y")
-    _titulo(doc, "Análise de Créditos em Recuperação Judicial")
-    _info_rj(doc, rj_info, hoje)
-    for i, dados in enumerate(lista):
-        if i > 0:
-            doc.add_page_break()
-        nome = dados.get("credor", "") or f"Credor {i+1}"
-        _para(doc, f"▸ CRÉDITO {i+1} — {nome}", bold=True, size=12, color=_LARANJA, before=2, after=4)
-        _creditor_sections(doc, dados)
-    _rodape_conf(doc)
-    return _salvar(doc, "Analise_Creditos_RJ", rj_info or (lista[0] if lista else {}))
+    return _salvar(doc, "Analise_Creditos_RJ", dados, sufixo=sufixo)
 
 
 def _extrair_cred_scoped(fonte, nome, doc, client, model) -> dict:
@@ -594,20 +582,65 @@ def _extrair_cred_scoped(fonte, nome, doc, client, model) -> dict:
     return _extrair(foco + _PROMPT_CRED, fonte, client, model)
 
 
-def gerar_checklist_creditos(fonte: str, client, model: str, creditores=None) -> str:
-    # Sem credores informados: extrai o crédito que a IA encontrar (comportamento padrão)
-    if not creditores:
-        dados = _extrair(_PROMPT_CRED, fonte, client, model)
-        return _build_checklist_creditos(dados)
-    # Com credores: um checklist escopado por credor, tudo em um documento
-    lista = []
-    rj_info = {}
+_PROMPT_IDENTIFICAR_EXEQUENTES = """\
+Você está analisando o texto extraído de processos relacionados a um crédito (execuções, ações de
+cobrança, cumprimento de sentença etc.), SEM nenhum credor-alvo especificado previamente.
+
+Identifique o(s) CREDOR(ES) EXEQUENTE(S) — a parte que ocupa o polo ativo (exequente/credor/autor) das
+execuções ou ações de cobrança encontradas no texto. NÃO confunda com o polo passivo (executado/devedor).
+Se o mesmo credor aparecer em mais de uma execução, liste-o UMA ÚNICA vez.
+
+Retorne APENAS um JSON válido (sem markdown) com esta estrutura:
+{"exequentes": [{"nome": "nome/razão social completo", "cpf_cnpj": "apenas dígitos, ou null"}]}
+
+Se não houver nenhum polo ativo identificável no texto, retorne {"exequentes": []}.
+
+TEXTO:
+"""
+
+
+def _identificar_exequentes(fonte: str, client, model: str) -> list:
+    """Quando nenhum credor-alvo foi informado, tenta achar o(s) exequente(s) das execuções/ações
+    relacionadas — é o único sinal disponível de "quem é o credor" no fluxo sem RJ (só relacionados)."""
+    resultado = _extrair(_PROMPT_IDENTIFICAR_EXEQUENTES, fonte, client, model)
+    exequentes = resultado.get("exequentes") if isinstance(resultado, dict) else None
+    if not isinstance(exequentes, list):
+        return []
+    vistos, candidatos = set(), []
+    for ex in exequentes:
+        if not isinstance(ex, dict):
+            continue
+        nome = str(ex.get("nome") or "").strip()
+        if not nome:
+            continue
+        chave = re.sub(r"\s+", " ", nome).strip().lower()
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        candidatos.append((nome, str(ex.get("cpf_cnpj") or "").strip()))
+    return candidatos
+
+
+def _gerar_docs_por_credor(fonte: str, creditores: list, client, model: str) -> list:
+    caminhos = []
     for nome, doc_id in creditores:
         dados = _extrair_cred_scoped(fonte, nome, doc_id, client, model)
         if not (dados.get("credor") or "").strip():
             dados["credor"] = nome + (f" · {doc_id}" if doc_id else "")
-        lista.append(dados)
-        if not rj_info and (dados.get("rj_numero") or dados.get("vara")):
-            rj_info = {"rj_numero": dados.get("rj_numero", ""), "vara": dados.get("vara", ""),
-                       "data_analise": dados.get("data_analise", "")}
-    return _build_checklist_creditos_multi(rj_info, lista)
+        caminhos.append(_build_checklist_creditos(dados, sufixo=nome))
+    return caminhos
+
+
+def gerar_checklist_creditos(fonte: str, client, model: str, creditores=None):
+    # Credores informados manualmente: um .docx por credor, escopado à extração de cada um
+    if creditores:
+        return _gerar_docs_por_credor(fonte, creditores, client, model)
+    # Sem credor informado: tenta identificar o(s) credor(es) exequente(s) das execuções/ações
+    # relacionadas antes de cair no modo genérico — essencial no fluxo sem RJ (só processos
+    # relacionados), em que o único sinal de "quem é o credor" é o polo ativo das execuções.
+    candidatos = _identificar_exequentes(fonte, client, model)
+    if candidatos:
+        return _gerar_docs_por_credor(fonte, candidatos, client, model)
+    # Fallback: não foi possível identificar nenhum exequente — extração genérica de sempre
+    dados = _extrair(_PROMPT_CRED, fonte, client, model)
+    return _build_checklist_creditos(dados)

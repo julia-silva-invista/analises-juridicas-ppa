@@ -195,6 +195,10 @@ with gr.Blocks(
 
         # ── Tab 2: Análise de Recuperação Judicial ───────────────────────────
         with gr.Tab("Recuperação Judicial"):
+            RJ_MAX_CRED = 12
+            rj_cred_count = gr.State(1)
+            rj_cred_rows, rj_cred_nomes, rj_cred_docs = [], [], []
+
             with gr.Row(elem_classes=["input-grid-three"]):
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
                     rj_pdf_principal = gr.File(
@@ -211,26 +215,36 @@ with gr.Blocks(
                         elem_classes=["equal-input-box", "upload-equal-panel"],
                     )
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
-                    with gr.Group(elem_classes=["instructions-with-gemini"]):
-                        rj_instrucoes = gr.Textbox(
-                            label="Instruções adicionais",
-                            placeholder="Ex: analisar crédito do Bradesco; verificar prescrição; identificar créditos extraconcursais...",
-                            lines=4,
-                            elem_classes=["instructions-field"],
-                        )
-                        rj_usar_pro = gr.Checkbox(
-                            label="Usar Gemini Pro",
-                            value=False,
-                            elem_classes=["cb-slot", "cb-tip-gemini"],
-                        )
-                        rj_versao_resumida = gr.Checkbox(
-                            label="Versão resumida",
-                            value=False,
-                            elem_classes=["cb-slot", "cb-tip-resumida"],
-                        )
+                    gr.Markdown(
+                        "**Como usar:**\n\n"
+                        "- Envie o **processo de RJ** para gerar o **Checklist de RJ**.\n"
+                        "- Envie os **processos relacionados** (execuções, impugnações de crédito) — e a "
+                        "RJ, opcionalmente — para gerar o **Checklist de Créditos** de um crédito "
+                        "específico.\n"
+                        "- Havendo mais de um credor, recomendamos listá-los em **Checklist de Créditos "
+                        "— Inserir dados do credor** (abaixo): o robô gera um checklist de crédito para "
+                        "cada credor informado."
+                    )
+
+            with gr.Accordion("Checklist de Créditos — Inserir dados do credor (opcional)", open=False, elem_classes=["mat-accordion"]):
+                gr.Markdown(
+                    "Informe o nome e o CPF/CNPJ de cada credor-alvo (use **+ Adicionar credor** para "
+                    "incluir mais). Deixe em branco para a IA identificar o crédito automaticamente "
+                    "(a partir do polo ativo das execuções relacionadas)."
+                )
+                for _i in range(RJ_MAX_CRED):
+                    with gr.Row(visible=(_i == 0), elem_classes=["mat-accordion-row"]) as _crow:
+                        _cnome = gr.Textbox(label="Nome do credor", scale=3, container=True,
+                                            placeholder="Ex: BASF S.A.")
+                        _cdoc  = gr.Textbox(label="CPF/CNPJ", scale=2, container=True,
+                                            placeholder="00.000.000/0001-00")
+                    rj_cred_rows.append(_crow)
+                    rj_cred_nomes.append(_cnome)
+                    rj_cred_docs.append(_cdoc)
+                rj_cred_add_btn = gr.Button("+ Adicionar credor", variant="secondary")
 
             with gr.Row(elem_classes=["analysis-action-row"]):
-                rj_analisar_btn = gr.Button("Analisar recuperação judicial", variant="primary", elem_classes=["analysis-run-btn"])
+                rj_analisar_btn = gr.Button("Analisar", variant="primary", elem_classes=["analysis-run-btn"])
 
             with gr.Tabs():
                 with gr.Tab("Progresso"):
@@ -253,38 +267,17 @@ with gr.Blocks(
             rj_extracao_state  = gr.State("")   # texto bruto das extrações (fonte para o Excel de credores)
 
             with gr.Row():
-                rj_word_btn          = gr.Button("Baixar Word",            variant="secondary", elem_classes=["word-download-btn"])
-                rj_excel_cred_btn    = gr.Button("Gerar Excel de Credores", variant="secondary", elem_classes=["word-download-btn"])
-                rj_checklist_btn     = gr.Button("Checklist RJ",            variant="secondary", elem_classes=["word-download-btn"])
+                rj_word_btn           = gr.Button("Baixar Word",             variant="secondary", elem_classes=["word-download-btn"])
+                rj_excel_cred_btn     = gr.Button("Gerar Excel de Credores", variant="secondary", elem_classes=["word-download-btn"])
+                rj_checklist_btn      = gr.Button("Checklist RJ",            variant="secondary", elem_classes=["word-download-btn"])
+                rj_checklist_cred_btn = gr.Button("Gerar Checklist de Créditos", variant="secondary", elem_classes=["word-download-btn"])
             rj_word_file      = gr.File(label="",                  interactive=False, visible=False, elem_classes=["word-file-output"])
             rj_excel_cred_file   = gr.File(label="Excel de Credores", interactive=False, visible=False, elem_classes=["word-file-output"])
             rj_excel_cred_status = gr.Textbox(label="", interactive=False, lines=1, show_label=False)
             rj_checklist_file      = gr.File(label="Checklist RJ",        interactive=False, visible=False, elem_classes=["word-file-output"])
             rj_checklist_status    = gr.Markdown("")
-
-            # ── Checklist de Créditos (por credor-alvo) ──────────────────────
-            gr.HTML('<hr class="inv-divider">')
-            gr.Markdown(
-                "**Checklist de Créditos por credor** — informe o nome e o CPF/CNPJ de cada "
-                "credor-alvo (use **+ Adicionar credor** para incluir mais). "
-                "Deixe em branco para a IA identificar o crédito automaticamente."
-            )
-            RJ_MAX_CRED = 12
-            rj_cred_count = gr.State(1)
-            rj_cred_rows, rj_cred_nomes, rj_cred_docs = [], [], []
-            for _i in range(RJ_MAX_CRED):
-                with gr.Row(visible=(_i == 0)) as _crow:
-                    _cnome = gr.Textbox(label="Nome do credor", scale=3, container=True,
-                                        placeholder="Ex: BASF S.A.")
-                    _cdoc  = gr.Textbox(label="CPF/CNPJ", scale=2, container=True,
-                                        placeholder="00.000.000/0001-00")
-                rj_cred_rows.append(_crow)
-                rj_cred_nomes.append(_cnome)
-                rj_cred_docs.append(_cdoc)
-            with gr.Row():
-                rj_cred_add_btn       = gr.Button("+ Adicionar credor", variant="secondary")
-                rj_checklist_cred_btn = gr.Button("Gerar Checklist de Créditos RJ", variant="primary", elem_classes=["word-download-btn"])
-            rj_checklist_cred_file   = gr.File(label="Checklist de Créditos RJ", interactive=False, visible=False, elem_classes=["word-file-output"])
+            rj_checklist_cred_file   = gr.File(label="Checklist de Créditos", interactive=False, visible=False,
+                                                file_count="multiple", elem_classes=["word-file-output"])
             rj_checklist_cred_status = gr.Markdown("")
 
             gr.HTML('<hr class="inv-divider">')
@@ -530,7 +523,7 @@ with gr.Blocks(
     # RJ — análise apenas ao clicar no botão
     rj_analisar_btn.click(
         fn=rj_analisar,
-        inputs=[rj_pdf_principal, rj_pdf_relacionados, rj_instrucoes, rj_usar_pro, rj_versao_resumida],
+        inputs=[rj_pdf_principal, rj_pdf_relacionados],
         outputs=[rj_log, rj_report, rj_relatorio_state, rj_extracao_state],
         concurrency_limit=3,
     )

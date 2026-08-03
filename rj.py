@@ -347,35 +347,107 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
         return _retry(_fn)
 
 
-def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: str, cache_name, model_cons: str) -> str:
+def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: str, cache_name, model_cons: str,
+                                standalone: bool = False) -> tuple:
+    """Extrai e consolida os 'processos relacionados'. Retorna (secao_texto, texto_bruto, avisos).
+
+    texto_bruto é o texto extraído página-a-página (antes da consolidação) — quem chama deve
+    somá-lo à fonte usada pelos checklists/Excel de credores, para que dados de execuções que só
+    aparecem nos relacionados (não repetidos no PDF principal de RJ) não se percam.
+
+    standalone=True é usado quando NÃO há PDF principal de RJ: os processos abaixo são tratados
+    como processos PRINCIPAIS (não subordinados a nenhuma RJ), reaproveitando o mesmo template de
+    'Processos Relacionados' já embutido em SYSTEM_PROMPT_RJ/REPORT_TEMPLATE_RJ.
+    """
+    avisos: list = []
     try:
-        texto_relacionados = ""
-        for idx, path in enumerate(pdf_paths):
-            chunks = _rj_dividir_pdf(path)
-            cli = client1 if idx % 2 == 0 else client2
-            for chunk_path, offset, total in chunks:
+        todos_chunks_rel = []
+        for path in pdf_paths:
+            for chunk_path, offset, total in _rj_dividir_pdf(path):
+                todos_chunks_rel.append((chunk_path, offset, total, path))
+
+        n_rel = len(todos_chunks_rel)
+        if n_rel == 0:
+            return "", "", avisos
+
+        resultados: dict = {}
+
+        def _worker_rel(i):
+            cp, offset, total_pg, _ = todos_chunks_rel[i]
+            cli = client1 if i % 2 == 0 else client2
+            try:
+                return _retry(
+                    lambda: _rj_extrair_chunk_fileapi((i, cp, offset, total_pg, n_rel, cli)),
+                    tentativas=2, espera_base=15
+                )
+            except Exception as e:
+                msg_e = str(e)
+                if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
+                    ri, res, nota = _rj_extrair_chunk((i, cp, offset, total_pg, n_rel, cli))
+                    return ri, res, (nota + " | " if nota else "") + "fallback inline"
+                raise
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            futures = {ex.submit(_worker_rel, i): i for i in range(n_rel)}
+            for future in concurrent.futures.as_completed(futures):
+                i_f = futures[future]
                 try:
-                    _, res, _ = _rj_extrair_chunk((idx, chunk_path, offset, total, len(chunks), cli))
-                    if res:
-                        texto_relacionados += f"\n--- {Path(path).name} ---\n{res}"
-                except Exception:
-                    pass
+                    idx, res, _nota = future.result()
+                    resultados[idx] = res
+                except Exception as e:
+                    nome_arq = Path(todos_chunks_rel[i_f][3]).name
+                    avisos.append(f"Aviso: nao foi possivel extrair um trecho de '{nome_arq}' ({e}) — pode faltar informacao desse processo.")
+
+        for cp, _off, _tot, orig in todos_chunks_rel:
+            if cp != orig:
+                try: os.remove(cp)
+                except: pass
+
+        texto_relacionados = ""
+        for i, (_cp, _offset, _total_pg, orig_path) in enumerate(todos_chunks_rel):
+            res = resultados.get(i, "")
+            if res:
+                texto_relacionados += f"\n--- {Path(orig_path).name} ---\n{res}"
 
         if not texto_relacionados.strip():
-            return ""
+            return "", "", avisos
 
-        prompt = (
-            "Com base nos processos relacionados abaixo, "
-            "gere secoes B.1, B.2, etc., conforme o template.\n\n"
-            "REGRAS:\n"
-            "- Recursos e Embargos a Execucao: integre na Secao A do processo principal\n"
-            "- IDPJs, Paulianas, Embargos de Terceiro: crie secoes B proprias\n"
-            "Use: 'B.1. Incidente de Desconsideracao da Personalidade n. XXX'\n\n"
-            f"PROCESSOS RELACIONADOS:\n{texto_relacionados}\n\n"
+        instrucao_anti_omissao = (
+            "INSTRUCAO OBRIGATORIA DE LEITURA:\n"
+            "1. Leia cada processo/parte individualmente, do comeco ao fim, sem pular nenhum.\n"
+            "2. Nao omita nenhuma execucao, valor, garantia, parte ou andamento relevante de qualquer processo.\n"
+            f"3. Antes de finalizar, confira se voce cobriu os {len(pdf_paths)} processo(s) fornecidos abaixo.\n\n"
         )
+
+        if standalone:
+            prompt = (
+                "Os processos abaixo NAO tem nenhuma Recuperacao Judicial principal associada — cada um "
+                "deve ser tratado como um processo PRINCIPAL, nao subordinado a nenhum outro. Gere a Secao "
+                "1 (VISAO JURIDICA) do relatorio, com uma subsecao por processo principal (A., B., C., ...) "
+                "e por incidente/recurso relacionado a ele (A.1., A.2., ...), seguindo RIGOROSAMENTE o "
+                "template de 'Processos Relacionados' fornecido (mesma estrutura, marcadores e nivel de "
+                "detalhe usados para execucoes, embargos, IDPJs, acoes paulianas etc.).\n\n"
+                + instrucao_anti_omissao
+                + f"PROCESSOS ({len(pdf_paths)} arquivo(s)):\n{texto_relacionados}\n\n"
+            )
+        else:
+            prompt = (
+                "Com base nos processos relacionados abaixo, "
+                "gere secoes B.1, B.2, etc., conforme o template.\n\n"
+                "REGRAS:\n"
+                "- Recursos e Embargos a Execucao: integre na Secao A do processo principal\n"
+                "- IDPJs, Paulianas, Embargos de Terceiro: crie secoes B proprias\n"
+                "Use: 'B.1. Incidente de Desconsideracao da Personalidade n. XXX'\n\n"
+                + instrucao_anti_omissao
+                + f"PROCESSOS RELACIONADOS ({len(pdf_paths)} arquivo(s)):\n{texto_relacionados}\n\n"
+            )
         if instrucoes.strip():
             prompt += f"INSTRUCOES: {instrucoes.strip()}\n\n"
-        prompt += "Gere APENAS as secoes de processos relacionados (B.1, B.2, etc.)."
+        prompt += (
+            "Gere o relatorio completo (Secao 1 apenas), sem inventar informacao."
+            if standalone else
+            "Gere APENAS as secoes de processos relacionados (B.1, B.2, etc.)."
+        )
 
         if cache_name:
             contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
@@ -385,7 +457,7 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
                     model=model_cons, contents=contents, config=config
                 ).text
             try:
-                return _retry(_fn)
+                secao = _retry(_fn)
             except Exception as e:
                 msg = str(e)
                 if "PERMISSION_DENIED" in msg or "CachedContent not found" in msg or "403" in msg:
@@ -396,23 +468,84 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
                         return client1.models.generate_content(
                             model=model_cons, contents=[conteudo]
                         ).text
-                    return _retry(_fn_fallback)
-                raise
+                    secao = _retry(_fn_fallback)
+                else:
+                    raise
         else:
             conteudo = SYSTEM_PROMPT_RJ + "\n\n" + REPORT_TEMPLATE_RJ + "\n\n" + prompt
             def _fn():
                 return client1.models.generate_content(
                     model=model_cons, contents=[conteudo]
                 ).text
-            return _retry(_fn)
+            secao = _retry(_fn)
+
+        return secao, texto_relacionados, avisos
     except Exception as e:
-        return f"Erro ao processar relacionados: {e}"
+        return f"Erro ao processar relacionados: {e}", "", avisos
+
+
+def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False):
+    """Analisa só 'processos relacionados' (execuções/ações avulsas), sem PDF principal de RJ.
+
+    Gera um relatório objetivo por processo (reaproveitando o template de 'Processos
+    Relacionados') e devolve o texto bruto consolidado como fonte para os checklists/Excel de
+    credores — permite gerar o Checklist de Créditos sem exigir upload de uma RJ.
+    """
+    yield "Iniciando analise dos processos relacionados (sem RJ principal)...", "", "", ""
+
+    try:
+        client1, client2 = _get_clients_rj()
+    except Exception as e:
+        yield f"Erro de configuracao: {e}", "", "", ""
+        return
+
+    model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
+    pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
+
+    log = [f"Processo(s) relacionado(s) recebido(s): {len(pdf_paths_rel)}"]
+    for p in pdf_paths_rel:
+        mb = Path(p).stat().st_size / 1_048_576
+        log.append(f"   · {Path(p).name} ({mb:.1f} MB)")
+    log.append(f"Modelo de consolidacao: {model_cons}")
+    yield "\n".join(log), "", "", ""
+
+    t_inicio = time.time()
+    log.append("\nExtraindo processos relacionados (paralelo · File API)...")
+    yield "\n".join(log), "", "", ""
+
+    try:
+        secao_rel, texto_bruto, avisos = _rj_processar_relacionados(
+            pdf_paths_rel, client1, client2, instrucoes, cache_name=None, model_cons=model_cons,
+            standalone=True,
+        )
+        for aviso in avisos:
+            log.append(f"   {aviso}")
+
+        if not texto_bruto.strip():
+            log.append("\nNenhuma informacao relevante extraida dos processos relacionados.")
+            yield "\n".join(log), "", "", ""
+            return
+
+        relatorio = secao_rel or "Nenhuma informacao relevante extraida dos processos relacionados."
+        t_total = int(time.time() - t_inicio)
+        log.append(f"\nAnalise concluida em {t_total//60}min{t_total%60:02d}s | {len(relatorio):,} chars")
+        yield "\n".join(log), relatorio, relatorio, texto_bruto
+
+    except Exception as exc:
+        log.append(f"\nErro: {exc}")
+        yield "\n".join(log), f"Erro:\n{exc}", "", ""
 
 
 
-def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False, versao_resumida: bool = False):
-    if not pdf_files:
+def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_pro: bool = False, versao_resumida: bool = False):
+    if not pdf_files and not pdf_relacionados:
         yield "Nenhum arquivo enviado.", "", "", ""
+        return
+
+    if not pdf_files:
+        # Sem PDF principal de RJ: analisa só os processos relacionados (execuções/ações
+        # avulsas), num fluxo mais leve — sem Seção A (que pressupõe uma RJ principal).
+        yield from _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes, usar_gemini_pro)
         return
 
     yield "Iniciando analise de Recuperacao Judicial...", "", "", ""
@@ -579,12 +712,21 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: b
             pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
             log.append(f"\nProcessando {len(pdf_paths_rel)} processo(s) relacionado(s)...")
             yield "\n".join(log), "", "", ""
-            secao_rel = _rj_processar_relacionados(pdf_paths_rel, client1, client2, instrucoes, cache, model_cons)
+            secao_rel, texto_bruto_rel, avisos_rel = _rj_processar_relacionados(
+                pdf_paths_rel, client1, client2, instrucoes, cache, model_cons
+            )
+            if texto_bruto_rel:
+                # Soma ao texto bruto da RJ principal — sem isso, dados de execucoes que so
+                # aparecem nos relacionados (nao repetidos no PDF da RJ) nao chegavam aos
+                # checklists/Excel de credores, que priorizam texto_merged como fonte.
+                texto_merged = (texto_merged + "\n\n" + texto_bruto_rel) if texto_merged else texto_bruto_rel
             if secao_rel and "nenhum" not in secao_rel.lower():
-                log[-1] = "   Processos relacionados analisados."
+                log.append("   Processos relacionados analisados.")
                 secoes.append(secao_rel)
             else:
-                log[-1] = "   Nenhuma informacao relevante nos processos relacionados."
+                log.append("   Nenhuma informacao relevante nos processos relacionados.")
+            for aviso in avisos_rel:
+                log.append(f"   {aviso}")
             yield "\n".join(log), "", "", ""
 
         relatorio = "\n\n".join(s for s in secoes if s)
@@ -650,12 +792,15 @@ def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = "", *campos):
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
-        path = gerar_checklist_creditos(fonte, client, MODEL_RAPIDO_RJ, creditores=creditores or None)
+        resultado = gerar_checklist_creditos(fonte, client, MODEL_RAPIDO_RJ, creditores=creditores or None)
+        paths = resultado if isinstance(resultado, list) else [resultado]
         if creditores:
-            msg = f"✅ Checklist de créditos gerado para {len(creditores)} credor(es) — clique para baixar."
+            msg = f"✅ {len(paths)} checklist(s) de crédito gerado(s) — um arquivo por credor, clique para baixar."
+        elif len(paths) > 1:
+            msg = f"✅ {len(paths)} credor(es) exequente(s) identificado(s) automaticamente — um checklist por credor, clique para baixar."
         else:
             msg = "✅ Checklist de créditos gerado (crédito identificado automaticamente)."
-        return gr.update(value=path, visible=True), msg
+        return gr.update(value=paths, visible=True), msg
     except Exception as e:
         return gr.update(value=None, visible=False), f"❌ Erro: {e}"
 
