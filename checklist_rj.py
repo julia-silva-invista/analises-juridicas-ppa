@@ -419,6 +419,32 @@ Se um dado factual (cédula, emitente, avalista, matrícula, valor, data, etc.) 
 parte do processo, preencha com "Não consta". Em campos de escolha (Sim/Não, Favorável/...), se não
 houver informação, deixe "" (nenhuma opção marcada). NUNCA marque mais de uma opção.
 
+═══ REGRA — IMPUGNAÇÃO DE CRÉDITO ═══
+Em "impugnacoes", inclua APENAS Incidentes de Impugnação de Crédito propriamente ditos — o incidente
+processual formal de impugnação ao crédito, com processo/número próprio — seja porque foi juntado como
+PDF próprio, seja porque é referido/citado dentro de uma das execuções relacionadas. NÃO inclua meras
+objeções, alegações informais sobre o crédito ou discussões em petições avulsas que não correspondam a
+um incidente de impugnação formalmente instaurado.
+
+═══ REGRA — LASTROS: PRIORIDADE DE FONTE ═══
+Quando o texto também contiver a Recuperação Judicial (além das execuções): "valor_arrolado" e "classe"
+de cada lastro devem ser extraídos PRIORITARIAMENTE do que consta na RJ (QGC, edital de habilitação,
+manifestação do AJ) — é a fonte mais confiável para valor habilitado e classificação do crédito. Para
+qualquer outro campo do lastro que não seja encontrado nas execuções relacionadas, busque na RJ antes
+de preencher como "Não consta".
+
+═══ REGRA — GARANTIAS: SOMENTE IMOBILIÁRIAS ═══
+Em "garantias", inclua APENAS garantias reais sobre bem IMÓVEL (hipoteca, alienação fiduciária de
+imóvel, matrícula dada em garantia). NÃO inclua aval, fiança, penhor de bens móveis/cotas/ações,
+alienação fiduciária de veículo ou qualquer garantia que não recaia sobre imóvel — essas continuam
+descritas apenas no campo "garantia" de cada lastro (texto livre), sem virar uma entrada em "garantias".
+
+═══ REGRA — RECURSOS: VÍNCULO OBRIGATÓRIO ═══
+Cada recurso deve ter "processo_vinculado" preenchido com o NÚMERO do processo (execução ou Incidente
+de Impugnação de Crédito) ao qual o recurso se refere — deve corresponder exatamente ao "numero" de uma
+das entradas em "execucoes" ou "impugnacoes". Se não for possível identificar a qual processo o recurso
+se vincula, deixe "processo_vinculado" como "".
+
 Em campos de escolha, responda com a opção EXATA e ÚNICA (ex: "Favorável", "Desfavorável", "Sim").
 Responda SOMENTE com o JSON.
 
@@ -449,11 +475,36 @@ Responda SOMENTE com o JSON.
      "garantia": "", "valor_causa": "R$", "honorarios": "", "sucumbencia": "",
      "constricao": "", "status": "", "cumprimento_autonomo": ""}
   ],
-  "recursos": [{"numero": "", "polo_ativo": "", "finalidade": "", "status": ""}]
+  "recursos": [{"numero": "", "polo_ativo": "", "finalidade": "", "status": "", "processo_vinculado": ""}]
 }
 
 TEXTO:
 """
+
+
+def _norm_num(s) -> str:
+    """Normaliza número de processo pra comparação (só dígitos) — tolera diferenças de
+    pontuação entre o número citado no recurso e o número da execução/impugnação."""
+    return re.sub(r"\D", "", str(s or ""))
+
+
+def _recursos_vinculados(recursos: list, numero_processo: str) -> list:
+    alvo = _norm_num(numero_processo)
+    if not alvo:
+        return []
+    return [r for r in recursos if _norm_num(r.get("processo_vinculado")) == alvo]
+
+
+def _render_recurso(doc, rec: dict, indice: int, rotulo_vinculo: str):
+    _sub_gray(doc, f"Recurso nº {indice}")
+    _kv_label_table(doc, [
+        ("Nº do Processo",       rec.get("numero", "")),
+        ("Polo ativo",           rec.get("polo_ativo", "")),
+        ("Finalidade/Matéria",   rec.get("finalidade", "")),
+        ("Status Atual",         rec.get("status", "")),
+        ("Processo Relacionado", rotulo_vinculo),
+    ])
+    _spacer(doc, pts=2)
 
 
 def _creditor_sections(doc, dados: dict):
@@ -476,6 +527,9 @@ def _creditor_sections(doc, dados: dict):
     # ── 2. IMPUGNAÇÃO DE CRÉDITO ─────────────────────────────────────────
     _sec_title(doc, "2. IMPUGNAÇÃO DE CRÉDITO")
     impugnacoes = dados.get("impugnacoes") or [{}]
+    recursos_todos = dados.get("recursos") or []
+    recursos_usados: set = set()
+    contador_recurso = 0
     manif = ["Favorável", "Desfavorável", "Pendente"]
     for i, imp in enumerate(impugnacoes, 1):
         _sub_gray(doc, f"Impugnação de Crédito nº {i}")
@@ -490,6 +544,10 @@ def _creditor_sections(doc, dados: dict):
             ("Status",                      imp.get("status", "")),
         ])
         _spacer(doc, pts=2)
+        for rec in _recursos_vinculados(recursos_todos, imp.get("numero", "")):
+            contador_recurso += 1
+            recursos_usados.add(id(rec))
+            _render_recurso(doc, rec, contador_recurso, f"Impugnação de Crédito nº {i}")
 
     # ── 3. LASTROS ───────────────────────────────────────────────────────
     _sec_title(doc, "3. LASTROS")
@@ -549,17 +607,19 @@ def _creditor_sections(doc, dados: dict):
             ("Existe cumprimento autônomo de honorários (CEF/BB)", ex.get("cumprimento_autonomo", "")),
         ])
         _spacer(doc, pts=2)
+        for rec in _recursos_vinculados(recursos_todos, ex.get("numero", "")):
+            contador_recurso += 1
+            recursos_usados.add(id(rec))
+            _render_recurso(doc, rec, contador_recurso, f"Execução de Título Extrajudicial nº {i}")
 
-    recursos = dados.get("recursos") or []
-    for i, rec in enumerate(recursos, 1):
-        _sub_gray(doc, f"Recurso nº {i}")
-        _kv_label_table(doc, [
-            ("Nº do Processo",     rec.get("numero", "")),
-            ("Polo ativo",         rec.get("polo_ativo", "")),
-            ("Finalidade/Matéria", rec.get("finalidade", "")),
-            ("Status Atual",       rec.get("status", "")),
-        ])
-        _spacer(doc, pts=2)
+    # Recursos cujo vínculo não foi identificado (ou não bateu com nenhuma execução/
+    # impugnação) — não descarta silenciosamente, só não tem como posicionar corretamente.
+    orfaos = [r for r in recursos_todos if id(r) not in recursos_usados]
+    if orfaos:
+        _sub_gray(doc, "Outros Recursos (vínculo não identificado)")
+        for rec in orfaos:
+            contador_recurso += 1
+            _render_recurso(doc, rec, contador_recurso, rec.get("processo_vinculado") or "Não identificado")
 
 
 def _build_checklist_creditos(dados: dict, sufixo: str = "") -> str:
