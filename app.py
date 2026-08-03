@@ -522,7 +522,7 @@ with gr.Blocks(
         fn=proc_analisar,
         inputs=[proc_pdf_principal, proc_pdf_relacionados, proc_instrucoes, proc_usar_pro, proc_versao_resumida],
         outputs=[proc_log, proc_report, proc_relatorio_state, proc_extracao_state],
-        concurrency_limit=1,
+        concurrency_limit=2,
     )
     proc_word_btn.click(fn=proc_gerar_word, inputs=[proc_relatorio_state], outputs=[proc_word_file])
     proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state, proc_extracao_state], outputs=[proc_dossie_file, proc_dossie_status])
@@ -535,7 +535,7 @@ with gr.Blocks(
         fn=rj_analisar,
         inputs=[rj_pdf_principal, rj_pdf_relacionados],
         outputs=[rj_log, rj_report, rj_relatorio_state, rj_extracao_state],
-        concurrency_limit=1,
+        concurrency_limit=2,
     )
     def _btn_gerando(_texto_normal):
         # Deixa o botão claramente "Gerando..." (desabilitado) enquanto a função roda —
@@ -584,7 +584,7 @@ with gr.Blocks(
         fn=mat_gerar_excel,
         inputs=[mat_arquivos, mat_data_ajuizamento, mat_devedores, mat_relacionados],
         outputs=[mat_log, mat_status, mat_excel],
-        concurrency_limit=1,
+        concurrency_limit=2,
     )
     mat_perguntar_btn.click(
         fn=mat_responder, inputs=[mat_pergunta, mat_log], outputs=[mat_resposta]
@@ -595,7 +595,7 @@ with gr.Blocks(
         fn=timeline_analisar,
         inputs=[tl_arquivos],
         outputs=[tl_status, tl_timeline_html, tl_editor, tl_data_state],
-        concurrency_limit=1,
+        concurrency_limit=2,
     )
     tl_editar_btn.click(
         fn=timeline_toggle_edicao,
