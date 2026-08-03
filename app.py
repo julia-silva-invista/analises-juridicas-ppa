@@ -527,28 +527,44 @@ with gr.Blocks(
         outputs=[rj_log, rj_report, rj_relatorio_state, rj_extracao_state],
         concurrency_limit=3,
     )
-    rj_word_btn.click(fn=rj_gerar_word, inputs=[rj_relatorio_state], outputs=[rj_word_file])
-    rj_excel_cred_btn.click(
+    def _btn_gerando(_texto_normal):
+        # Deixa o botão claramente "Gerando..." (desabilitado) enquanto a função roda —
+        # sem isso, cliques em botões que chamam a IA (Excel/Checklist) ficavam sem
+        # nenhum feedback visual até terminar.
+        _ini = lambda: gr.update(value="Gerando...", interactive=False)
+        _fim = lambda: gr.update(value=_texto_normal, interactive=True)
+        return _ini, _fim
+
+    _word_ini, _word_fim = _btn_gerando("Baixar Word")
+    rj_word_btn.click(_word_ini, None, rj_word_btn, queue=False).then(
+        fn=rj_gerar_word, inputs=[rj_relatorio_state], outputs=[rj_word_file]
+    ).then(_word_fim, None, rj_word_btn, queue=False)
+
+    _excel_ini, _excel_fim = _btn_gerando("Gerar Excel de Credores")
+    rj_excel_cred_btn.click(_excel_ini, None, rj_excel_cred_btn, queue=False).then(
         fn=rj_gerar_excel_credores,
         inputs=[rj_relatorio_state, rj_extracao_state],
         outputs=[rj_excel_cred_file, rj_excel_cred_status],
-    )
-    rj_checklist_btn.click(
+    ).then(_excel_fim, None, rj_excel_cred_btn, queue=False)
+
+    _checklist_ini, _checklist_fim = _btn_gerando("Checklist RJ")
+    rj_checklist_btn.click(_checklist_ini, None, rj_checklist_btn, queue=False).then(
         fn=rj_gerar_checklist,
         inputs=[rj_relatorio_state, rj_extracao_state],
         outputs=[rj_checklist_file, rj_checklist_status],
-    )
+    ).then(_checklist_fim, None, rj_checklist_btn, queue=False)
 
     def _rj_add_credor(_count):
         _count = min(int(_count) + 1, RJ_MAX_CRED)
         return [_count] + [gr.update(visible=(k < _count)) for k in range(RJ_MAX_CRED)]
     rj_cred_add_btn.click(_rj_add_credor, inputs=[rj_cred_count], outputs=[rj_cred_count] + rj_cred_rows)
 
-    rj_checklist_cred_btn.click(
+    _checklist_cred_ini, _checklist_cred_fim = _btn_gerando("Gerar Checklist de Créditos")
+    rj_checklist_cred_btn.click(_checklist_cred_ini, None, rj_checklist_cred_btn, queue=False).then(
         fn=rj_gerar_checklist_creditos,
         inputs=[rj_relatorio_state, rj_extracao_state] + rj_cred_nomes + rj_cred_docs,
         outputs=[rj_checklist_cred_file, rj_checklist_cred_status],
-    )
+    ).then(_checklist_cred_fim, None, rj_checklist_cred_btn, queue=False)
     rj_perguntar_btn.click(
         fn=rj_responder, inputs=[rj_pergunta, rj_relatorio_state], outputs=[rj_resposta]
     )
