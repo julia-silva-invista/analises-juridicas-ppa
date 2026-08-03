@@ -35,6 +35,19 @@ LIMITE_TRUNCAMENTO_CREDORES  = 150_000   # mesmo limite usado em _extrair_credor
 LIMITE_CONSOLIDACAO_RJ       = 3_000_000  # teto de seguranca p/ nao estourar contexto do modelo
 
 
+def _filtrar_arquivos_existentes(paths: list, log: list) -> list:
+    """Remove da lista qualquer arquivo que tenha sumido do disco entre o upload e o
+    processamento (ex.: limpeza do /tmp do container) — evita que o processamento inteiro
+    trave com um FileNotFoundError cru por causa de UM arquivo problemático."""
+    existentes = []
+    for p in paths:
+        if Path(p).exists():
+            existentes.append(p)
+        else:
+            log.append(f"   ⚠️ '{Path(p).name}' não encontrado após o upload (tente reenviar este arquivo).")
+    return existentes
+
+
 def _aviso_truncamento(tamanho: int, limite: int) -> str:
     if tamanho <= limite:
         return ""
@@ -577,6 +590,13 @@ def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_ge
     model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
     pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
 
+    log: list = []
+    pdf_paths_rel = _filtrar_arquivos_existentes(pdf_paths_rel, log)
+    if not pdf_paths_rel:
+        log.append("\nNenhum dos arquivos enviados pôde ser lido — tente reenviar.")
+        yield "\n".join(log), "", "", ""
+        return
+
     try:
         rj_cache.limpar_jobs_antigos()
     except Exception:
@@ -588,7 +608,7 @@ def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_ge
     if job_id and not rj_cache.carregar_manifest(job_id):
         rj_cache.salvar_manifest(job_id, rj_cache.novo_manifest(job_id))
 
-    log = [f"Processo(s) relacionado(s) recebido(s): {len(pdf_paths_rel)}"]
+    log.append(f"Processo(s) relacionado(s) recebido(s): {len(pdf_paths_rel)}")
     for p in pdf_paths_rel:
         mb = Path(p).stat().st_size / 1_048_576
         log.append(f"   · {Path(p).name} ({mb:.1f} MB)")
@@ -685,6 +705,11 @@ def _rj_analisar_com_relatorio_existente(docx_paths: list, pdf_relacionados, ins
 
     model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
     pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
+    pdf_paths_rel = _filtrar_arquivos_existentes(pdf_paths_rel, log)
+    if not pdf_paths_rel:
+        log.append("\nNenhum dos processos relacionados novos pôde ser lido — usando só o relatório existente.")
+        yield "\n".join(log), relatorio_existente, relatorio_existente, relatorio_existente
+        return
 
     try:
         rj_cache.limpar_jobs_antigos()
@@ -784,6 +809,14 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
     )
     pdf_paths_rel_all = [f.name if hasattr(f, "name") else str(f) for f in (pdf_relacionados or [])]
 
+    log: list = []
+    pdf_paths = _filtrar_arquivos_existentes(pdf_paths, log)
+    pdf_paths_rel_all = _filtrar_arquivos_existentes(pdf_paths_rel_all, log)
+    if not pdf_paths:
+        log.append("\nNenhum dos arquivos de RJ enviados pôde ser lido — tente reenviar.")
+        yield "\n".join(log), "", "", ""
+        return
+
     try:
         rj_cache.limpar_jobs_antigos()
     except Exception:
@@ -797,7 +830,6 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
         manifest = rj_cache.novo_manifest(job_id)
         rj_cache.salvar_manifest(job_id, manifest)
 
-    log = []
     model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
 
     log.append(f"Arquivo(s) recebido(s): {len(pdf_paths)}")
@@ -968,9 +1000,9 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
         secoes.append(secao_a)
         yield "\n".join(log), "", "", ""
 
-        # Processos relacionados
-        if pdf_relacionados:
-            pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
+        # Processos relacionados (já filtrados no início da função — pdf_paths_rel_all)
+        if pdf_paths_rel_all:
+            pdf_paths_rel = pdf_paths_rel_all
             log.append(f"\nProcessando {len(pdf_paths_rel)} processo(s) relacionado(s)...")
             yield "\n".join(log), "", "", ""
             secao_rel, texto_bruto_rel, avisos_rel = "", "", []
