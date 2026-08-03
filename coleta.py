@@ -505,21 +505,38 @@ def ler_ecac_coleta(wb) -> list:
     return _linhas_por_header(wb[nome]) if nome else []
 
 
+def _chave_tese(tese: str) -> str:
+    """Normaliza a Tese para fins de agrupamento: usa só a parte antes de uma linha em
+    branco. Na prática, às vezes a mesma tese vem com uma nota/explicação emendada na
+    mesma célula (ex.: "Fraude à execução - IDPJ (Badi)\n\nElias & CIA transmitiu..."),
+    variando de linha pra linha — sem essa normalização, isso vira 2 grupos em vez de 1."""
+    primeira_parte = re.split(r"\n\s*\n", tese, maxsplit=1)[0]
+    return re.sub(r"\s+", " ", primeira_parte).strip().casefold()
+
+
 def _agrupar_matriculas_por_tese(linhas: list) -> Tuple[list, list]:
-    """Agrupa as linhas da aba Matrículas pela coluna 'Tese' (ordem de 1ª ocorrência).
+    """Agrupa as linhas da aba Matrículas pela coluna 'Tese' (ordem de 1ª ocorrência),
+    tolerando variações de nota emendada na mesma célula (ver _chave_tese). O título
+    exibido é a variante mais completa (mais longa) encontrada em cada grupo.
     Devolve (resumo_ativos, ativos_visao_geral) no formato que dossie_ppa.py espera."""
     grupos: dict = {}
+    titulos: dict = {}
     ordem: list = []
     for linha in linhas:
-        tese = str(linha.get("Tese") or "").strip() or "Sem tese identificada"
-        if tese not in grupos:
-            grupos[tese] = []
-            ordem.append(tese)
-        grupos[tese].append(linha)
+        tese_bruta = str(linha.get("Tese") or "").strip() or "Sem tese identificada"
+        chave = _chave_tese(tese_bruta)
+        if chave not in grupos:
+            grupos[chave] = []
+            titulos[chave] = tese_bruta
+            ordem.append(chave)
+        elif len(tese_bruta) > len(titulos[chave]):
+            titulos[chave] = tese_bruta
+        grupos[chave].append(linha)
 
     resumo_ativos, ativos_visao_geral = [], []
-    for tese in ordem:
-        itens = grupos[tese]
+    for chave in ordem:
+        tese = titulos[chave]
+        itens = grupos[chave]
         vm_vals    = [v for v in (_num(i.get("Valor da Avaliação Definitiva (VM)")) for i in itens) if v is not None]
         vp_vals    = [v for v in (_num(i.get("Valor da Avaliação Definitiva (VP)")) for i in itens) if v is not None]
         onus_vals  = [v for v in (_num(i.get("Valor Total do Ônus")) for i in itens) if v is not None]
