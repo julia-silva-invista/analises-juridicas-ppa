@@ -7,6 +7,7 @@ import os
 import json
 import inspect
 import requests
+import tempfile
 from datetime import datetime
 
 import gradio as gr
@@ -27,6 +28,12 @@ from timeline_societaria import (
 
 os.makedirs("resultados", exist_ok=True)
 os.makedirs("tmp_pdfs", exist_ok=True)
+
+# Garante que o diretorio de cache de upload do Gradio exista ANTES do primeiro upload --
+# em containers recem-reiniciados, o diretorio padrao (<tmp>/gradio) pode nao existir ainda
+# quando a primeira requisicao chega, causando FileNotFoundError no preprocess do gr.File.
+_GRADIO_TEMP_DIR = os.environ.setdefault("GRADIO_TEMP_DIR", os.path.join(tempfile.gettempdir(), "gradio"))
+os.makedirs(_GRADIO_TEMP_DIR, exist_ok=True)
 
 FEEDBACK_TO       = "juliadeoliveirabernardo@gmail.com"
 FEEDBACK_FROM     = "juliadeoliveirabernardo@gmail.com"
