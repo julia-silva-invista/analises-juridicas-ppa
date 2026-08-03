@@ -217,11 +217,11 @@ with gr.Blocks(
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
                     gr.Markdown(
                         "**Como usar:**\n\n"
-                        "- Envie o **processo de RJ** para gerar o **Checklist de RJ**.\n"
-                        "- Envie os **processos relacionados** (execuções, impugnações de crédito) — e a "
+                        "1. Envie o **processo de RJ** para gerar o **Checklist de RJ**.\n"
+                        "2. Envie os **processos relacionados** (execuções, impugnações de crédito) — e a "
                         "RJ, opcionalmente — para gerar o **Checklist de Créditos** de um crédito "
                         "específico.\n"
-                        "- Havendo mais de um credor, recomendamos listá-los em **Checklist de Créditos "
+                        "3. Havendo mais de um credor, recomendamos listá-los em **Checklist de Créditos "
                         "— Inserir dados do credor** (abaixo): o robô gera um checklist de crédito para "
                         "cada credor informado."
                     )

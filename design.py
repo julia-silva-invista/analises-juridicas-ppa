@@ -1537,7 +1537,18 @@ button[title*="copy"] {
 .upload-equal-panel > div,
 .upload-equal-panel .wrap,
 .upload-equal-panel .form,
-.upload-equal-panel [data-testid="file-upload"],
+.upload-equal-panel [data-testid="file-upload"] {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: clamp(280px, 28vw, 350px) !important;
+    min-height: clamp(280px, 28vw, 350px) !important;
+    max-height: clamp(280px, 28vw, 350px) !important;
+    border-radius: 16px !important;
+    overflow: visible !important;
+}
+
+/* A lista de arquivos enviados (file-preview) precisa rolar internamente quando há vários
+   arquivos — "overflow: visible" aqui fazia a lista vazar pra fora da caixa de upload. */
 .upload-equal-panel .file-preview,
 .upload-equal-panel .file-preview-holder {
     width: 100% !important;
@@ -1546,7 +1557,8 @@ button[title*="copy"] {
     min-height: clamp(280px, 28vw, 350px) !important;
     max-height: clamp(280px, 28vw, 350px) !important;
     border-radius: 16px !important;
-    overflow: visible !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
 }
 
 .instructions-with-gemini {

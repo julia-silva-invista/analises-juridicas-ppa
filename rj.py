@@ -348,8 +348,10 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
 
 
 def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: str, cache_name, model_cons: str,
-                                standalone: bool = False) -> tuple:
-    """Extrai e consolida os 'processos relacionados'. Retorna (secao_texto, texto_bruto, avisos).
+                                standalone: bool = False):
+    """Extrai e consolida os 'processos relacionados'. GERADOR — durante a extração, produz
+    ("progress", linha_de_log) a cada trecho concluído (qual processo, X/N trechos); ao final,
+    produz exatamente um ("done", (secao_texto, texto_bruto, avisos)).
 
     texto_bruto é o texto extraído página-a-página (antes da consolidação) — quem chama deve
     somá-lo à fonte usada pelos checklists/Excel de credores, para que dados de execuções que só
@@ -368,7 +370,14 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
 
         n_rel = len(todos_chunks_rel)
         if n_rel == 0:
-            return "", "", avisos
+            yield "done", ("", "", avisos)
+            return
+
+        nomes_arquivos = sorted({Path(p).name for _, _, _, p in todos_chunks_rel})
+        yield "progress", (
+            f"   {n_rel} trecho(s) a extrair de {len(pdf_paths)} processo(s): "
+            + ", ".join(nomes_arquivos)
+        )
 
         resultados: dict = {}
 
@@ -387,16 +396,24 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
                     return ri, res, (nota + " | " if nota else "") + "fallback inline"
                 raise
 
+        concluidos = 0
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
             futures = {ex.submit(_worker_rel, i): i for i in range(n_rel)}
             for future in concurrent.futures.as_completed(futures):
                 i_f = futures[future]
+                nome_arq = Path(todos_chunks_rel[i_f][3]).name
+                concluidos += 1
                 try:
-                    idx, res, _nota = future.result()
+                    idx, res, nota = future.result()
                     resultados[idx] = res
+                    yield "progress", (
+                        f"   {nome_arq} — trecho {i_f+1}/{n_rel} extraido"
+                        + (f" [{nota}]" if nota else "")
+                        + f" | {concluidos}/{n_rel} prontos"
+                    )
                 except Exception as e:
-                    nome_arq = Path(todos_chunks_rel[i_f][3]).name
                     avisos.append(f"Aviso: nao foi possivel extrair um trecho de '{nome_arq}' ({e}) — pode faltar informacao desse processo.")
+                    yield "progress", f"   {nome_arq} — trecho {i_f+1}/{n_rel}: erro ({e}) | {concluidos}/{n_rel} concluidos"
 
         for cp, _off, _tot, orig in todos_chunks_rel:
             if cp != orig:
@@ -410,7 +427,10 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
                 texto_relacionados += f"\n--- {Path(orig_path).name} ---\n{res}"
 
         if not texto_relacionados.strip():
-            return "", "", avisos
+            yield "done", ("", "", avisos)
+            return
+
+        yield "progress", f"   Consolidando {n_rel} trecho(s) extraido(s) dos processos relacionados..."
 
         instrucao_anti_omissao = (
             "INSTRUCAO OBRIGATORIA DE LEITURA:\n"
@@ -479,9 +499,9 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
                 ).text
             secao = _retry(_fn)
 
-        return secao, texto_relacionados, avisos
+        yield "done", (secao, texto_relacionados, avisos)
     except Exception as e:
-        return f"Erro ao processar relacionados: {e}", "", avisos
+        yield "done", (f"Erro ao processar relacionados: {e}", "", avisos)
 
 
 def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False):
@@ -514,12 +534,21 @@ def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_ge
     yield "\n".join(log), "", "", ""
 
     try:
-        secao_rel, texto_bruto, avisos = _rj_processar_relacionados(
+        secao_rel, texto_bruto, avisos = "", "", []
+        for kind, payload in _rj_processar_relacionados(
             pdf_paths_rel, client1, client2, instrucoes, cache_name=None, model_cons=model_cons,
             standalone=True,
-        )
+        ):
+            if kind == "progress":
+                log.append(payload)
+                yield "\n".join(log), "", "", ""
+            else:
+                secao_rel, texto_bruto, avisos = payload
+
         for aviso in avisos:
             log.append(f"   {aviso}")
+        if avisos:
+            yield "\n".join(log), "", "", ""
 
         if not texto_bruto.strip():
             log.append("\nNenhuma informacao relevante extraida dos processos relacionados.")
@@ -712,9 +741,15 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
             pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
             log.append(f"\nProcessando {len(pdf_paths_rel)} processo(s) relacionado(s)...")
             yield "\n".join(log), "", "", ""
-            secao_rel, texto_bruto_rel, avisos_rel = _rj_processar_relacionados(
+            secao_rel, texto_bruto_rel, avisos_rel = "", "", []
+            for kind, payload in _rj_processar_relacionados(
                 pdf_paths_rel, client1, client2, instrucoes, cache, model_cons
-            )
+            ):
+                if kind == "progress":
+                    log.append(payload)
+                    yield "\n".join(log), "", "", ""
+                else:
+                    secao_rel, texto_bruto_rel, avisos_rel = payload
             if texto_bruto_rel:
                 # Soma ao texto bruto da RJ principal — sem isso, dados de execucoes que so
                 # aparecem nos relacionados (nao repetidos no PDF da RJ) nao chegavam aos
