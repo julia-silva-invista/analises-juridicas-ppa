@@ -13,6 +13,7 @@ from collections import defaultdict
 
 import fitz
 import gradio as gr
+from docx import Document
 from google import genai
 from google.genai import types
 
@@ -29,6 +30,18 @@ MODEL_CONSOLIDACAO_RJ = MODEL_PRO_RJ
 AVG_MIN_POR_CHUNK_RJ  = 3
 MIN_CONSOLIDACAO_RJ   = 8
 COMPRESSAO_PRE_MB_RJ  = 50   # só pré-comprime se puder caber no modo direto
+LIMITE_TRUNCAMENTO_CHECKLIST = 900_000   # mesmo limite usado em checklist_rj._extrair
+LIMITE_TRUNCAMENTO_CREDORES  = 150_000   # mesmo limite usado em _extrair_credores_json
+LIMITE_CONSOLIDACAO_RJ       = 3_000_000  # teto de seguranca p/ nao estourar contexto do modelo
+
+
+def _aviso_truncamento(tamanho: int, limite: int) -> str:
+    if tamanho <= limite:
+        return ""
+    return (
+        f" ⚠️ Fonte com {tamanho:,} caracteres — só os primeiros {limite:,} foram "
+        "considerados; pode haver informação não coberta."
+    )
 # MÓDULO — ANÁLISE DE RECUPERAÇÃO JUDICIAL (Teste B)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -458,6 +471,15 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
 
         yield "progress", f"   Consolidando {n_rel} trecho(s) extraido(s) dos processos relacionados..."
 
+        texto_relacionados_prompt = texto_relacionados
+        if len(texto_relacionados_prompt) > LIMITE_CONSOLIDACAO_RJ:
+            yield "progress", (
+                f"   ⚠️ Texto dos relacionados tem {len(texto_relacionados_prompt):,} caracteres — truncando "
+                f"para os primeiros {LIMITE_CONSOLIDACAO_RJ:,} antes de consolidar (evita erro por estourar "
+                "o contexto do modelo). O texto bruto completo continua disponivel pros checklists."
+            )
+            texto_relacionados_prompt = texto_relacionados_prompt[:LIMITE_CONSOLIDACAO_RJ]
+
         instrucao_anti_omissao = (
             "INSTRUCAO OBRIGATORIA DE LEITURA:\n"
             "1. Leia cada processo/parte individualmente, do comeco ao fim, sem pular nenhum.\n"
@@ -474,7 +496,7 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
                 "template de 'Processos Relacionados' fornecido (mesma estrutura, marcadores e nivel de "
                 "detalhe usados para execucoes, embargos, IDPJs, acoes paulianas etc.).\n\n"
                 + instrucao_anti_omissao
-                + f"PROCESSOS ({len(pdf_paths)} arquivo(s)):\n{texto_relacionados}\n\n"
+                + f"PROCESSOS ({len(pdf_paths)} arquivo(s)):\n{texto_relacionados_prompt}\n\n"
             )
         else:
             prompt = (
@@ -485,7 +507,7 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
                 "- IDPJs, Paulianas, Embargos de Terceiro: crie secoes B proprias\n"
                 "Use: 'B.1. Incidente de Desconsideracao da Personalidade n. XXX'\n\n"
                 + instrucao_anti_omissao
-                + f"PROCESSOS RELACIONADOS ({len(pdf_paths)} arquivo(s)):\n{texto_relacionados}\n\n"
+                + f"PROCESSOS RELACIONADOS ({len(pdf_paths)} arquivo(s)):\n{texto_relacionados_prompt}\n\n"
             )
         if instrucoes.strip():
             prompt += f"INSTRUCOES: {instrucoes.strip()}\n\n"
@@ -617,11 +639,126 @@ def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_ge
         yield "\n".join(log), f"Erro:\n{exc}", "", ""
 
 
+def _extrair_texto_docx(path: str) -> str:
+    """Extrai todo o texto (parágrafos + tabelas) de um .docx — usado para reaproveitar um
+    relatório de RJ já gerado anteriormente, sem precisar reprocessar o PDF original."""
+    doc = Document(path)
+    partes = [p.text for p in doc.paragraphs if p.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                if cell.text.strip():
+                    partes.append(cell.text.strip())
+    return "\n".join(partes)
+
+
+def _rj_analisar_com_relatorio_existente(docx_paths: list, pdf_relacionados, instrucoes: str,
+                                          usar_gemini_pro: bool = False):
+    """Reaproveita um relatório de RJ (.docx) já gerado numa análise anterior, em vez de
+    reprocessar o PDF original — só os processos relacionados (se houver) são extraídos de
+    verdade. Permite gerar o Checklist de Créditos com processos relacionados novos sem
+    esperar a extração inteira da RJ de novo."""
+    yield "Lendo relatório de RJ já gerado (.docx)...", "", "", ""
+
+    try:
+        relatorio_existente = "\n\n".join(_extrair_texto_docx(p) for p in docx_paths)
+    except Exception as e:
+        yield f"Erro ao ler o(s) .docx enviado(s): {e}", "", "", ""
+        return
+    if not relatorio_existente.strip():
+        yield "Não foi possível extrair texto do(s) .docx enviado(s).", "", "", ""
+        return
+
+    log = [f"Relatório de RJ já gerado carregado: {len(relatorio_existente):,} caracteres ({len(docx_paths)} arquivo(s))."]
+    yield "\n".join(log), "", "", ""
+
+    if not pdf_relacionados:
+        log.append("\nNenhum processo relacionado novo enviado — usando só o relatório existente.")
+        yield "\n".join(log), relatorio_existente, relatorio_existente, relatorio_existente
+        return
+
+    try:
+        client1, client2 = _get_clients_rj()
+    except Exception as e:
+        yield f"Erro de configuracao: {e}", "", "", ""
+        return
+
+    model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
+    pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
+
+    try:
+        rj_cache.limpar_jobs_antigos()
+    except Exception:
+        pass
+    try:
+        job_id = rj_cache.calcular_job_id(docx_paths, pdf_paths_rel, instrucoes, False, usar_gemini_pro)
+    except Exception:
+        job_id = None
+    if job_id and not rj_cache.carregar_manifest(job_id):
+        rj_cache.salvar_manifest(job_id, rj_cache.novo_manifest(job_id))
+
+    t_inicio = time.time()
+    log.append(f"\nProcessando {len(pdf_paths_rel)} processo(s) relacionado(s) novo(s)...")
+    yield "\n".join(log), "", "", ""
+
+    secao_rel, texto_bruto_rel, avisos = "", "", []
+    for kind, payload in _rj_processar_relacionados(
+        pdf_paths_rel, client1, client2, instrucoes, cache_name=None, model_cons=model_cons,
+        standalone=False, job_id=job_id,
+    ):
+        if kind == "progress":
+            log.append(payload)
+            yield "\n".join(log), "", "", ""
+        else:
+            secao_rel, texto_bruto_rel, avisos = payload
+
+    for aviso in avisos:
+        log.append(f"   {aviso}")
+
+    texto_bruto_final = relatorio_existente
+    if texto_bruto_rel:
+        texto_bruto_final = texto_bruto_final + "\n\n" + texto_bruto_rel
+
+    relatorio_final = relatorio_existente
+    if secao_rel and "nenhum" not in secao_rel.lower():
+        relatorio_final = relatorio_existente + "\n\n" + secao_rel
+        log.append("   Processos relacionados novos analisados e somados ao relatório existente.")
+    else:
+        log.append("   Nenhuma informação relevante nos processos relacionados novos.")
+
+    if job_id:
+        manifest_final = rj_cache.carregar_manifest(job_id)
+        if manifest_final:
+            manifest_final["concluido"] = True
+            try:
+                rj_cache.salvar_manifest(job_id, manifest_final)
+            except Exception:
+                pass
+
+    t_total = int(time.time() - t_inicio)
+    log.append(f"\nConcluído em {t_total//60}min{t_total%60:02d}s.")
+    yield "\n".join(log), relatorio_final, relatorio_final, texto_bruto_final
+
 
 def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_pro: bool = False, versao_resumida: bool = False):
     if not pdf_files and not pdf_relacionados:
         yield "Nenhum arquivo enviado.", "", "", ""
         return
+
+    if pdf_relacionados:
+        pdf_paths_rel_check = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
+        docx_indices = {i for i, p in enumerate(pdf_paths_rel_check) if p.lower().endswith(".docx")}
+        if docx_indices:
+            docx_paths = [pdf_paths_rel_check[i] for i in docx_indices]
+            pdf_relacionados = [f for i, f in enumerate(pdf_relacionados) if i not in docx_indices]
+            if not pdf_files:
+                # Relatório de RJ já gerado (Word) enviado junto na caixa de "Processos
+                # relacionados" — pula a extração da RJ inteira, só processa os PDFs novos
+                # que vieram junto (se houver).
+                yield from _rj_analisar_com_relatorio_existente(docx_paths, pdf_relacionados, instrucoes, usar_gemini_pro)
+                return
+            # Combinação não suportada (PDF de RJ + .docx em relacionados): o .docx é
+            # ignorado aqui pra não quebrar a extração normal (que só lê PDF).
 
     if not pdf_files:
         # Sem PDF principal de RJ: analisa só os processos relacionados (execuções/ações
@@ -813,7 +950,15 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
             secao_a = secao_a_cache
             log[-1] = "   Secao A reaproveitada do cache."
         else:
-            secao_a = _rj_consolidar_secao_a(client1, texto_merged, instrucoes, cache, model_cons, versao_resumida)
+            texto_para_secao_a = texto_merged
+            if len(texto_para_secao_a) > LIMITE_CONSOLIDACAO_RJ:
+                log.append(
+                    f"   ⚠️ Texto extraido tem {len(texto_para_secao_a):,} caracteres — truncando para os "
+                    f"primeiros {LIMITE_CONSOLIDACAO_RJ:,} antes de gerar a Secao A (evita erro por "
+                    "estourar o contexto do modelo)."
+                )
+                texto_para_secao_a = texto_para_secao_a[:LIMITE_CONSOLIDACAO_RJ]
+            secao_a = _rj_consolidar_secao_a(client1, texto_para_secao_a, instrucoes, cache, model_cons, versao_resumida)
             log[-1] = "   Secao A gerada."
             if job_id:
                 try:
@@ -902,7 +1047,8 @@ def rj_gerar_checklist(relatorio: str, texto_bruto: str = ""):
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
         path = gerar_checklist_rj(relatorio, texto_bruto, client, MODEL_RAPIDO_RJ)
-        return gr.update(value=path, visible=True), "✅ Checklist RJ gerado — clique no arquivo para baixar."
+        aviso = _aviso_truncamento(len(relatorio) + len(texto_bruto), LIMITE_TRUNCAMENTO_CHECKLIST)
+        return gr.update(value=path, visible=True), "✅ Checklist RJ gerado — clique no arquivo para baixar." + aviso
     except Exception as e:
         return gr.update(value=None, visible=False), f"❌ Erro: {e}"
 
@@ -928,6 +1074,7 @@ def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = "", *campos):
             msg = f"✅ {len(paths)} credor(es) exequente(s) identificado(s) automaticamente — um checklist por credor, clique para baixar."
         else:
             msg = "✅ Checklist de créditos gerado (crédito identificado automaticamente)."
+        msg += _aviso_truncamento(len(fonte), LIMITE_TRUNCAMENTO_CHECKLIST)
         return gr.update(value=paths, visible=True), msg
     except Exception as e:
         return gr.update(value=None, visible=False), f"❌ Erro: {e}"
@@ -1261,6 +1408,7 @@ def rj_gerar_excel_credores(relatorio: str, texto_bruto: str = ""):
             msg += f" | {conflitos} com conflito"
         if controver:
             msg += f" | {controver} com questão controversa"
+        msg += _aviso_truncamento(len(fonte), LIMITE_TRUNCAMENTO_CREDORES)
         return gr.update(value=path, visible=True), msg
     except Exception as e:
         return gr.update(value=None, visible=False), f"Erro: {e}"

@@ -210,7 +210,7 @@ with gr.Blocks(
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
                     rj_pdf_relacionados = gr.File(
                         label="Processos relacionados (opcional)",
-                        file_types=[".pdf", ".PDF"],
+                        file_types=[".pdf", ".PDF", ".docx"],
                         file_count="multiple",
                         elem_classes=["equal-input-box", "upload-equal-panel"],
                     )
@@ -223,7 +223,10 @@ with gr.Blocks(
                         "específico.\n"
                         "3. Havendo mais de um credor, recomendamos listá-los em **Checklist de Créditos "
                         "— Inserir dados do credor** (abaixo): o robô gera um checklist de crédito para "
-                        "cada credor informado."
+                        "cada credor informado.\n"
+                        "4. Já tem uma análise de RJ pronta? Envie o **Word gerado** (em vez do PDF) na "
+                        "caixa de **processos relacionados**, junto com os processos relacionados novos — "
+                        "gera o Checklist de Créditos sem repetir a extração inteira da RJ."
                     )
 
             with gr.Accordion("Checklist de Créditos — Inserir dados do credor (opcional)", open=False, elem_classes=["mat-accordion"]):
@@ -512,7 +515,7 @@ with gr.Blocks(
         fn=proc_analisar,
         inputs=[proc_pdf_principal, proc_pdf_relacionados, proc_instrucoes, proc_usar_pro, proc_versao_resumida],
         outputs=[proc_log, proc_report, proc_relatorio_state, proc_extracao_state],
-        concurrency_limit=3,
+        concurrency_limit=1,
     )
     proc_word_btn.click(fn=proc_gerar_word, inputs=[proc_relatorio_state], outputs=[proc_word_file])
     proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state, proc_extracao_state], outputs=[proc_dossie_file, proc_dossie_status])
@@ -525,7 +528,7 @@ with gr.Blocks(
         fn=rj_analisar,
         inputs=[rj_pdf_principal, rj_pdf_relacionados],
         outputs=[rj_log, rj_report, rj_relatorio_state, rj_extracao_state],
-        concurrency_limit=3,
+        concurrency_limit=1,
     )
     def _btn_gerando(_texto_normal):
         # Deixa o botão claramente "Gerando..." (desabilitado) enquanto a função roda —
@@ -574,7 +577,7 @@ with gr.Blocks(
         fn=mat_gerar_excel,
         inputs=[mat_arquivos, mat_data_ajuizamento, mat_devedores, mat_relacionados],
         outputs=[mat_log, mat_status, mat_excel],
-        concurrency_limit=3,
+        concurrency_limit=1,
     )
     mat_perguntar_btn.click(
         fn=mat_responder, inputs=[mat_pergunta, mat_log], outputs=[mat_resposta]
@@ -585,7 +588,7 @@ with gr.Blocks(
         fn=timeline_analisar,
         inputs=[tl_arquivos],
         outputs=[tl_status, tl_timeline_html, tl_editor, tl_data_state],
-        concurrency_limit=3,
+        concurrency_limit=1,
     )
     tl_editar_btn.click(
         fn=timeline_toggle_edicao,
