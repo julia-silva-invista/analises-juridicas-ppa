@@ -19,6 +19,7 @@ from google.genai import types
 from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
 from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite
 from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos
+import rj_cache
 
 CHUNK_MAX_PAGES_RJ    = 400
 MODEL_EXTRACAO_RJ     = os.getenv("GEMINI_MODEL_EXTRACAO", "gemini-2.5-flash")
@@ -348,7 +349,7 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
 
 
 def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: str, cache_name, model_cons: str,
-                                standalone: bool = False):
+                                standalone: bool = False, job_id: str = None):
     """Extrai e consolida os 'processos relacionados'. GERADOR — durante a extração, produz
     ("progress", linha_de_log) a cada trecho concluído (qual processo, X/N trechos); ao final,
     produz exatamente um ("done", (secao_texto, texto_bruto, avisos)).
@@ -360,9 +361,24 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
     standalone=True é usado quando NÃO há PDF principal de RJ: os processos abaixo são tratados
     como processos PRINCIPAIS (não subordinados a nenhuma RJ), reaproveitando o mesmo template de
     'Processos Relacionados' já embutido em SYSTEM_PROMPT_RJ/REPORT_TEMPLATE_RJ.
+
+    job_id, se informado, ativa o cache em disco (storage persistente) dos trechos já extraídos
+    e da seção final já consolidada — uma tentativa anterior interrompida no meio não precisa
+    reprocessar o que já foi obtido do Gemini.
     """
     avisos: list = []
+    manifest = rj_cache.carregar_manifest(job_id) if job_id else None
+    secao_cache_nome = "secao_rel_standalone" if standalone else "secao_rel"
+    texto_bruto_cache_nome = "texto_bruto_rel_standalone" if standalone else "texto_bruto_rel"
     try:
+        if job_id:
+            secao_existente = rj_cache.carregar_secao(job_id, secao_cache_nome)
+            texto_bruto_existente = rj_cache.carregar_secao(job_id, texto_bruto_cache_nome)
+            if secao_existente and texto_bruto_existente:
+                yield "progress", "   Processos relacionados ja haviam sido processados nesta analise (reaproveitado do cache)."
+                yield "done", (secao_existente, texto_bruto_existente, avisos)
+                return
+
         todos_chunks_rel = []
         for path in pdf_paths:
             for chunk_path, offset, total in _rj_dividir_pdf(path):
@@ -383,6 +399,8 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
 
         def _worker_rel(i):
             cp, offset, total_pg, _ = todos_chunks_rel[i]
+            if job_id and manifest and manifest["chunks_status_relacionados"].get(str(i)) == "ok":
+                return i, rj_cache.carregar_chunk(job_id, "relacionados", i), "cache"
             cli = client1 if i % 2 == 0 else client2
             try:
                 return _retry(
@@ -406,9 +424,17 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
                 try:
                     idx, res, nota = future.result()
                     resultados[idx] = res
+                    if job_id and manifest and nota != "cache":
+                        try:
+                            rj_cache.salvar_chunk(job_id, "relacionados", idx, res)
+                            manifest["chunks_status_relacionados"][str(idx)] = "ok"
+                            rj_cache.salvar_manifest(job_id, manifest)
+                        except Exception:
+                            pass
+                    acao = "reaproveitado do cache" if nota == "cache" else "extraido"
                     yield "progress", (
-                        f"   {nome_arq} — trecho {i_f+1}/{n_rel} extraido"
-                        + (f" [{nota}]" if nota else "")
+                        f"   {nome_arq} — trecho {i_f+1}/{n_rel} {acao}"
+                        + (f" [{nota}]" if nota and nota != "cache" else "")
                         + f" | {concluidos}/{n_rel} prontos"
                     )
                 except Exception as e:
@@ -499,6 +525,13 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
                 ).text
             secao = _retry(_fn)
 
+        if job_id:
+            try:
+                rj_cache.salvar_secao(job_id, secao_cache_nome, secao)
+                rj_cache.salvar_secao(job_id, texto_bruto_cache_nome, texto_relacionados)
+            except Exception:
+                pass
+
         yield "done", (secao, texto_relacionados, avisos)
     except Exception as e:
         yield "done", (f"Erro ao processar relacionados: {e}", "", avisos)
@@ -522,6 +555,17 @@ def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_ge
     model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
     pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
 
+    try:
+        rj_cache.limpar_jobs_antigos()
+    except Exception:
+        pass
+    try:
+        job_id = rj_cache.calcular_job_id([], pdf_paths_rel, instrucoes, False, usar_gemini_pro)
+    except Exception:
+        job_id = None
+    if job_id and not rj_cache.carregar_manifest(job_id):
+        rj_cache.salvar_manifest(job_id, rj_cache.novo_manifest(job_id))
+
     log = [f"Processo(s) relacionado(s) recebido(s): {len(pdf_paths_rel)}"]
     for p in pdf_paths_rel:
         mb = Path(p).stat().st_size / 1_048_576
@@ -537,7 +581,7 @@ def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_ge
         secao_rel, texto_bruto, avisos = "", "", []
         for kind, payload in _rj_processar_relacionados(
             pdf_paths_rel, client1, client2, instrucoes, cache_name=None, model_cons=model_cons,
-            standalone=True,
+            standalone=True, job_id=job_id,
         ):
             if kind == "progress":
                 log.append(payload)
@@ -558,6 +602,14 @@ def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_ge
         relatorio = secao_rel or "Nenhuma informacao relevante extraida dos processos relacionados."
         t_total = int(time.time() - t_inicio)
         log.append(f"\nAnalise concluida em {t_total//60}min{t_total%60:02d}s | {len(relatorio):,} chars")
+        if job_id:
+            manifest_final = rj_cache.carregar_manifest(job_id)
+            if manifest_final:
+                manifest_final["concluido"] = True
+                try:
+                    rj_cache.salvar_manifest(job_id, manifest_final)
+                except Exception:
+                    pass
         yield "\n".join(log), relatorio, relatorio, texto_bruto
 
     except Exception as exc:
@@ -593,6 +645,21 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
         [f.name if hasattr(f, "name") else str(f) for f in pdf_files],
         key=_nat_key
     )
+    pdf_paths_rel_all = [f.name if hasattr(f, "name") else str(f) for f in (pdf_relacionados or [])]
+
+    try:
+        rj_cache.limpar_jobs_antigos()
+    except Exception:
+        pass
+    try:
+        job_id = rj_cache.calcular_job_id(pdf_paths, pdf_paths_rel_all, instrucoes, versao_resumida, usar_gemini_pro)
+    except Exception:
+        job_id = None
+    manifest = rj_cache.carregar_manifest(job_id) if job_id else None
+    if job_id and not manifest:
+        manifest = rj_cache.novo_manifest(job_id)
+        rj_cache.salvar_manifest(job_id, manifest)
+
     log = []
     model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
 
@@ -672,6 +739,8 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
 
         def _worker_rj(idx):
             cp, offset, total_pg, _ = todos_chunks[idx]
+            if job_id and manifest and manifest["chunks_status_principal"].get(str(idx)) == "ok":
+                return idx, rj_cache.carregar_chunk(job_id, "principal", idx), "cache"
             cli = client1 if idx % 2 == 0 else client2
             try:
                 return _retry(
@@ -692,13 +761,21 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
                 try:
                     idx, res, nota = future.result()
                     parciais[idx] = res
+                    if job_id and manifest and nota != "cache":
+                        try:
+                            rj_cache.salvar_chunk(job_id, "principal", idx, res)
+                            manifest["chunks_status_principal"][str(idx)] = "ok"
+                            rj_cache.salvar_manifest(job_id, manifest)
+                        except Exception:
+                            pass
                     c = len(parciais)
                     log[-1] = _barra_progresso(c, n)
                     rounds_left = math.ceil((n - c) / 4)
                     est_rest = rounds_left * AVG_MIN_POR_CHUNK_RJ
+                    acao = "reaproveitado do cache" if nota == "cache" else "extraido"
                     log.append(
-                        f"   Chunk {idx+1}/{n} extraido"
-                        + (f" [{nota}]" if nota else "")
+                        f"   Chunk {idx+1}/{n} {acao}"
+                        + (f" [{nota}]" if nota and nota != "cache" else "")
                         + f" | {c}/{n} prontos | ~{est_rest}min restantes"
                     )
                 except Exception as e:
@@ -731,8 +808,18 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
         log.append(f"   Aguardando {model_cons}... (pode levar alguns minutos)")
         yield "\n".join(log), "", "", ""
 
-        secao_a = _rj_consolidar_secao_a(client1, texto_merged, instrucoes, cache, model_cons, versao_resumida)
-        log[-1] = "   Secao A gerada."
+        secao_a_cache = rj_cache.carregar_secao(job_id, "secao_a") if job_id else None
+        if secao_a_cache:
+            secao_a = secao_a_cache
+            log[-1] = "   Secao A reaproveitada do cache."
+        else:
+            secao_a = _rj_consolidar_secao_a(client1, texto_merged, instrucoes, cache, model_cons, versao_resumida)
+            log[-1] = "   Secao A gerada."
+            if job_id:
+                try:
+                    rj_cache.salvar_secao(job_id, "secao_a", secao_a)
+                except Exception:
+                    pass
         secoes.append(secao_a)
         yield "\n".join(log), "", "", ""
 
@@ -743,7 +830,7 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
             yield "\n".join(log), "", "", ""
             secao_rel, texto_bruto_rel, avisos_rel = "", "", []
             for kind, payload in _rj_processar_relacionados(
-                pdf_paths_rel, client1, client2, instrucoes, cache, model_cons
+                pdf_paths_rel, client1, client2, instrucoes, cache, model_cons, job_id=job_id
             ):
                 if kind == "progress":
                     log.append(payload)
@@ -767,6 +854,12 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
         relatorio = "\n\n".join(s for s in secoes if s)
         t_total = int(time.time() - t_inicio)
         log.append(f"\nAnalise concluida em {t_total//60}min{t_total%60:02d}s | {len(relatorio):,} chars")
+        if job_id and manifest:
+            manifest["concluido"] = True
+            try:
+                rj_cache.salvar_manifest(job_id, manifest)
+            except Exception:
+                pass
         yield "\n".join(log), relatorio, relatorio, texto_merged
 
     except Exception as exc:
