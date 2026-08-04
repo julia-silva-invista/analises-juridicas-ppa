@@ -8,6 +8,7 @@ import tempfile
 import threading
 import traceback
 import concurrent.futures
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
 from collections import defaultdict
@@ -21,9 +22,12 @@ from google.genai import types
 from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
 from utils import (
     _retry, _gerar_docx, _responder_pergunta_generica, _get_gemini_clients,
-    _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite, _filtrar_arquivos_existentes,
-    _SEMAFORO_PROCESSAMENTO_PESADO,
+    _barra_progresso, _filtrar_arquivos_existentes,
     GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO, GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
+)
+from analysis_runtime import (
+    ANALYSIS_MANAGER, file_sha256, iter_pdf_chunks, pdf_preparation_slot,
+    load_chunk_cache, queue_message, record_status, save_chunk_cache,
 )
 from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos, _montar_fonte_rj
 import rj_cache
@@ -31,7 +35,6 @@ import rj_cache
 CHUNK_MAX_PAGES_RJ    = 400
 AVG_MIN_POR_CHUNK_RJ  = 3
 MIN_CONSOLIDACAO_RJ   = 8
-COMPRESSAO_PRE_MB_RJ  = 50   # pré-compressão dos PDFs de porte intermediário
 LIMITE_TRUNCAMENTO_CHECKLIST = 900_000   # mesmo limite usado em checklist_rj._extrair
 LIMITE_TRUNCAMENTO_CREDORES  = 150_000   # mesmo limite usado em _extrair_credores_json
 LIMITE_CONSOLIDACAO_RJ       = 3_000_000  # teto de seguranca p/ nao estourar contexto do modelo
@@ -85,32 +88,28 @@ PROMPT_RJ = (
 
 
 def _rj_dividir_pdf(path: str) -> list:
+    chunks = []
     try:
-        doc = fitz.open(path)
-        total = len(doc)
-        if total <= CHUNK_MAX_PAGES_RJ:
-            doc.close()
-            return [(path, 0, total)]
-        chunks = []
-        for start in range(0, total, CHUNK_MAX_PAGES_RJ):
-            end = min(start + CHUNK_MAX_PAGES_RJ, total)
-            sub = fitz.open()
-            sub.insert_pdf(doc, from_page=start, to_page=end - 1)
-            tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-            sub.save(tmp.name, garbage=4, deflate=True)
-            sub.close()
-            tmp.close()
-            chunks.append((tmp.name, start, total))
-        doc.close()
+        with pdf_preparation_slot():
+            for chunk in iter_pdf_chunks(path, max_pages=CHUNK_MAX_PAGES_RJ):
+                chunks.append((chunk.path, chunk.start, chunk.total_pages))
         return chunks
     except Exception:
-        return [(path, 0, 0)]
+        for chunk_path, _offset, _total in chunks:
+            if chunk_path != path:
+                try: os.remove(chunk_path)
+                except OSError: pass
+        raise
 
 
 def _rj_extrair_chunk(args) -> tuple:
     idx, chunk_path, offset, total_pg, n_total, client = args
     pg_ini = offset + 1
-    pg_fim = min(offset + CHUNK_MAX_PAGES_RJ, total_pg) if total_pg else "?"
+    try:
+        with fitz.open(chunk_path) as _chunk_doc:
+            pg_fim = offset + len(_chunk_doc)
+    except Exception:
+        pg_fim = min(offset + CHUNK_MAX_PAGES_RJ, total_pg) if total_pg else "?"
 
     textos_pag = []
     imagens_pag = []
@@ -163,22 +162,17 @@ def _rj_extrair_chunk(args) -> tuple:
 
 
 def _rj_extrair_chunk_fileapi(args) -> tuple:
-    """Comprime chunk, faz upload para o File API e extrai via leitura nativa de PDF."""
+    """Faz upload do chunk preservado para o File API e extrai o PDF nativamente."""
     idx, chunk_path, offset, total_pg, n_total, client = args
     pg_ini = offset + 1
-    pg_fim = min(offset + CHUNK_MAX_PAGES_RJ, total_pg) if total_pg else "?"
-
-    # Comprimir chunk antes do upload — etapa pesada em CPU/RAM (renderiza paginas como
-    # imagem), protegida por semaforo global (utils.py) pra nao rodar N-way em paralelo com
-    # outras analises simultaneas e sufocar o container. O upload/chamada a Gemini (I/O)
-    # roda fora da trava, livre pra paralelizar.
-    with _SEMAFORO_PROCESSAMENTO_PESADO:
-        comp_chunk, orig_mb, comp_mb = _comprimir_pdf_limite(chunk_path, max_mb=40.0)
-    source_for_upload = comp_chunk
-    if comp_chunk != chunk_path:
-        comp_nota = f"{orig_mb:.0f}→{comp_mb:.0f}MB"
-    else:
-        comp_nota = f"{orig_mb:.0f}MB"
+    try:
+        with fitz.open(chunk_path) as _chunk_doc:
+            pg_fim = offset + len(_chunk_doc)
+    except Exception:
+        pg_fim = min(offset + CHUNK_MAX_PAGES_RJ, total_pg) if total_pg else "?"
+    source_for_upload = chunk_path
+    chunk_mb = Path(chunk_path).stat().st_size / 1_048_576
+    comp_nota = f"{chunk_mb:.1f}MB · original preservado"
 
     ascii_tmp = None
     try:
@@ -191,7 +185,12 @@ def _rj_extrair_chunk_fileapi(args) -> tuple:
         _shutil.copy2(source_for_upload, t.name)
         upload_path = ascii_tmp = t.name
 
-    arq = client.files.upload(file=upload_path)
+    try:
+        arq = client.files.upload(file=upload_path)
+    finally:
+        if ascii_tmp:
+            try: os.remove(ascii_tmp)
+            except OSError: pass
     total_wait, wait_time = 0, 1
     while total_wait < 120:
         _st = getattr(arq, "state", None)
@@ -203,38 +202,31 @@ def _rj_extrair_chunk_fileapi(args) -> tuple:
         arq = client.files.get(name=arq.name)
         wait_time = min(wait_time + 1, 4)
 
-    if ascii_tmp:
-        try: os.remove(ascii_tmp)
-        except: pass
-    if comp_chunk != chunk_path:
-        try: os.remove(comp_chunk)
-        except: pass
-
     _st = getattr(arq, "state", None)
     state_name = getattr(_st, "name", None) or str(_st or "")
-    if state_name == "FAILED":
-        raise RuntimeError(f"File API: upload do chunk {idx+1} falhou (FAILED)")
+    try:
+        if state_name == "FAILED":
+            raise RuntimeError(f"File API: upload do chunk {idx+1} falhou (FAILED)")
 
-    time.sleep(0.5)
+        time.sleep(0.5)
+        prompt = (
+            f"[PARTE {idx+1}/{n_total} — paginas {pg_ini}-{pg_fim}]\n"
+            "Nao omita nenhum dado mesmo que pareca repetitivo.\n\n"
+            + PROMPT_RJ
+        )
+        mime = getattr(arq, "mime_type", None) or "application/pdf"
+        contents = [types.Content(role="user", parts=[
+            types.Part(text=prompt),
+            types.Part(file_data=types.FileData(file_uri=arq.uri, mime_type=mime)),
+        ])]
 
-    prompt = (
-        f"[PARTE {idx+1}/{n_total} — paginas {pg_ini}-{pg_fim}]\n"
-        "Nao omita nenhum dado mesmo que pareca repetitivo.\n\n"
-        + PROMPT_RJ
-    )
-    mime = getattr(arq, "mime_type", None) or "application/pdf"
-    contents = [types.Content(role="user", parts=[
-        types.Part(text=prompt),
-        types.Part(file_data=types.FileData(file_uri=arq.uri, mime_type=mime)),
-    ])]
+        def _call():
+            return client.models.generate_content(model=GEMINI_MODEL_EXTRACAO, contents=contents).text
 
-    def _call():
-        return client.models.generate_content(model=GEMINI_MODEL_EXTRACAO, contents=contents).text
-
-    resultado = _retry(_call, tentativas=2, espera_base=5)
-
-    try: client.files.delete(name=arq.name)
-    except: pass
+        resultado = _retry(_call, tentativas=2, espera_base=5)
+    finally:
+        try: client.files.delete(name=arq.name)
+        except Exception: pass
 
     return idx, resultado, f"File API | {comp_nota}"
 
@@ -385,7 +377,7 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
 
 
 def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, cache_name, model_cons: str,
-                                standalone: bool = False, job_id: str = None):
+                                standalone: bool = False, job_id: str = None, runtime_job=None):
     """Extrai e consolida os 'processos relacionados'. GERADOR — durante a extração, produz
     ("progress", linha_de_log) a cada trecho concluído (qual processo, X/N trechos); ao final,
     produz exatamente um ("done", (secao_texto, texto_bruto, avisos)).
@@ -416,7 +408,9 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
                 return
 
         todos_chunks_rel = []
+        hashes_arquivos_rel = {}
         for path in pdf_paths:
+            hashes_arquivos_rel[path] = file_sha256(path)
             for chunk_path, offset, total in _rj_dividir_pdf(path):
                 todos_chunks_rel.append((chunk_path, offset, total, path))
 
@@ -434,24 +428,47 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
         resultados: dict = {}
 
         def _worker_rel(i):
-            cp, offset, total_pg, _ = todos_chunks_rel[i]
+            cp, offset, total_pg, original = todos_chunks_rel[i]
+            try:
+                with fitz.open(cp) as _chunk_doc:
+                    chunk_end = offset + len(_chunk_doc)
+            except Exception:
+                chunk_end = min(offset + CHUNK_MAX_PAGES_RJ, total_pg)
+            source_hash = hashes_arquivos_rel[original]
+            cache_namespace = "rj_rel_standalone" if standalone else "rj_relacionados"
+            cached = load_chunk_cache(
+                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, cache_namespace
+            )
+            if cached is not None:
+                return i, cached, "cache por arquivo/páginas"
             if job_id and manifest and manifest["chunks_status_relacionados"].get(str(i)) == "ok":
                 return i, rj_cache.carregar_chunk(job_id, "relacionados", i), "cache"
             cli = clients[i % len(clients)]
-            try:
-                return _retry(
-                    lambda: _rj_extrair_chunk_fileapi((i, cp, offset, total_pg, n_rel, cli)),
-                    tentativas=2, espera_base=15
+            slot = runtime_job.worker_slot() if runtime_job else nullcontext()
+            with slot:
+                record_status(
+                    runtime_job, "extraindo_chunk", arquivo=Path(original).name,
+                    paginas=f"{offset + 1}-{chunk_end}", chunk=i + 1,
                 )
-            except Exception as e:
-                msg_e = str(e)
-                if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                    ri, res, nota = _rj_extrair_chunk((i, cp, offset, total_pg, n_rel, cli))
-                    return ri, res, (nota + " | " if nota else "") + "fallback inline"
-                raise
+                try:
+                    result = _retry(
+                        lambda: _rj_extrair_chunk_fileapi((i, cp, offset, total_pg, n_rel, cli)),
+                        tentativas=2, espera_base=15
+                    )
+                except Exception as e:
+                    msg_e = str(e)
+                    if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
+                        ri, res, nota = _rj_extrair_chunk((i, cp, offset, total_pg, n_rel, cli))
+                        result = (ri, res, (nota + " | " if nota else "") + "fallback inline")
+                    else:
+                        raise
+            save_chunk_cache(
+                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, cache_namespace, result[1]
+            )
+            return result
 
         concluidos = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
             futures = {ex.submit(_worker_rel, i): i for i in range(n_rel)}
             for future in concurrent.futures.as_completed(futures):
                 i_f = futures[future]
@@ -460,17 +477,17 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
                 try:
                     idx, res, nota = future.result()
                     resultados[idx] = res
-                    if job_id and manifest and nota != "cache":
+                    if job_id and manifest and not nota.startswith("cache"):
                         try:
                             rj_cache.salvar_chunk(job_id, "relacionados", idx, res)
                             manifest["chunks_status_relacionados"][str(idx)] = "ok"
                             rj_cache.salvar_manifest(job_id, manifest)
                         except Exception:
                             pass
-                    acao = "reaproveitado do cache" if nota == "cache" else "extraido"
+                    acao = "reaproveitado do cache" if nota.startswith("cache") else "extraido"
                     yield "progress", (
                         f"   {nome_arq} — trecho {i_f+1}/{n_rel} {acao}"
-                        + (f" [{nota}]" if nota and nota != "cache" else "")
+                        + (f" [{nota}]" if nota and not nota.startswith("cache") else "")
                         + f" | {concluidos}/{n_rel} prontos"
                     )
                 except Exception as e:
@@ -597,20 +614,34 @@ def _erro_completo_relatorio(exc: Exception) -> str:
 
 
 def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", versao_resumida: bool = False):
+    runtime_job = ANALYSIS_MANAGER.create("rj")
     try:
-        yield from _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes, versao_resumida)
+        while True:
+            active, position = runtime_job.try_activate()
+            if active:
+                break
+            yield queue_message(position), "", "", ""
+            runtime_job.wait_for_change(2.0)
+        record_status(runtime_job, "iniciando")
+        yield from _rj_analisar_impl(
+            pdf_files, pdf_relacionados, instrucoes, versao_resumida,
+            runtime_job=runtime_job,
+        )
+    except Exception as exc:
+        yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio(exc), "", ""
+    finally:
+        record_status(runtime_job, "finalizada")
+        runtime_job.close()
+
+
+def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, runtime_job=None):
+    try:
+        yield from _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes, runtime_job)
     except Exception as exc:
         yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio(exc), "", ""
 
 
-def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str):
-    try:
-        yield from _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes)
-    except Exception as exc:
-        yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio(exc), "", ""
-
-
-def _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes: str):
+def _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes: str, runtime_job=None):
     """Analisa só 'processos relacionados' (execuções/ações avulsas), sem PDF principal de RJ.
 
     Gera um relatório objetivo por processo (reaproveitando o template de 'Processos
@@ -663,7 +694,7 @@ def _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes: str):
         secao_rel, texto_bruto, avisos = "", "", []
         for kind, payload in _rj_processar_relacionados(
             pdf_paths_rel, clients, instrucoes, cache_name=None, model_cons=model_cons,
-            standalone=True, job_id=job_id,
+            standalone=True, job_id=job_id, runtime_job=runtime_job,
         ):
             if kind == "progress":
                 log.append(payload)
@@ -712,14 +743,18 @@ def _extrair_texto_docx(path: str) -> str:
     return "\n".join(partes)
 
 
-def _rj_analisar_com_relatorio_existente(docx_paths: list, pdf_relacionados, instrucoes: str):
+def _rj_analisar_com_relatorio_existente(docx_paths: list, pdf_relacionados, instrucoes: str,
+                                          runtime_job=None):
     try:
-        yield from _rj_analisar_com_relatorio_existente_impl(docx_paths, pdf_relacionados, instrucoes)
+        yield from _rj_analisar_com_relatorio_existente_impl(
+            docx_paths, pdf_relacionados, instrucoes, runtime_job
+        )
     except Exception as exc:
         yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio(exc), "", ""
 
 
-def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados, instrucoes: str):
+def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados, instrucoes: str,
+                                               runtime_job=None):
     """Reaproveita um relatório de RJ (.docx) já gerado numa análise anterior, em vez de
     reprocessar o PDF original — só os processos relacionados (se houver) são extraídos de
     verdade. Permite gerar o Checklist de Créditos com processos relacionados novos sem
@@ -777,7 +812,7 @@ def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados
     secao_rel, texto_bruto_rel, avisos = "", "", []
     for kind, payload in _rj_processar_relacionados(
         pdf_paths_rel, clients, instrucoes, cache_name=None, model_cons=model_cons,
-        standalone=False, job_id=job_id,
+        standalone=False, job_id=job_id, runtime_job=runtime_job,
     ):
         if kind == "progress":
             log.append(payload)
@@ -813,7 +848,8 @@ def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados
     yield "\n".join(log), relatorio_final, relatorio_final, texto_bruto_final
 
 
-def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_resumida: bool = False):
+def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_resumida: bool = False,
+                      runtime_job=None):
     if not pdf_files and not pdf_relacionados:
         yield "Nenhum arquivo enviado.", "", "", ""
         return
@@ -828,7 +864,9 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
                 # Relatório de RJ já gerado (Word) enviado junto na caixa de "Processos
                 # relacionados" — pula a extração da RJ inteira, só processa os PDFs novos
                 # que vieram junto (se houver).
-                yield from _rj_analisar_com_relatorio_existente(docx_paths, pdf_relacionados, instrucoes)
+                yield from _rj_analisar_com_relatorio_existente(
+                    docx_paths, pdf_relacionados, instrucoes, runtime_job
+                )
                 return
             # Combinação não suportada (PDF de RJ + .docx em relacionados): o .docx é
             # ignorado aqui pra não quebrar a extração normal (que só lê PDF).
@@ -836,7 +874,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
     if not pdf_files:
         # Sem PDF principal de RJ: analisa só os processos relacionados (execuções/ações
         # avulsas), num fluxo mais leve — sem Seção A (que pressupõe uma RJ principal).
-        yield from _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes)
+        yield from _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes, runtime_job)
         return
 
     yield "Iniciando analise de Recuperacao Judicial...", "", "", ""
@@ -892,35 +930,20 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
     log.append(f"Modelo de consolidacao: {model_cons}")
     yield "\n".join(log), "", "", ""
 
-    log.append("\nInspecionando e dividindo PDFs...")
+    log.append("\nInspecionando e dividindo PDFs sem recompressão de imagens...")
+    record_status(runtime_job, "dividindo_pdfs")
     yield "\n".join(log), "", "", ""
 
     todos_chunks = []
-    _temp_comprimidos: list = []
+    hashes_arquivos = {}
     for path in pdf_paths:
         nome = Path(path).name
         mb_orig = Path(path).stat().st_size / 1_048_576
-
-        path_proc = path
-        if 10 <= mb_orig <= COMPRESSAO_PRE_MB_RJ:
-            # Arquivo intermediário: pré-comprime antes de dividir em chunks
-            log.append(f"   Comprimindo {nome} ({mb_orig:.0f} MB)...")
-            yield "\n".join(log), "", "", ""
-            comp_path, orig_mb, comp_mb = _comprimir_pdf(path)
-            if comp_path != path:
-                reducao = (1 - comp_mb / orig_mb) * 100
-                log[-1] = f"   {nome}: {orig_mb:.0f} MB → {comp_mb:.0f} MB (-{reducao:.0f}%)"
-                yield "\n".join(log), "", "", ""
-                _temp_comprimidos.append(comp_path)
-                path_proc = comp_path
-        elif mb_orig > COMPRESSAO_PRE_MB_RJ:
-            # Arquivo grande: vai direto ao chunked; compressao por chunk em paralelo
-            log.append(f"   {nome} ({mb_orig:.0f} MB) — compressao por chunk (paralelo)")
-            yield "\n".join(log), "", "", ""
-
-        chunks = _rj_dividir_pdf(path_proc)
+        hashes_arquivos[path] = file_sha256(path)
+        record_status(runtime_job, "dividindo_pdf", arquivo=nome, tamanho_mb=round(mb_orig, 1))
+        chunks = _rj_dividir_pdf(path)
         total_pg = chunks[0][2] if chunks else 0
-        doc_tmp = fitz.open(path_proc)
+        doc_tmp = fitz.open(path)
         esc = []
         for i, p in enumerate(doc_tmp):
             txt = p.get_text().strip()
@@ -935,14 +958,18 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
         info_scan = f"{len(esc)} pag. escaneadas ({pct}%)" if esc else "todas pesquisaveis"
         log.append(f"   · {nome}: {total_pg} pag. — {info_scan}")
         if len(chunks) > 1:
-            log.append(f"     Dividido em {len(chunks)} partes ({CHUNK_MAX_PAGES_RJ} pag. cada)")
+            log.append(f"     Dividido em {len(chunks)} partes de até {CHUNK_MAX_PAGES_RJ} pag. e 45 MB")
         for chunk_path, offset, total in chunks:
             todos_chunks.append((chunk_path, offset, total, path))
 
     n = len(todos_chunks)
-    n_rodadas = math.ceil(n / 4)
+    workers_iniciais = ANALYSIS_MANAGER.worker_cap() if runtime_job else 6
+    n_rodadas = math.ceil(n / max(1, workers_iniciais))
     tempo_est = n_rodadas * AVG_MIN_POR_CHUNK_RJ + MIN_CONSOLIDACAO_RJ
-    log.append(f"\nEstimativa: ~{tempo_est} min | {n} chunk(s) · 4 workers · File API · {model_cons}")
+    log.append(
+        f"\nEstimativa: ~{tempo_est} min | {n} chunk(s) · até {workers_iniciais} worker(s) "
+        f"nesta análise (6 globais) · File API · {model_cons}"
+    )
     yield "\n".join(log), "", "", ""
 
     t_inicio = time.time()
@@ -950,38 +977,60 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
     texto_merged = ""  # disponivel no finally para o Excel de credores
 
     try:
-        # Extração paralela via File API — 4 workers
-        log.append(f"\nExtraindo {n} chunk(s) em paralelo (4 workers · File API)...")
+        record_status(runtime_job, "extraindo", chunks_total=n, chunks_concluidos=0)
+        log.append(f"\nExtraindo {n} chunk(s) (workers compartilhados dinamicamente · File API)...")
         log.append(_barra_progresso(0, n))
         yield "\n".join(log), "", "", ""
 
         parciais: dict = {}
 
         def _worker_rj(idx):
-            cp, offset, total_pg, _ = todos_chunks[idx]
+            cp, offset, total_pg, original = todos_chunks[idx]
+            try:
+                with fitz.open(cp) as _chunk_doc:
+                    chunk_end = offset + len(_chunk_doc)
+            except Exception:
+                chunk_end = min(offset + CHUNK_MAX_PAGES_RJ, total_pg)
+            source_hash = hashes_arquivos[original]
+            cached = load_chunk_cache(
+                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, "rj_principal"
+            )
+            if cached is not None:
+                return idx, cached, "cache por arquivo/páginas"
             if job_id and manifest and manifest["chunks_status_principal"].get(str(idx)) == "ok":
                 return idx, rj_cache.carregar_chunk(job_id, "principal", idx), "cache"
             cli = clients[idx % len(clients)]
-            try:
-                return _retry(
-                    lambda: _rj_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
-                    tentativas=2, espera_base=15
+            slot = runtime_job.worker_slot() if runtime_job else nullcontext()
+            with slot:
+                record_status(
+                    runtime_job, "extraindo_chunk", arquivo=Path(original).name,
+                    paginas=f"{offset + 1}-{chunk_end}", chunk=idx + 1,
                 )
-            except Exception as e:
-                msg_e = str(e)
-                if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                    ri, res, nota = _rj_extrair_chunk((idx, cp, offset, total_pg, n, cli))
-                    return ri, res, (nota + " | " if nota else "") + "fallback inline"
-                raise
+                try:
+                    result = _retry(
+                        lambda: _rj_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
+                        tentativas=2, espera_base=15
+                    )
+                except Exception as e:
+                    msg_e = str(e)
+                    if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
+                        ri, res, nota = _rj_extrair_chunk((idx, cp, offset, total_pg, n, cli))
+                        result = (ri, res, (nota + " | " if nota else "") + "fallback inline")
+                    else:
+                        raise
+            save_chunk_cache(
+                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, "rj_principal", result[1]
+            )
+            return result
 
         t_extr = time.time()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
             futures = {ex.submit(_worker_rj, i): i for i in range(n)}
             for future in concurrent.futures.as_completed(futures):
                 try:
                     idx, res, nota = future.result()
                     parciais[idx] = res
-                    if job_id and manifest and nota != "cache":
+                    if job_id and manifest and not nota.startswith("cache"):
                         try:
                             rj_cache.salvar_chunk(job_id, "principal", idx, res)
                             manifest["chunks_status_principal"][str(idx)] = "ok"
@@ -989,13 +1038,18 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
                         except Exception:
                             pass
                     c = len(parciais)
+                    record_status(
+                        runtime_job, "extraindo", chunks_total=n, chunks_concluidos=c,
+                        arquivo=Path(todos_chunks[idx][3]).name,
+                    )
                     log[-1] = _barra_progresso(c, n)
-                    rounds_left = math.ceil((n - c) / 4)
+                    current_workers = ANALYSIS_MANAGER.worker_cap() if runtime_job else 6
+                    rounds_left = math.ceil((n - c) / max(1, current_workers))
                     est_rest = rounds_left * AVG_MIN_POR_CHUNK_RJ
-                    acao = "reaproveitado do cache" if nota == "cache" else "extraido"
+                    acao = "reaproveitado do cache" if nota.startswith("cache") else "extraido"
                     log.append(
                         f"   Chunk {idx+1}/{n} {acao}"
-                        + (f" [{nota}]" if nota and nota != "cache" else "")
+                        + (f" [{nota}]" if nota and not nota.startswith("cache") else "")
                         + f" | {c}/{n} prontos | ~{est_rest}min restantes"
                     )
                 except Exception as e:
@@ -1018,6 +1072,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
         log.append(f"   Extracao total: {t_extr_s//60}min{t_extr_s%60:02d}s")
         yield "\n".join(log), "", "", ""
 
+        record_status(runtime_job, "consolidando", chunks_total=n, chunks_concluidos=len(parciais))
         # Merge
         log.append("\nConsolidando textos extraidos...")
         yield "\n".join(log), "", "", ""
@@ -1070,7 +1125,8 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
             yield "\n".join(log), "", "", ""
             secao_rel, texto_bruto_rel, avisos_rel = "", "", []
             for kind, payload in _rj_processar_relacionados(
-                pdf_paths_rel, clients, instrucoes, cache, model_cons, job_id=job_id
+                pdf_paths_rel, clients, instrucoes, cache, model_cons,
+                job_id=job_id, runtime_job=runtime_job,
             ):
                 if kind == "progress":
                     log.append(payload)
@@ -1111,9 +1167,6 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
             if cp != orig:
                 try: os.remove(cp)
                 except: pass
-        for cp in _temp_comprimidos:
-            try: os.remove(cp)
-            except: pass
 
 
 def rj_gerar_word(relatorio: str):

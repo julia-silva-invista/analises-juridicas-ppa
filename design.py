@@ -291,6 +291,28 @@ body,
     box-shadow: 0 0 0 4px rgba(242, 201, 76, 0.18);
 }
 
+#environment-status-json {
+    display: none !important;
+}
+
+.inv-status-card[data-status="stable"] .inv-status-pill {
+    background: rgba(46, 139, 87, 0.11);
+}
+
+.inv-status-card[data-status="stable"] .inv-status-dot {
+    background: #2e8b57;
+    box-shadow: 0 0 0 4px rgba(46, 139, 87, 0.14);
+}
+
+.inv-status-card[data-status="peak"] .inv-status-pill {
+    background: rgba(193, 38, 45, 0.10);
+}
+
+.inv-status-card[data-status="peak"] .inv-status-dot {
+    background: #c1262d;
+    box-shadow: 0 0 0 4px rgba(193, 38, 45, 0.13);
+}
+
 .inv-status-card[data-status="instability"] .inv-status-pill {
     background: rgba(220, 68, 5, 0.08);
 }
@@ -626,28 +648,50 @@ body,
     display: none !important;
 }
 
-/* Caixa de arquivo gerado compacta (~1/4 da altura padrão) */
-.word-file-output,
-.word-file-output * {
+/* Downloads gerados: uma linha compacta, sem a grande área vazia do gr.File. */
+.compact-file-output,
+.compact-file-output * {
     min-height: 0 !important;
 }
-.word-file-output .block,
-.word-file-output > div {
-    padding: 2px 6px !important;
+
+.compact-file-output {
+    height: auto !important;
+    max-height: 88px !important;
+    margin-top: 6px !important;
+    overflow: hidden !important;
+    border-radius: 12px !important;
+}
+
+.compact-file-output .block,
+.compact-file-output > div,
+.compact-file-output [data-testid="file-upload"] {
+    height: auto !important;
+    min-height: 42px !important;
+    max-height: 72px !important;
+    padding: 5px 8px !important;
     border-radius: 10px !important;
 }
-.word-file-output .file-preview-holder,
-.word-file-output .file-preview,
-.word-file-output .file-container {
+
+.compact-file-output .file-preview-holder,
+.compact-file-output .file-preview,
+.compact-file-output .file-container,
+.compact-file-output [data-testid="file-preview"] {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: 58px !important;
     padding: 0 !important;
     margin: 0 !important;
     border: none !important;
+    overflow-y: auto !important;
 }
-.word-file-output .file,
-.word-file-output tr,
-.word-file-output td,
-.word-file-output .file-preview a {
-    padding: 2px 6px !important;
+
+.compact-file-output .file,
+.compact-file-output tr,
+.compact-file-output td,
+.compact-file-output .file-preview a,
+.compact-file-output [data-testid="file-preview"] a {
+    min-height: 32px !important;
+    padding: 5px 8px !important;
     font-size: 0.8rem !important;
     line-height: 1.2 !important;
 }
@@ -2047,10 +2091,10 @@ HEADER_HTML = """
       </p>
     </section>
 
-    <aside class="inv-status-card" aria-label="Status operacional">
+    <aside class="inv-status-card" data-status="stable" aria-label="Status operacional">
       <div class="inv-status-top">
         <span class="inv-status-label">Ambiente</span>
-        <span class="inv-status-pill"><span class="inv-status-dot"></span> <span class="inv-status-value">Operacional</span></span>
+        <span class="inv-status-pill"><span class="inv-status-dot"></span> <span class="inv-status-value">Estável</span></span>
       </div>
       <p class="inv-status-text">Selecione o módulo de análise para iniciar a triagem documental e a estruturação do relatório.</p>
     </aside>

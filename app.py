@@ -16,6 +16,7 @@ from processos import proc_analisar, proc_gerar_word, proc_gerar_dossie, proc_re
 from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores, rj_gerar_checklist, rj_gerar_checklist_creditos
 from matriculas import mat_gerar_excel, mat_responder
 from coleta import coleta_gerar, coleta_gerar_dossie_dispatch
+from analysis_runtime import environment_status_json
 from timeline_societaria import (
     timeline_analisar,
     timeline_toggle_edicao,
@@ -73,26 +74,28 @@ _FORCE_LIGHT_JS = """
     });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
-    // Pilula de status no cabecalho (Operacional/Instabilidade conforme a aba ativa).
+    // Pilula de status no cabecalho conforme a demanda real de analises.
     const applyStatus = () => {
-        const selected = document.querySelector('button[role="tab"][aria-selected="true"]');
-        const label = (selected?.textContent || "").trim().toLowerCase();
-        const unstable = label.includes("datajud");
         const card = document.querySelector(".inv-status-card");
         const value = document.querySelector(".inv-status-value");
-        if (!card || !value) return;
-        card.dataset.status = unstable ? "instability" : "operational";
-        value.textContent = unstable ? "Instabilidade" : "Operacional";
+        const field = document.querySelector("#environment-status-json textarea, #environment-status-json input");
+        if (!card || !value || !field) return;
+        try {
+            const status = JSON.parse(field.value || "{}");
+            card.dataset.status = status.state || "stable";
+            value.textContent = status.label || "Estável";
+            card.title = `${status.active || 0} análise(s) ativa(s) · ${status.waiting || 0} na fila`;
+        } catch (_) {}
     };
     applyStatus();
-    document.addEventListener("click", (event) => {
-        if (event.target.closest('button[role="tab"]')) setTimeout(applyStatus, 80);
-    });
     new MutationObserver(applyStatus).observe(document.body, {
         subtree: true,
+        childList: true,
+        characterData: true,
         attributes: true,
-        attributeFilter: ["aria-selected"],
+        attributeFilter: ["value"],
     });
+    window.setInterval(applyStatus, 1000);
 
     // Carrossel de abas — setinhas discretas quando as abas nao cabem na largura da tela.
     const setupTabCarousel = () => {
@@ -144,6 +147,10 @@ with gr.Blocks(
     theme=gr.themes.Default(),
 ) as demo:
     gr.HTML(HEADER_HTML)
+    environment_status_state = gr.Textbox(
+        value=environment_status_json(), container=False, elem_id="environment-status-json"
+    )
+    environment_status_timer = gr.Timer(value=5.0, active=True)
 
     with gr.Tabs(elem_classes=["tab-nav"]):
 
@@ -202,8 +209,14 @@ with gr.Blocks(
             with gr.Row():
                 proc_word_btn   = gr.Button("Baixar Word",  variant="secondary", elem_classes=["word-download-btn"])
                 proc_dossie_btn = gr.Button("Dossiê PPA",   variant="secondary", elem_classes=["word-download-btn"])
-            proc_word_file   = gr.File(label="",          interactive=False, visible=False, elem_classes=["word-file-output"])
-            proc_dossie_file = gr.File(label="Dossiê PPA", interactive=False, visible=False, elem_classes=["word-file-output"])
+            proc_word_file = gr.File(
+                label="", interactive=False, visible=False, height=72,
+                elem_classes=["word-file-output", "compact-file-output"],
+            )
+            proc_dossie_file = gr.File(
+                label="Dossiê PPA", interactive=False, visible=False, height=72,
+                elem_classes=["word-file-output", "compact-file-output"],
+            )
             proc_dossie_status = gr.Markdown("")
 
             gr.HTML('<hr class="inv-divider">')
@@ -298,13 +311,25 @@ with gr.Blocks(
                 rj_excel_cred_btn     = gr.Button("Gerar Excel de Credores", variant="secondary", elem_classes=["word-download-btn"])
                 rj_checklist_btn      = gr.Button("Checklist RJ",            variant="secondary", elem_classes=["word-download-btn"])
                 rj_checklist_cred_btn = gr.Button("Gerar Checklist de Créditos", variant="secondary", elem_classes=["word-download-btn"])
-            rj_word_file      = gr.File(label="",                  interactive=False, visible=False, elem_classes=["word-file-output"])
-            rj_excel_cred_file   = gr.File(label="Excel de Credores", interactive=False, visible=False, elem_classes=["word-file-output"])
+            rj_word_file = gr.File(
+                label="", interactive=False, visible=False, height=72,
+                elem_classes=["word-file-output", "compact-file-output"],
+            )
+            rj_excel_cred_file = gr.File(
+                label="Excel de Credores", interactive=False, visible=False, height=72,
+                elem_classes=["word-file-output", "compact-file-output"],
+            )
             rj_excel_cred_status = gr.Textbox(label="", interactive=False, lines=1, show_label=False)
-            rj_checklist_file      = gr.File(label="Checklist RJ",        interactive=False, visible=False, elem_classes=["word-file-output"])
+            rj_checklist_file = gr.File(
+                label="Checklist RJ", interactive=False, visible=False, height=72,
+                elem_classes=["word-file-output", "compact-file-output"],
+            )
             rj_checklist_status    = gr.Markdown("")
-            rj_checklist_cred_file   = gr.File(label="Checklist de Créditos", interactive=False, visible=False,
-                                                file_count="multiple", elem_classes=["word-file-output"])
+            rj_checklist_cred_file = gr.File(
+                label="Checklist de Créditos", interactive=False, visible=False,
+                file_count="multiple", height=72,
+                elem_classes=["word-file-output", "compact-file-output"],
+            )
             rj_checklist_cred_status = gr.Markdown("")
 
             gr.HTML('<hr class="inv-divider">')
@@ -379,7 +404,10 @@ with gr.Blocks(
                     )
                 with gr.Tab("Download"):
                     mat_status = gr.Textbox(label="Status", interactive=False)
-                    mat_excel = gr.File(label="Excel gerado", interactive=False)
+                    mat_excel = gr.File(
+                        label="Excel gerado", interactive=False, height=72,
+                        elem_classes=["compact-file-output"],
+                    )
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Column(elem_classes=["qa-section"]):
@@ -447,8 +475,14 @@ with gr.Blocks(
                 tl_exportar_img_btn = gr.Button("Exportar imagem", variant="secondary")
 
             with gr.Row():
-                tl_tabela_word_file = gr.File(label="Tabela em Word", interactive=False, visible=True)
-                tl_imagem_file = gr.File(label="Imagem da timeline", interactive=False, visible=True)
+                tl_tabela_word_file = gr.File(
+                    label="Tabela em Word", interactive=False, visible=True, height=72,
+                    elem_classes=["compact-file-output"],
+                )
+                tl_imagem_file = gr.File(
+                    label="Imagem da timeline", interactive=False, visible=True, height=72,
+                    elem_classes=["compact-file-output"],
+                )
 
         # ── Tab 5: Coleta de Informações ─────────────────────────────────────
         with gr.Tab("Coleta de Informações"):
@@ -499,8 +533,14 @@ with gr.Blocks(
                     )
                 with gr.Tab("Download"):
                     coleta_status = gr.Textbox(label="Status", interactive=False)
-                    coleta_excel_out = gr.File(label="Planilha preenchida", interactive=False)
-                    coleta_dossie_out = gr.File(label="Dossiê atualizado (passivo)", interactive=False)
+                    coleta_excel_out = gr.File(
+                        label="Planilha preenchida", interactive=False, height=72,
+                        elem_classes=["compact-file-output"],
+                    )
+                    coleta_dossie_out = gr.File(
+                        label="Dossiê atualizado (passivo)", interactive=False, height=72,
+                        elem_classes=["compact-file-output"],
+                    )
 
         # ── Tab 6: Sugestões e Feedbacks ─────────────────────────────────────
         with gr.Tab("HTMLs"):
@@ -519,7 +559,8 @@ with gr.Blocks(
         fn=proc_analisar,
         inputs=[proc_pdf_principal, proc_pdf_relacionados, proc_instrucoes, proc_versao_resumida],
         outputs=[proc_log, proc_report, proc_relatorio_state, proc_extracao_state],
-        concurrency_limit=2,
+        concurrency_limit=20,
+        concurrency_id="analises_pdf",
     )
     proc_word_btn.click(fn=proc_gerar_word, inputs=[proc_relatorio_state], outputs=[proc_word_file])
     proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state, proc_extracao_state], outputs=[proc_dossie_file, proc_dossie_status])
@@ -532,7 +573,14 @@ with gr.Blocks(
         fn=rj_analisar,
         inputs=[rj_pdf_principal, rj_pdf_relacionados],
         outputs=[rj_log, rj_report, rj_relatorio_state, rj_extracao_state],
-        concurrency_limit=2,
+        concurrency_limit=20,
+        concurrency_id="analises_pdf",
+    )
+    environment_status_timer.tick(
+        fn=environment_status_json,
+        outputs=[environment_status_state],
+        queue=False,
+        show_progress="hidden",
     )
     def _btn_gerando(_texto_normal):
         # Deixa o botão claramente "Gerando..." (desabilitado) enquanto a função roda —
