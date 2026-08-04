@@ -14,26 +14,25 @@ from dateutil.relativedelta import relativedelta
 
 import pandas as pd
 from pydantic import BaseModel
-from google import genai
 from google.genai import types
 
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-from utils import _retry, _responder_pergunta_generica, GEMINI_TIMEOUT_MS
+from utils import (
+    _get_gemini_clients,
+    _erro_gemini_permite_failover,
+    _retry,
+    _responder_pergunta_generica,
+    GEMINI_MODEL_EXTRACAO,
+    GEMINI_MODEL_RELATORIO,
+    GEMINI_MODEL_QA,
+)
 
 
 def _mat_get_clients():
-    k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-    k2 = os.getenv("GEMINI_API_KEY_2") or k1
-    if not k1:
-        raise RuntimeError("GEMINI_API_KEY_1 não configurada.")
-    http_opts = types.HttpOptions(timeout=GEMINI_TIMEOUT_MS)
-    return (
-        genai.Client(api_key=k1, http_options=http_opts),
-        genai.Client(api_key=k2, http_options=http_opts),
-    )
+    return _get_gemini_clients()
 
 
 # ── Modelos Pydantic ──────────────────────────────────────────────────────────
@@ -45,6 +44,7 @@ class OnusFinanceiro(BaseModel):
     numero_processo: Optional[str] = None   # nº do processo judicial (penhora, arresto, execucao)
     numero_instrumento: Optional[str] = None  # nº da CCB, contrato, operacao bancaria
     valor_principal: Optional[float] = None
+    moeda: Optional[str] = None       # BRL/Real ou a moeda histórica indicada no ato
     data_celebracao: Optional[str] = None
     parcela_mensal: Optional[float] = None
     vencimento_final: Optional[str] = None
@@ -65,6 +65,7 @@ class MatriculaExtraida(BaseModel):
     matricula: Optional[str] = None
     comarca: Optional[str] = None
     proprietario_atual: Optional[str] = None
+    fracao_ideal: Optional[str] = None
     descricao_imovel: Optional[str] = None
     transmissoes_averbadas_registradas: Optional[str] = None
     onus_vigentes_registrados_averbados: Optional[str] = None
@@ -77,19 +78,48 @@ class MatriculaExtraida(BaseModel):
 
 # ── Prompt ────────────────────────────────────────────────────────────────────
 
+PROMPT_EXTRACAO_MATRICULA = (
+    "Leia integralmente esta matrícula imobiliária brasileira, inclusive texto manuscrito, carimbos, "
+    "continuações e páginas digitalizadas. Produza uma extração factual completa para uma segunda etapa "
+    "de consolidação jurídica. Não resuma e não conclua por amostragem.\n\n"
+    "Faça obrigatoriamente:\n"
+    "1. Identifique número, cartório, comarca e eventual encerramento, baixa, rematriculação ou matrículas "
+    "originadas/derivadas.\n"
+    "2. Transcreva em ordem todos os registros R e averbações AV, sem omitir nenhum código, indicando "
+    "data, natureza, partes, CPF/CNPJ, frações, valores, moeda e referências a atos posteriores.\n"
+    "3. Reconstrua a cadeia dominial. Destaque a última transmissão válida — inclusive compra e venda, "
+    "arrematação, adjudicação, dação em pagamento, doação, partilha, integralização ou sucessão — e as "
+    "frações que permaneceram com cada proprietário após todos os atos.\n"
+    "4. Monte um inventário de todos os ônus e restrições. Para cada um, diga se está vigente ou qual ato "
+    "o cancelou/baixou/levantou. Nenhum ônus pode ficar sem uma dessas duas classificações.\n"
+    "5. Preserve literalmente moedas históricas e não converta valores. Se o ônus em moeda antiga não foi "
+    "cancelado, classifique-o como vigente e sinalize que o valor não é calculável automaticamente.\n"
+    "6. Não use Markdown, negrito ou pares de asteriscos. Nunca invente informação ilegível ou ausente."
+)
+
+
 PROMPT_MATRICULA = (
     "Voce e um assistente especializado em analise de matriculas de imoveis brasileiros.\n\n"
-    "Analise integralmente o PDF enviado e extraia as informacoes em formato estruturado.\n\n"
+    "Consolide a extracao factual integral fornecida abaixo em formato estruturado. Resolva a cadeia "
+    "dominial e a situacao de cada onus antes de preencher o JSON.\n\n"
     "Preencha os seguintes campos:\n"
-    "- matricula\n- comarca\n- proprietario_atual\n- descricao_imovel\n"
+    "- matricula\n- comarca\n- proprietario_atual\n- fracao_ideal\n- descricao_imovel\n"
     "- transmissoes_averbadas_registradas\n- onus_vigentes_registrados_averbados\n"
     "- observacoes\n- onus_cancelados\n- grau_confianca\n"
     "- onus_financeiros\n- transmissoes_estruturadas\n\n"
     "Regras obrigatorias:\n\n"
-    "1. Proprietario atual: ultimo registro translativo valido. APENAS nomes, sem CPF/CNPJ.\n"
-    "   Se a matrícula estiver encerrada, indique o proprietario e registre em observacoes.\n"
-    "   Se pertencer a mais de uma pessoa, indique o percentual de cada titular.\n"
-    "   Exemplo: Fulano da Silva (40%) Beltrano Camargo (60%)\n\n"
+    "1. matricula: comece pelo numero e, no MESMO campo, informe imediatamente se houve baixa, "
+    "encerramento, rematriculacao ou origem de outra matricula. Exemplo: 21.101 - Encerrada, deu origem "
+    "à matrícula 73.923. Nao deixe essa informacao apenas em observacoes.\n\n"
+    "1.1. proprietario_atual: reconstrua toda a cadeia dominial e use o adquirente da ULTIMA transmissao "
+    "valida, qualquer que seja sua natureza: compra e venda, arrematacao, adjudicacao, dacao em pagamento, "
+    "doacao, partilha, integralizacao, sucessao ou outra transferencia de dominio. Um proprietario anterior "
+    "nao pode prevalecer sobre transmissao posterior. Inclua CPF/CNPJ quando constar, sempre entre parenteses.\n"
+    "   Se houver copropriedade, some aquisicoes e alienacoes parciais e indique a proporcao final de CADA "
+    "titular. Exemplo: Fulano da Silva (CPF 123.456.789-00) - 40%; Beltrano Camargo (CPF 987.654.321-00) - 60%.\n"
+    "   fracao_ideal: repita de forma objetiva o quadro final, no formato Nome: percentual ou fracao. "
+    "Confira se as proporcoes totalizam 100% ou a integralidade registral; se nao for possivel fechar, "
+    "informe a divergencia sem inventar.\n\n"
     "2. comarca: indicar a comarca e qual é o cartório. Exemplo: '1º CRI de Curitiba/PR'.\n\n"
     "3. descricao_imovel: resumo em ate 3 frases. Tipo, localizacao, area, identificadores.\n\n"
     "4. transmissoes_averbadas_registradas: todas, cronologicas, sinteticas.\n"
@@ -97,36 +127,36 @@ PROMPT_MATRICULA = (
     "   Diga sempre o preço do imóvel em caso de compra e venda ou integralizacao.\n"
     "   Inclua registros anteriores a abertura se disponiveis.\n"
     "   Exemplo:\n"
-    "   R.4 - **Compra e Venda**: Jose Marques da Cruz (CPF 123.456.789-00) vendeu para Carlos Guimaraes"
+    "   R.4 - Compra e Venda: Jose Marques da Cruz (CPF 123.456.789-00) vendeu para Carlos Guimaraes"
     " (CPF 987.654.321-00) em 15/12/1986, pelo valor de R$ 2.000.000,00.\n\n"
-    "   R.5 - **Doação**: Carlos Guimaraes doou para Murilo Menezes (CPF 111.222.333-44) em 03/06/1988.\n\n"
-    "   Sempre que trouxer a natureza das transmissões, coloque em negrito apenas o tipo (ex: **Compra e Venda**).\n\n"
-    "5. onus_vigentes_registrados_averbados: apenas gravames vigentes de natureza financeira.\n"
-    "   NAO inclua aqui: indisponibilidade de bens, averbacao premonitoria, averbacao de ajuizamento,"
-    " averbacao de execucao, protesto, restricao administrativa. Estes vao em observacoes.\n"
-    "   Se nao houver onus vigentes financeiros, preencha exatamente: Sem onus vigentes identificados.\n\n"
+    "   R.5 - Doação: Carlos Guimaraes doou para Murilo Menezes (CPF 111.222.333-44) em 03/06/1988.\n\n"
+    "   Nao use negrito, Markdown ou asteriscos na natureza das transmissoes.\n\n"
+    "5. onus_vigentes_registrados_averbados: inclua TODOS os onus, gravames e restricoes ainda vigentes, "
+    "financeiros ou nao, incluindo penhora, arresto, hipoteca, alienacao fiduciaria, indisponibilidade, "
+    "averbacao premonitoria, averbacao de ajuizamento/execucao, protesto e restricao administrativa.\n"
+    "   Se nao houver nenhum onus vigente, preencha exatamente: Sem onus vigentes identificados.\n\n"
     "6. Formato de cada onus vigente:\n"
-    "   [Codigo]: [Tipo], [n. cedula se disponivel], [dd/mm/aaaa], [partes — sem CPF/CNPJ],\n"
+    "   [Codigo]: [Tipo], [n. cedula se disponivel], [dd/mm/aaaa], [partes com CPF/CNPJ entre parenteses],\n"
     "   vencimento [data se disponivel], Valor principal: R$ [valor se disponivel].\n"
     "   OBRIGATORIO para penhora, arresto, execucao ou ajuizamento: inclua o numero do processo.\n"
     "   Exemplo: AV.12: Penhora, 12/03/2023, Exequente: Banco XYZ; Executado: Joao Silva,"
     " Proc. 1234567-89.2023.8.26.0001, Valor principal: R$ 250.000,00.\n"
     "   Vara e comarca vao em observacoes, nao aqui.\n\n"
-    "7. Nao inclua atos cancelados em onus_vigentes. Se cancelado, mencione em onus_cancelados.\n\n"
+    "7. Todo onus identificado deve aparecer em EXATAMENTE um dos campos: onus_vigentes ou onus_cancelados. "
+    "Se nao estiver vigente, deve obrigatoriamente constar em onus_cancelados, com o ato de baixa quando "
+    "identificavel. Nunca deixe um onus somente em observacoes.\n\n"
     "8. PDF escaneado: extraia o maximo possivel do conteudo visual.\n\n"
     "9. Nunca invente dados. Nomes: primeira letra maiuscula, exceto artigos (de, da, do, das, dos, e).\n"
     "   Erros de grafia: copie como esta e registre em observacoes.\n\n"
     "10. observacoes: inclua SEMPRE que houver:\n"
-    "   - Indisponibilidade de bens (com n. processo se disponivel)\n"
-    "   - Averbacao premonitoria (com n. processo se disponivel)\n"
-    "   - Averbacao de ajuizamento de execucao (com n. processo se disponivel)\n"
     "   - Averbacoes relevantes (divorcio, matrimonio, georreferenciamento, reserva legal, quitacao)\n"
     "   - Irregularidades, CPFs divergentes para a mesma pessoa, erros de grafia\n"
     "   - Matrícula encerrada, rematricula, baixa legibilidade\n"
-    "   NAO inclua onus cancelados em observacoes — eles vao EXCLUSIVAMENTE em onus_cancelados.\n"
-    "   NAO inclua vara/comarca/n. processo de penhoras em observacoes — essas infos vao no campo onus_vigentes.\n"
+    "   Nao use observacoes como destino unico de qualquer onus: onus vigentes e cancelados pertencem aos "
+    "campos proprios. Informacoes complementares podem ser repetidas aqui apenas quando indispensaveis.\n"
     "   Se nao houver: Sem observacoes relevantes. Nunca deixe vazio.\n\n"
-    "11. onus_cancelados: APENAS onus cancelados, sempre indicando qual ato cancelou.\n"
+    "11. onus_cancelados: TODOS os onus cancelados, baixados ou levantados, financeiros ou nao, sempre "
+    "indicando qual ato cancelou quando essa referencia estiver disponivel.\n"
     "    Exemplo: AV.9: Penhora cancelada pela AV.22.\n"
     "    NAO repita esses onus em observacoes.\n"
     "    Se nao houver: Sem onus cancelados identificados.\n\n"
@@ -154,7 +184,9 @@ PROMPT_MATRICULA = (
     "   - numero_instrumento: OBRIGATORIO para CCB, contrato bancario, operacao de credito, cedula."
     " Informe o numero da CCB, do contrato ou da operacao (ex: CCB 12345, Contrato 67890, Op. 00123)."
     " Null se nao for instrumento de credito.\n"
-    "   - valor_principal: valor em reais (numero puro, sem R$ ou pontos)\n"
+    "   - valor_principal: numero puro na moeda indicada, sem simbolo ou separador de milhar\n"
+    "   - moeda: BRL/Real para valores em reais; para moeda historica, informe literalmente Cruzeiro, "
+    "Cruzado, NCz$, Cr$, URV ou a denominacao constante do ato.\n"
     "   - data_celebracao: data do ato em DD/MM/AAAA\n"
     "   - parcela_mensal: valor da parcela mensal se explicitamente indicada. Null se nao houver.\n"
     "   - vencimento_final: data de vencimento final em DD/MM/AAAA. Null se nao houver.\n"
@@ -164,15 +196,12 @@ PROMPT_MATRICULA = (
     " averbacao de execucao, protesto.\n"
     "   Averbacao de execucao e averbacao premonitoria sao NOTACOES PROCESSUAIS, nao gravames financeiros"
     " — ignorar no calculo mesmo que tenham valor indicado.\n"
-    "   NAO inclua onus sem valor principal identificavel. Nao invente dados.\n\n"
+    "   Inclua tambem onus financeiros sem valor identificavel e use valor_principal=null. Nao invente dados.\n\n"
     "19. VARREDURA OBRIGATORIA AV/R POR AV/R:\n"
     "    a) Identifique a numeracao maxima de R e de AV no documento.\n"
     "    b) Percorra individualmente de R.1 ate o ultimo R, e de AV.1 ate o ultimo AV.\n"
     "    c) Para CADA item, classifique em EXATAMENTE uma destas categorias:\n"
-    "       - ONUS VIGENTE FINANCEIRO: penhora ativa, hipoteca, alienacao fiduciaria, CCB, arresto"
-    " vigente, confissao de divida, titulo de credito nao cancelado -> onus_vigentes\n"
-    "       - ONUS NAO FINANCEIRO (vai em observacoes, NAO em onus_vigentes nem em onus_financeiros):"
-    " indisponibilidade de bens, averbacao premonitoria, averbacao de ajuizamento, averbacao de execucao, protesto\n"
+    "       - ONUS VIGENTE: todo gravame ou restricao ainda ativo, financeiro ou nao -> onus_vigentes\n"
     "       - ONUS CANCELADO: onus cuja AV/R posterior cancelou/baixou -> onus_cancelados\n"
     "       - OBSERVACAO/TRANSMISSAO: compra e venda, doacao, partilha, integralizacao, divorcio,"
     " retificacao, georreferenciamento, encerramento, etc.\n"
@@ -189,16 +218,22 @@ PROMPT_MATRICULA = (
     " Null se nao disponivel.\n"
     "   - para_doc: CPF ou CNPJ do adquirente, APENAS DIGITOS. Null se nao disponivel.\n"
     "   Nao invente. Deixe null qualquer campo nao identificavel.\n\n"
-    "21. CONSISTENCIA OBRIGATORIA entre onus_financeiros e onus_vigentes_registrados_averbados:\n"
-    "   Antes de finalizar, verifique: para cada item em onus_financeiros com cancelado=false,\n"
-    "   ele DEVE estar descrito em onus_vigentes_registrados_averbados.\n"
-    "   Se voce nao o incluiu em onus_vigentes, defina cancelado=true para ele.\n"
-    "   A inconsistencia (ativo no JSON mas ausente no texto, ou vice-versa) e ERRO GRAVE.\n\n"
+    "21. CONSISTENCIA OBRIGATORIA DOS ONUS:\n"
+    "   Faça uma lista de controle de todo R/AV que constitua onus ou restricao. Cada item deve aparecer "
+    "em exatamente um campo textual: onus_vigentes_registrados_averbados OU onus_cancelados.\n"
+    "   Para cada item em onus_financeiros com cancelado=false, confirme sua presenca em onus_vigentes. "
+    "Para cada item com cancelado=true, confirme sua presenca em onus_cancelados.\n"
+    "   A ausencia em ambos os campos ou a presenca simultanea nos dois e ERRO GRAVE.\n\n"
     "22. VALORES EM MOEDA PRE-REAL (anterior a julho/1994): qualquer onus cujo valor esteja expresso\n"
-    "   em Cruzeiros, Cruzados, NCz$, Cr$, URV ou qualquer moeda anterior ao Real NAO deve ser\n"
-    "   incluido em onus_financeiros. Registre-o APENAS em observacoes, indicando a moeda original.\n"
+    "   em Cruzeiros, Cruzados, NCz$, Cr$, URV ou qualquer moeda anterior ao Real continua sendo onus "
+    "vigente se nao houver baixa/cancelamento. Inclua-o em onus_vigentes e em onus_financeiros, preserve "
+    "a moeda original no campo moeda e escreva no texto: valor nao calculado automaticamente por estar "
+    "expresso em moeda historica. Nao converta nem some esse valor ao total.\n"
     "   Se nao houver informacao sobre a moeda mas o valor parecer incompativel com imóveis brasileiros\n"
-    "   (ex: valores acima de R$ 500.000.000 para credito rural dos anos 80-90), trate como moeda antiga.\n"
+    "   (ex: valores acima de R$ 500.000.000 para credito rural dos anos 80-90), trate como moeda antiga.\n\n"
+    "23. FORMATACAO FINAL: nunca use Markdown, negrito ou pares de asteriscos. Sempre que CPF ou CNPJ "
+    "aparecer em qualquer campo textual, mantenha o documento entre parenteses, por exemplo: Nome "
+    "da Pessoa (CPF 123.456.789-00) ou Empresa S/A (CNPJ 12.345.678/0001-90).\n"
 )
 
 
@@ -213,13 +248,15 @@ _ITEM_RE = re.compile(
 
 def _mat_capitalizar_token(p):
     core = p.strip(".,;:()")
-    suffix = p[len(core):]
+    inicio = p.find(core) if core else 0
+    prefix = p[:inicio]
+    suffix = p[inicio + len(core):]
     if not core: return p
     low = core.lower()
-    if low in MINUSC_SET: return low + suffix
-    if "/" in core: return core.upper() + suffix
-    if re.match(r"^[A-Z]{2,6}$", core): return core + suffix
-    return core.capitalize() + suffix
+    if low in MINUSC_SET: return prefix + low + suffix
+    if "/" in core: return prefix + core.upper() + suffix
+    if re.match(r"^[A-Z]{2,6}$", core): return prefix + core + suffix
+    return prefix + core.capitalize() + suffix
 
 
 def _mat_corrigir_caps(texto):
@@ -237,15 +274,38 @@ def _mat_corrigir_caps(texto):
     return "\n".join(resultado)
 
 
-def _mat_remover_cpf(texto):
-    if not texto or pd.isna(texto): return texto
-    t = str(texto)
-    t = re.sub(r"\s*\((?:CPF(?:/MF)?|CNPJ)[^)]*\)", "", t, flags=re.IGNORECASE)
-    t = re.sub(r",?\s*(?:CPF(?:/MF)?|CNPJ)\s*(?:n[o]?\s*\.?)?\s*[\d]{3}[\d.\-/]+", "", t, flags=re.IGNORECASE)
-    t = re.sub(r"\(\s*\)", "", t)
-    t = re.sub(r"  +", " ", t)
-    t = re.sub(r"\s+([,;.])", r"\1", t)
-    return t.strip()
+_DOC_ROTULADO_RE = re.compile(
+    r"\b(?P<tipo>CPF(?:/MF)?|CNPJ)\s*(?:n[º°o.]?\s*)?"
+    r"(?P<doc>(?:\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}|\d{3}\.?\d{3}\.?\d{3}-?\d{2}))",
+    flags=re.IGNORECASE,
+)
+
+
+def _mat_formatar_documento(doc: str) -> str:
+    digitos = re.sub(r"\D", "", doc or "")
+    if len(digitos) == 11:
+        return f"{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}"
+    if len(digitos) == 14:
+        return f"{digitos[:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-{digitos[12:]}"
+    return re.sub(r"\s+", "", doc or "")
+
+
+def _mat_parentetizar_documentos(texto):
+    """Mantém CPF/CNPJ visíveis e garante que cada documento esteja entre parênteses."""
+    if not texto or pd.isna(texto):
+        return texto
+    original = str(texto)
+
+    def _sub(match):
+        tipo = "CNPJ" if match.group("tipo").upper() == "CNPJ" else "CPF"
+        rotulo = f"{tipo} {_mat_formatar_documento(match.group('doc'))}"
+        antes = original[:match.start()].rstrip()
+        depois = original[match.end():].lstrip()
+        if antes.endswith("(") and depois.startswith(")"):
+            return rotulo
+        return f"({rotulo})"
+
+    return _DOC_ROTULADO_RE.sub(_sub, original)
 
 
 def _mat_normalizar_quebras(texto):
@@ -261,6 +321,8 @@ def _mat_normalizar_siglas(texto):
     t = str(texto)
     t = re.sub(r"\bS/[Aa]\b", "S/A", t)
     t = re.sub(r"\bccir\b", "CCIR", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bcpf(?:/mf)?\b", "CPF", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bcnpj\b", "CNPJ", t, flags=re.IGNORECASE)
     return t
 
 
@@ -271,21 +333,18 @@ def _fmt_brl(valor: float) -> str:
 # ── Pós-processamento ─────────────────────────────────────────────────────────
 
 def _mat_pos_processar(resultado):
-    # Campos onde CPF/CNPJ deve ser removido
-    campos_sem_cpf = ["proprietario_atual", "onus_vigentes_registrados_averbados",
-                      "observacoes", "onus_cancelados"]
-    for campo in campos_sem_cpf:
-        v = resultado.get(campo)
-        if v:
-            resultado[campo] = _mat_remover_cpf(v)
-
-    # Todos os campos de texto: caps e siglas
-    campos_texto = ["proprietario_atual", "descricao_imovel",
+    # Todos os campos de texto: sem marcadores Markdown, com documentos entre
+    # parênteses e siglas normalizadas.
+    campos_texto = ["matricula", "comarca", "proprietario_atual", "fracao_ideal",
+                    "descricao_imovel",
                     "transmissoes_averbadas_registradas",
-                    "onus_vigentes_registrados_averbados", "observacoes", "onus_cancelados"]
+                    "onus_vigentes_registrados_averbados", "observacoes", "onus_cancelados",
+                    "grau_confianca"]
     for campo in campos_texto:
         v = resultado.get(campo)
         if v:
+            v = str(v).replace("**", "")
+            v = _mat_parentetizar_documentos(v)
             v = _mat_corrigir_caps(v)
             v = _mat_normalizar_siglas(v)
             resultado[campo] = v
@@ -338,12 +397,19 @@ def _mat_calcular_valor_onus(onus_list: list, onus_vigentes_texto: str = "",
         numero_processo    = _get("numero_processo")
         numero_instrumento = _get("numero_instrumento")
         valor              = _get("valor_principal")
+        moeda              = (_get("moeda") or "BRL").strip()
         data_str           = _get("data_celebracao")
         parcela            = _get("parcela_mensal")
 
         # Ignora tipos não financeiros (indisponibilidade, premonitória, etc.)
         tipo_lower = tipo.lower()
         if any(t in tipo_lower for t in _TIPOS_NAO_FINANCEIROS):
+            continue
+
+        moeda_norm = _mat_normalizar_texto(moeda)
+        if moeda_norm not in {"brl", "real", "reais", "r$"}:
+            # O ônus continua vigente no campo textual, mas valores históricos
+            # não são convertidos nem somados automaticamente.
             continue
 
         if not valor or not data_str:
@@ -495,7 +561,48 @@ def _mat_detectar_alertas(resultado: dict, devedores_docs: set,
 
 # ── Análise de PDF ────────────────────────────────────────────────────────────
 
-def _mat_analisar_pdf(caminho_pdf: str, client) -> dict:
+def _mat_erro_troca_chave(exc: Exception) -> bool:
+    return _erro_gemini_permite_failover(exc)
+
+
+def _mat_consolidar_extracao(extracao: str, clients: list) -> dict:
+    cfg = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=MatriculaExtraida,
+        temperature=0,
+        max_output_tokens=65536,
+    )
+    prompt = (
+        PROMPT_MATRICULA
+        + "\n\nEXTRACAO FACTUAL COMPLETA DA MATRICULA:\n"
+        + extracao
+        + "\n\nAntes de responder, faça três conferencias finais: "
+        "(i) proprietário e frações refletem a última transmissão; "
+        "(ii) todo ônus está em vigentes ou cancelados; "
+        "(iii) matrícula encerrada/baixada e matrículas derivadas aparecem no primeiro campo."
+    )
+
+    ultimo_erro = None
+    for pos, client in enumerate(clients):
+        try:
+            def _call():
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL_RELATORIO,
+                    contents=[prompt],
+                    config=cfg,
+                )
+                return MatriculaExtraida.model_validate_json(response.text).model_dump()
+
+            return _retry(_call, tentativas=3, espera_base=10)
+        except Exception as exc:
+            ultimo_erro = exc
+            if not _mat_erro_troca_chave(exc) or pos == len(clients) - 1:
+                raise
+    raise ultimo_erro or RuntimeError("Nenhum cliente Gemini disponível para consolidação.")
+
+
+def _mat_analisar_pdf(caminho_pdf: str, client_extracao, clients_consolidacao: list) -> dict:
+    tmp_ascii_path = None
     try:
         caminho_pdf.encode("ascii")
         upload_path = caminho_pdf
@@ -505,53 +612,72 @@ def _mat_analisar_pdf(caminho_pdf: str, client) -> dict:
         tmp_ascii.close()
         _shutil.copy2(caminho_pdf, tmp_ascii.name)
         upload_path = tmp_ascii.name
+        tmp_ascii_path = tmp_ascii.name
 
-    arquivo = client.files.upload(file=upload_path)
-
-    # Aguarda processamento do arquivo
-    total_wait, wait_time = 0, 1
-    while total_wait < 120:
-        state_name = getattr(getattr(arquivo, "state", None), "name", "")
-        if state_name in ("ACTIVE", "FAILED"):
-            break
-        time.sleep(wait_time)
-        total_wait += wait_time
-        arquivo = client.files.get(name=arquivo.name)
-        wait_time = min(wait_time + 1, 4)
-
-    cfg = types.GenerateContentConfig(
-        response_mime_type="application/json",
-        response_schema=MatriculaExtraida,
-        temperature=0,
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
-        max_output_tokens=65536,
-    )
-
-    def _call():
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[PROMPT_MATRICULA, arquivo],
-            config=cfg,
-        )
-        return MatriculaExtraida.model_validate_json(response.text).model_dump()
-
-    resultado = _retry(_call, tentativas=3, espera_base=10)
-
+    arquivo = None
     try:
-        client.files.delete(name=arquivo.name)
-    except Exception:
-        pass
+        arquivo = client_extracao.files.upload(file=upload_path)
 
-    return _mat_pos_processar(resultado)
+        # Aguarda processamento do arquivo
+        total_wait, wait_time = 0, 1
+        while total_wait < 120:
+            state_name = getattr(getattr(arquivo, "state", None), "name", "")
+            if state_name in ("ACTIVE", "FAILED"):
+                break
+            time.sleep(wait_time)
+            total_wait += wait_time
+            arquivo = client_extracao.files.get(name=arquivo.name)
+            wait_time = min(wait_time + 1, 4)
+        if getattr(getattr(arquivo, "state", None), "name", "") == "FAILED":
+            raise RuntimeError("O Gemini não conseguiu processar o PDF da matrícula.")
+
+        cfg_extracao = types.GenerateContentConfig(
+            temperature=0,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            max_output_tokens=65536,
+        )
+
+        def _extrair():
+            response = client_extracao.models.generate_content(
+                model=GEMINI_MODEL_EXTRACAO,
+                contents=[PROMPT_EXTRACAO_MATRICULA, arquivo],
+                config=cfg_extracao,
+            )
+            if not response.text or not response.text.strip():
+                raise RuntimeError("O modelo de extração devolveu conteúdo vazio.")
+            return response.text
+
+        extracao = _retry(_extrair, tentativas=3, espera_base=10)
+        resultado = _mat_consolidar_extracao(extracao, clients_consolidacao)
+        return _mat_pos_processar(resultado)
+    finally:
+        if arquivo is not None:
+            try:
+                client_extracao.files.delete(name=arquivo.name)
+            except Exception:
+                pass
+        if tmp_ascii_path:
+            try:
+                os.remove(tmp_ascii_path)
+            except Exception:
+                pass
 
 
 def _mat_worker(args) -> tuple:
-    idx, pdf_path, client = args
-    try:
-        linha = _mat_analisar_pdf(pdf_path, client)
-        return idx, linha, None
-    except Exception as e:
-        return idx, None, str(e)
+    idx, pdf_path, clients = args
+    ultimo_erro = None
+    for tentativa in range(len(clients)):
+        client_idx = (idx + tentativa) % len(clients)
+        client_extracao = clients[client_idx]
+        clients_consolidacao = clients[client_idx:] + clients[:client_idx]
+        try:
+            linha = _mat_analisar_pdf(pdf_path, client_extracao, clients_consolidacao)
+            return idx, linha, None
+        except Exception as exc:
+            ultimo_erro = exc
+            if not _mat_erro_troca_chave(exc) or tentativa == len(clients) - 1:
+                break
+    return idx, None, str(ultimo_erro)
 
 
 # ── Helpers de nome ───────────────────────────────────────────────────────────
@@ -563,18 +689,12 @@ def _mat_limpar_nome(nome):
     return nome
 
 
-def _mat_formatar_nome(texto):
-    if not texto: return texto
-    minusc = {"de", "da", "do", "das", "dos", "e"}
-    return " ".join(p if p in minusc else p.capitalize()
-                    for p in str(texto).strip().lower().split())
-
-
 # ── Geração do Excel ──────────────────────────────────────────────────────────
 
 COLUNAS_RENAME_MAT = {
     "matricula": "Matrícula", "comarca": "Comarca",
     "proprietario_atual": "Proprietário Atual", "descricao_imovel": "Descrição do Imóvel",
+    "fracao_ideal": "Fração Ideal",
     "transmissoes_averbadas_registradas": "Transmissões",
     "onus_vigentes_registrados_averbados": "Ônus Vigentes",
     "principais_garantias_vigentes": "Principais Garantias Vigentes",
@@ -722,7 +842,7 @@ def mat_gerar_excel(arquivos,
     usar_alertas = bool(devedores_docs or relacionados_docs or data_ajuiz)
 
     try:
-        client1, client2 = _mat_get_clients()
+        clients = _mat_get_clients()
     except Exception as e:
         yield f"Erro de configuração: {e}", "", None
         return
@@ -742,7 +862,11 @@ def mat_gerar_excel(arquivos,
         pdfs.append(destino)
 
     n = len(pdfs)
-    log = [f"Analisando {n} matricula(s) em paralelo (4 workers)..."]
+    log = [
+        f"Analisando {n} matricula(s) em paralelo (4 workers)...",
+        f"   Leitura: {GEMINI_MODEL_EXTRACAO} | Consolidacao: {GEMINI_MODEL_RELATORIO} | "
+        f"{len(clients)} chave(s) com failover",
+    ]
     if usar_alertas:
         partes = []
         if data_ajuiz:
@@ -757,8 +881,9 @@ def mat_gerar_excel(arquivos,
     resultados_dict: dict = {}
     erros_dict: dict     = {}
 
-    # Prepara argumentos alternando entre os dois clientes
-    args_list = [(i, pdf, client1 if i % 2 == 0 else client2) for i, pdf in enumerate(pdfs)]
+    # Cada worker começa por uma chave diferente e pode alternar para as demais
+    # se houver falha de autenticação, cota ou disponibilidade do modelo.
+    args_list = [(i, pdf, clients) for i, pdf in enumerate(pdfs)]
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
         futures = {ex.submit(_mat_worker, args): args[0] for args in args_list}
@@ -804,10 +929,9 @@ def mat_gerar_excel(arquivos,
         return
 
     df = pd.DataFrame(resultados_finais)
-    if "proprietario_atual" in df.columns:
-        df["proprietario_atual"] = df["proprietario_atual"].apply(_mat_formatar_nome)
     df = df.rename(columns=COLUNAS_RENAME_MAT)
-    df["Fração Ideal"] = ""
+    if "Fração Ideal" not in df.columns:
+        df["Fração Ideal"] = ""
     df["Valor da Avaliação Definitiva (VM)"] = ""
     df["Valor da Avaliação Definitiva (VP)"] = ""
     df["Valor Total do Ônus"] = df.pop("valor_total_onus_calculado") if "valor_total_onus_calculado" in df.columns else ""
@@ -836,10 +960,17 @@ def mat_gerar_excel(arquivos,
 
 def mat_responder(pergunta: str, log_texto: str):
     try:
-        k = os.getenv("GEMINI_API_KEY_1") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-        client = genai.Client(api_key=k, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
-        return _responder_pergunta_generica(
-            pergunta, log_texto, client, "gemini-2.5-flash"
-        )
+        clients = _mat_get_clients()
+        ultimo_erro = None
+        for pos, client in enumerate(clients):
+            try:
+                return _responder_pergunta_generica(
+                    pergunta, log_texto, client, GEMINI_MODEL_QA
+                )
+            except Exception as exc:
+                ultimo_erro = exc
+                if not _mat_erro_troca_chave(exc) or pos == len(clients) - 1:
+                    raise
+        raise ultimo_erro or RuntimeError("Nenhum cliente Gemini disponível.")
     except Exception as e:
         return f"Erro: {e}"
