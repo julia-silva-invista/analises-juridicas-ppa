@@ -25,7 +25,7 @@ from utils import (
     _SEMAFORO_PROCESSAMENTO_PESADO,
     GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO, GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
 )
-from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos
+from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos, _montar_fonte_rj
 import rj_cache
 
 CHUNK_MAX_PAGES_RJ    = 400
@@ -1149,8 +1149,9 @@ def rj_gerar_checklist(relatorio: str, texto_bruto: str = ""):
 
 
 def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = "", *campos):
-    # Prioriza o texto OCR completo (RJ + execuções); o relatório resumido omite campos
-    fonte = texto_bruto.strip() if texto_bruto and texto_bruto.strip() else (relatorio or "").strip()
+    # Mesma regra do dossiê e do Checklist RJ: relatório consolidado é a fonte
+    # principal; o texto bruto só acrescenta fatos que ainda não constem nele.
+    fonte = _montar_fonte_rj(relatorio, texto_bruto)
     if not fonte:
         return gr.update(value=None, visible=False), "Gere uma análise primeiro."
     # campos = [nome_1..nome_N, doc_1..doc_N] — pareia e ignora credores sem nome

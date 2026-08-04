@@ -9,6 +9,7 @@ ou:
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
 import sys
@@ -50,6 +51,7 @@ if "utils" not in sys.modules:
     sys.modules["utils"] = utils_mod
 
 import checklist_rj as cr  # noqa: E402
+import dossie_ppa as dp  # noqa: E402
 from docx import Document  # noqa: E402
 
 
@@ -523,6 +525,97 @@ def testar_montar_fonte_rj():
     return falhas
 
 
+def testar_completude_dossie():
+    """Relatório deve ser fonte principal e poder ampliar um campo não vazio."""
+    falhas = []
+    curto = "Não especificado expressamente no contrato original (ID 47118237 | fls. 34/35)"
+    completo = (
+        "Não especificado expressamente no contrato original (posteriormente definido como INPC "
+        "mediante acórdão do TJMT) (ID 47118237 | fls. 34/35; ID 47119780 | fls. 314, 326)"
+    )
+    relatorio = "Correção monetária: " + completo
+    bruto = "Contrato original: " + curto
+
+    material = dp._montar_material_prioritario(relatorio, bruto)
+    if material.index(relatorio) > material.index(bruto):
+        falhas.append("material do dossiê não colocou o relatório antes do texto bruto")
+    if "FONTE PRINCIPAL; PRESERVAR TEXTO COMPLETO" not in material:
+        falhas.append("material do dossiê não identifica o relatório como fonte principal")
+
+    base = {"creditos": [{"ind_cm": curto}]}
+    candidato = {"creditos": [{"ind_cm": completo}]}
+    client = FakeClient(json.dumps(candidato, ensure_ascii=False))
+    mesclado = dp._completar_com_relatorio(base, relatorio, client, "modelo-fake")
+    if mesclado.get("creditos", [{}])[0].get("ind_cm") != completo:
+        falhas.append("segunda passada não substituiu a versão curta pela completa")
+
+    preservado = dp._mesclar_mais_completo(candidato, base)
+    if preservado.get("creditos", [{}])[0].get("ind_cm") != completo:
+        falhas.append("mesclagem permitiu que uma versão curta apagasse a completa")
+
+    prompt = client.ultima_chamada_kwargs["contents"][0]["parts"][0]["text"]
+    if "sem resumir ou parafrasear" not in prompt:
+        falhas.append("prompt de completude não proíbe resumir/parafrasear")
+    return falhas
+
+
+def _paragrafos_doc(doc):
+    yield from doc.paragraphs
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                yield from cell.paragraphs
+
+
+def _falhas_italico_doc(doc, contexto):
+    falhas = []
+    refs_encontradas = 0
+    for paragraph in _paragrafos_doc(doc):
+        for run in paragraph.runs:
+            if dp._RE_MARCADOR_REFERENCIA.search(run.text or ""):
+                refs_encontradas += 1
+                if run.italic is not True:
+                    falhas.append(f"{contexto}: referência sem itálico: {run.text!r}")
+    if not refs_encontradas:
+        falhas.append(f"{contexto}: nenhuma referência encontrada para validar")
+    return falhas
+
+
+def testar_referencias_em_italico():
+    falhas = []
+    texto = (
+        "Não especificado expressamente no contrato original (posteriormente definido como INPC) "
+        "(ID 188753786 | fl. 1)"
+    )
+
+    doc = Document()
+    cell_write = doc.add_table(rows=1, cols=1).cell(0, 0)
+    dp._write(cell_write, texto)
+    falhas.extend(_falhas_italico_doc(doc, "helper compartilhado dos checklists"))
+    if any(run.italic is True for run in cell_write.paragraphs[0].runs if "posteriormente" in run.text):
+        falhas.append("parêntese explicativo foi colocado em itálico como se fosse referência")
+
+    doc_template = Document()
+    cell_template = doc_template.add_table(rows=1, cols=1).cell(0, 0)
+    dp._substituir_texto_celula(cell_template, texto)
+    falhas.extend(_falhas_italico_doc(doc_template, "helper do template do dossiê"))
+
+    dados_rj = copy.deepcopy(fixture_formato_citacao_novo())
+    caminho_rj = cr._build_checklist_rj(dados_rj)
+    falhas.extend(_falhas_italico_doc(Document(caminho_rj), "Checklist RJ"))
+
+    dados_credito = {
+        "rj_numero": "0000000-00.0000.0.00.0000",
+        "credor": "Banco Teste",
+        "lastros": [{"cedula": f"CCB nº 1 {texto}"}],
+        "garantias": [],
+        "execucoes": [],
+    }
+    caminho_credito = cr._build_checklist_creditos(dados_credito)
+    falhas.extend(_falhas_italico_doc(Document(caminho_credito), "Checklist de Créditos"))
+    return falhas
+
+
 def testar_extrair_fonte_gigante():
     """Processo gigante: fonte >900k chars — confirma que o truncamento
     (checklist_rj.py: fonte[:900_000]) funciona e não estoura memória/exceção."""
@@ -571,6 +664,14 @@ def rodar_bateria():
     falhas_fonte = testar_montar_fonte_rj()
     resultados.append(("_montar_fonte_rj (relatório > texto bruto)", 1, len(falhas_fonte)))
     falhas_totais.extend(f"[_montar_fonte_rj] {f}" for f in falhas_fonte)
+
+    falhas_completude = testar_completude_dossie()
+    resultados.append(("completude relatório > dossiê", 4, len(falhas_completude)))
+    falhas_totais.extend(f"[completude] {f}" for f in falhas_completude)
+
+    falhas_italico = testar_referencias_em_italico()
+    resultados.append(("referências em itálico nos DOCX", 4, len(falhas_italico)))
+    falhas_totais.extend(f"[itálico] {f}" for f in falhas_italico)
 
     falhas_agc = testar_agc_fallback()
     resultados.append(("AGC fallback (Sem datas designadas)", 4, len(falhas_agc)))

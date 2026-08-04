@@ -83,6 +83,74 @@ a fase concreta, ex.: "Discussão de Embargos à Execução" (só se os embargos
 transitado em julgado), "Em fase de busca de bens", "Leilão agendado". Se um recurso já
 transitou em julgado, informe isso explicitamente no status.
 """
+
+REGRA_COMPLETUDE_PADRAO = """\
+═══ REGRA — COMPLETUDE ENTRE RELATÓRIO, DOSSIÊ E CHECKLISTS ═══
+Quando houver RELATÓRIO CONSOLIDADO, ele é a fonte principal para todo fato que já esteja
+descrito nele. Ao transportar uma informação do relatório para um campo do JSON:
+- reproduza o conteúdo completo, sem resumir, encurtar ou parafrasear;
+- preserve ressalvas, fatos posteriores, decisões, datas, índices, taxas e TODAS as referências
+  relacionadas àquela informação;
+- se o relatório registrar uma situação original e uma alteração posterior, mantenha ambas no
+  mesmo campo, na mesma ordem lógica;
+- use o texto bruto apenas para acrescentar fatos ausentes do relatório. Nunca substitua uma
+  formulação completa do relatório por uma versão menor encontrada no texto bruto.
+═══ FIM DA REGRA DE COMPLETUDE ═══
+"""
+
+_RE_MARCADOR_REFERENCIA = re.compile(
+    r"(?:\bID\s+(?:n[.º°o]\s*)?\d"
+    r"|\bMov(?:imento)?\.?\s+(?:n[.º°o]\s*)?\d"
+    r"|\bEvento\s+(?:n[.º°o]\s*)?\d"
+    r"|\bfls?\.?\s+(?:\d|s\.?\s*/\s*n\.?)"
+    r"|\bp(?:\.|\u00e1g(?:ina)?\.?)\s*\d"
+    r"|refer[êé]ncia\s+não\s+localizada)",
+    re.IGNORECASE,
+)
+_RE_GRUPO_PARENTESES = re.compile(r"\(([^()\n]+)\)")
+_RE_REFERENCIA_PURA = re.compile(
+    r"^\s*(?:"
+    r"(?:ID\s+(?:n[.º°o]\s*)?\d[\d./-]*)"
+    r"|(?:Mov(?:imento)?\.?\s+(?:n[.º°o]\s*)?\d[\d./-]*)"
+    r"|(?:Evento\s+(?:n[.º°o]\s*)?\d[\d./-]*)"
+    r"|(?:fls?\.?\s+(?:\d[\d./-]*|s\.?\s*/\s*n\.?))"
+    r"|(?:p(?:\.|\u00e1g(?:ina)?\.?)\s*\d[\d./-]*)"
+    r")"
+    r"(?:\s*(?:\||;|,)\s*(?:"
+    r"ID\s+(?:n[.º°o]\s*)?\d[\d./-]*"
+    r"|Mov(?:imento)?\.?\s+(?:n[.º°o]\s*)?\d[\d./-]*"
+    r"|Evento\s+(?:n[.º°o]\s*)?\d[\d./-]*"
+    r"|fls?\.?\s+(?:\d[\d./-]*|s\.?\s*/\s*n\.?)"
+    r"|p(?:\.|\u00e1g(?:ina)?\.?)\s*\d[\d./-]*"
+    r"))*"
+    r"(?:\s+do\s+pdf\s+.+)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _segmentar_referencias(texto: str):
+    """Separa referências para que só o conteúdo entre parênteses fique em itálico."""
+    valor = str(texto if texto is not None else "")
+    if _RE_REFERENCIA_PURA.fullmatch(valor):
+        return [(valor, True)]
+
+    segmentos = []
+    inicio = 0
+    for match in _RE_GRUPO_PARENTESES.finditer(valor):
+        interior = match.group(1)
+        if not _RE_MARCADOR_REFERENCIA.search(interior):
+            continue
+        if match.start() > inicio:
+            segmentos.append((valor[inicio:match.start()], False))
+        segmentos.extend([
+            ("(", False),
+            (interior, True),
+            (")", False),
+        ])
+        inicio = match.end()
+    if inicio < len(valor):
+        segmentos.append((valor[inicio:], False))
+    return segmentos or [(valor, False)]
 _PARTICULAS_NOME = {
     "a", "as", "à", "às", "ao", "aos", "com", "da", "das", "de", "do",
     "dos", "e", "em", "na", "nas", "no", "nos", "para", "pela", "pelas",
@@ -300,6 +368,22 @@ def _apply_font(run, bold, size, color, italic):
         pass
 
 
+def _adicionar_runs_formatados(paragraph, texto, aplicar_formato):
+    """Adiciona texto preservando quebras e isolando referências em runs itálicos."""
+    linhas = str(texto if texto is not None else "").split("\n")
+    for indice, linha in enumerate(linhas):
+        normalizada = _normalizar_caixa_alta(linha)
+        for trecho, eh_referencia in _segmentar_referencias(normalizada):
+            if not trecho:
+                continue
+            run = paragraph.add_run(trecho)
+            aplicar_formato(run, eh_referencia)
+        if indice < len(linhas) - 1:
+            run_quebra = paragraph.add_run()
+            aplicar_formato(run_quebra, False)
+            run_quebra.add_break()
+
+
 def _write(cell, text, bold=False, size=9, color=_TXT, italic=False, align=None, valign=True):
     cell.text = ""
     if valign:
@@ -309,12 +393,11 @@ def _write(cell, text, bold=False, size=9, color=_TXT, italic=False, align=None,
     p.paragraph_format.space_after = Pt(0)
     if align is not None:
         p.alignment = align
-    parts = str(text if text is not None else "").split("\n")
-    for j, line in enumerate(parts):
-        r = p.add_run(_normalizar_caixa_alta(line))
-        _apply_font(r, bold, size, color, italic)
-        if j < len(parts) - 1:
-            r.add_break()
+    _adicionar_runs_formatados(
+        p,
+        text,
+        lambda run, eh_ref: _apply_font(run, bold, size, color, italic or eh_ref),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -380,6 +463,7 @@ def _kv_table(doc, header, rows, w_label=5.9, w_value=11.0):
         _set_bg(cv, _BRANCO); _set_borders(cv); _cell_pad(cv)
         _write(cv, value, color=_TXT, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         _widths(r, [w_label, w_value])
+        _nao_dividir_linha(r)
     return t
 
 
@@ -397,6 +481,7 @@ def _kv_label_table(doc, rows, w_label=5.9, w_value=11.0):
         _set_bg(cv, _BRANCO); _set_borders(cv); _cell_pad(cv)
         _write(cv, value, color=_TXT, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         _widths(r, [w_label, w_value])
+        _nao_dividir_linha(r)
     return t
 
 
@@ -440,8 +525,11 @@ def _para(doc, text, bold=False, size=9.5, color=_TXT, italic=False,
     p.paragraph_format.space_after = Pt(after)
     if align is not None:
         p.alignment = align
-    r = p.add_run(_normalizar_caixa_alta(text))
-    _apply_font(r, bold, size, color, italic)
+    _adicionar_runs_formatados(
+        p,
+        text,
+        lambda run, eh_ref: _apply_font(run, bold, size, color, italic or eh_ref),
+    )
     return p
 
 
@@ -496,7 +584,7 @@ def _spacer(doc, pts=4):
 # Extração de dados via Gemini
 # ══════════════════════════════════════════════════════════════════════════
 
-_PROMPT_DOSSIE = REGRA_CITACAO_PADRAO + """
+_PROMPT_DOSSIE = REGRA_CITACAO_PADRAO + REGRA_COMPLETUDE_PADRAO + """
 Com base no material jurídico abaixo (extração completa do(s) processo(s) e, quando houver, relatório
 consolidado de apoio), extraia os dados para preencher um dossiê no formato JSON.
 Extraia APENAS o que está explicitamente no material. Use string vazia "" para o que não constar.
@@ -632,12 +720,30 @@ MATERIAL:
 """
 
 
+def _montar_material_prioritario(
+    relatorio: str,
+    texto_bruto: str,
+    limite_relatorio: int = 200_000,
+    limite_bruto: int = 700_000,
+) -> str:
+    """Relatório primeiro; extração bruta apenas complementa fatos ausentes."""
+    rel = (relatorio or "").strip()[:limite_relatorio]
+    bruto = (texto_bruto or "").strip()[:limite_bruto]
+    partes = []
+    if rel:
+        partes.append(
+            "═══ RELATÓRIO CONSOLIDADO (FONTE PRINCIPAL; PRESERVAR TEXTO COMPLETO) ═══\n"
+            + rel
+        )
+    if bruto:
+        partes.append(
+            "═══ TEXTO BRUTO EXTRAÍDO (FONTE COMPLEMENTAR) ═══\n" + bruto
+        )
+    return "\n\n".join(partes)
+
+
 def _extrair_dados(texto_completo: str, relatorio: str, client, model: str) -> dict:
-    primario = (texto_completo or "").strip() or (relatorio or "").strip()
-    prompt = _PROMPT_DOSSIE + primario[:900_000]
-    rel = (relatorio or "").strip()
-    if rel and rel != primario:
-        prompt += "\n\n═══ RELATÓRIO CONSOLIDADO (resumo estruturado de apoio) ═══\n" + rel[:40_000]
+    prompt = _PROMPT_DOSSIE + _montar_material_prioritario(relatorio, texto_completo)
     try:
         config = types.GenerateContentConfig(response_mime_type="application/json")
 
@@ -656,11 +762,15 @@ def _extrair_dados(texto_completo: str, relatorio: str, client, model: str) -> d
         return {}
 
 
-_PROMPT_COMPLETAR = """\
+_PROMPT_COMPLETAR = REGRA_COMPLETUDE_PADRAO + """\
 Abaixo está um dossiê em JSON (parcialmente preenchido) e o RELATÓRIO consolidado do caso.
-Confira, campo a campo, quais estão VAZIOS ("") e preencha-os com informação que CONSTE no RELATÓRIO.
+Compare TODOS os campos com o relatório e devolva a versão mais completa de cada informação.
 Regras:
-- NÃO altere campos que já têm valor. NÃO invente — só preencha o que constar no relatório.
+- Se um campo estiver vazio, preencha-o com o que constar no relatório.
+- Se um campo já tiver valor, mas o relatório trouxer uma versão MAIS COMPLETA, substitua a versão
+  curta pela formulação completa do relatório, sem resumir ou parafrasear.
+- Preserve todas as ressalvas, alterações posteriores e referências. NÃO apague informação existente.
+- NÃO invente — use somente o que constar no relatório ou no JSON atual.
 - Mantenha EXATAMENTE a mesma estrutura, chaves e lista de créditos do JSON atual.
 - Inclua a referência da fonte (fls./Mov./ID/Evento) quando o relatório trouxer.
 - Se um andamento/embargo/recurso constar no relatório e faltar no JSON, ACRESCENTE à lista.
@@ -674,8 +784,53 @@ RELATÓRIO:
 """
 
 
+def _contar_referencias_texto(valor: str) -> int:
+    return len(_RE_MARCADOR_REFERENCIA.findall(str(valor or "")))
+
+
+def _mesclar_mais_completo(atual, candidato):
+    """Aceita ampliações da segunda passada sem permitir que ela encurte dados."""
+    if isinstance(atual, dict):
+        novo = candidato if isinstance(candidato, dict) else {}
+        return {
+            chave: _mesclar_mais_completo(valor, novo.get(chave))
+            for chave, valor in atual.items()
+        } | {
+            chave: valor for chave, valor in novo.items() if chave not in atual
+        }
+    if isinstance(atual, list):
+        novo = candidato if isinstance(candidato, list) else []
+        return [
+            _mesclar_mais_completo(
+                atual[indice] if indice < len(atual) else None,
+                novo[indice] if indice < len(novo) else None,
+            )
+            for indice in range(max(len(atual), len(novo)))
+        ]
+    if isinstance(atual, str):
+        base = atual.strip()
+        opcao = candidato.strip() if isinstance(candidato, str) else ""
+        if not opcao:
+            return atual
+        if not base:
+            return candidato
+        base_cf, opcao_cf = base.casefold(), opcao.casefold()
+        if base_cf == opcao_cf or opcao_cf in base_cf:
+            return atual
+        if base_cf in opcao_cf:
+            return candidato
+        refs_base = _contar_referencias_texto(base)
+        refs_opcao = _contar_referencias_texto(opcao)
+        if refs_opcao > refs_base or (refs_opcao == refs_base and len(opcao) > len(base)):
+            return candidato
+        return atual
+    if atual in (None, "") and candidato not in (None, ""):
+        return candidato
+    return atual
+
+
 def _completar_com_relatorio(dados: dict, relatorio: str, client, model: str) -> dict:
-    """Passada final: preenche campos vazios do dossiê com o que constar no relatório."""
+    """Passada final: amplia campos curtos com a versão completa do relatório."""
     rel = (relatorio or "").strip()
     if not dados or not dados.get("creditos") or not rel:
         return dados
@@ -697,9 +852,9 @@ def _completar_com_relatorio(dados: dict, relatorio: str, client, model: str) ->
         raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.IGNORECASE)
         raw = re.sub(r"\n?```$", "", raw.strip())
         completo = json.loads(raw)
-        # Só aceita se preservar (ou ampliar) a lista de créditos — evita perder dados
+        # A mesclagem recursiva impede que a segunda passada apague ou encurte dados.
         if isinstance(completo, dict) and len(completo.get("creditos") or []) >= len(dados.get("creditos") or []):
-            return completo
+            return _mesclar_mais_completo(dados, completo)
         return dados
     except Exception:
         return dados
@@ -1122,11 +1277,16 @@ def _substituir_texto_paragrafo(paragraph, texto, justificar=False):
         rpr = deepcopy(paragraph.runs[0]._r.rPr)
     for run in list(paragraph.runs):
         paragraph._p.remove(run._r)
-    run = paragraph.add_run(valor)
-    if rpr is not None:
-        if run._r.rPr is not None:
-            run._r.remove(run._r.rPr)
-        run._r.insert(0, rpr)
+
+    def _aplicar_template(run, eh_referencia):
+        if rpr is not None:
+            if run._r.rPr is not None:
+                run._r.remove(run._r.rPr)
+            run._r.insert(0, deepcopy(rpr))
+        if eh_referencia:
+            run.italic = True
+
+    _adicionar_runs_formatados(paragraph, valor, _aplicar_template)
     paragraph.paragraph_format.keep_together = True
     if justificar or len(valor.strip()) >= 80:
         paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY

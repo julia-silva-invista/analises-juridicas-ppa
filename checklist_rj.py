@@ -5,11 +5,9 @@ Dois documentos:
   1. Checklist de Recuperação Judicial       -> gerar_checklist_rj
   2. Análise de Créditos em Recuperação Judicial -> gerar_checklist_creditos
 
-O Checklist de Recuperação Judicial usa o RELATÓRIO já consolidado (revisado,
-deduplicado, com referências processuais corretas) como fonte principal, e o
-texto bruto extraído do processo só como complemento do que o relatório não
-cobrir. A Análise de Créditos ainda usa só o texto bruto/relatório resumido
-(fonte única) — fica para uma próxima rodada.
+Os dois documentos usam o RELATÓRIO já consolidado (revisado, deduplicado e
+com referências processuais corretas) como fonte principal, e o texto bruto
+extraído do processo apenas como complemento do que o relatório não cobrir.
 """
 
 import json
@@ -33,6 +31,7 @@ from dossie_ppa import (
     _write, _apply_font, _orange_header, _grid_table,
     _kv_table, _kv_label_table, _para, _sec_title, _sub_orange, _sub_gray,
     _spacer, _montar_cabecalho_rodape, REGRA_CITACAO_PADRAO,
+    REGRA_COMPLETUDE_PADRAO, _montar_material_prioritario,
 )
 
 
@@ -180,7 +179,7 @@ _DOCS_ITEM6 = [
     ("atas_agc",              "Atas, laudo de credenciamento e de votação da AGC",  ["Anexado", "Não existente"]),
 ]
 
-_PROMPT_RJ = REGRA_CITACAO_PADRAO + """
+_PROMPT_RJ = REGRA_CITACAO_PADRAO + REGRA_COMPLETUDE_PADRAO + """
 Você vai preencher o Checklist de Recuperação Judicial (RJ) no formato JSON abaixo, a
 partir de duas fontes de texto que serão fornecidas depois deste prompt. As regras de
 referência/siglas/status acima valem para todo campo abaixo, com os complementos a seguir.
@@ -273,12 +272,12 @@ def _montar_fonte_rj(relatorio: str, texto_bruto: str) -> str:
     (fonte principal, já revisado e com referências corretas) e o texto bruto
     extraído do processo (fonte complementar, só para o que o relatório não
     cobrir)."""
-    relatorio = (relatorio or "").strip()[:500_000]
-    texto_bruto = (texto_bruto or "").strip()[:400_000]
-    partes = [relatorio or "(relatório não disponível)"]
-    if texto_bruto:
-        partes.append("\n\n=== TEXTO BRUTO EXTRAÍDO (fonte complementar) ===\n" + texto_bruto)
-    return "\n".join(partes)
+    return _montar_material_prioritario(
+        relatorio,
+        texto_bruto,
+        limite_relatorio=500_000,
+        limite_bruto=400_000,
+    )
 
 
 def _build_checklist_rj(dados: dict) -> str:
@@ -394,7 +393,7 @@ def gerar_checklist_rj(relatorio: str, texto_bruto: str, client, model: str) -> 
 # 2. ANÁLISE DE CRÉDITOS EM RECUPERAÇÃO JUDICIAL
 # ══════════════════════════════════════════════════════════════════════════
 
-_PROMPT_CRED = REGRA_CITACAO_PADRAO + """
+_PROMPT_CRED = REGRA_CITACAO_PADRAO + REGRA_COMPLETUDE_PADRAO + """
 Você está analisando o texto COMPLETO extraído de um processo de Recuperação Judicial e das
 execuções relacionadas a um crédito. Extraia os dados do CRÉDITO no formato JSON abaixo.
 Analise TODO o texto (não só um resumo) para preencher cédula, emitente, avalista, garantias, etc.
