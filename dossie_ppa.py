@@ -40,13 +40,49 @@ _TEMPLATE_PATH = Path(__file__).parent / "assets" / "Parecer_Invista_PPA_v2_Atua
 # texto vier integralmente em caixa alta.
 _SIGLAS_PRESERVADAS = {
     "AC", "AL", "AM", "AP", "AR", "BA", "BACENJUD", "CAC", "CC", "CCB",
-    "CE", "CNAE", "CNJ", "CNPJ", "CPC", "CPF", "CRI", "CTN", "DF", "ES",
+    "CE", "CNAE", "CNJ", "CNPJ", "CPC", "CPF", "CPR", "CPRF", "CRI", "CTN", "DF", "ES",
     "GO", "ID", "IDPJ", "INFOJUD", "INPC", "IPCA", "MA", "MG", "MS", "MT",
     "OAB", "OJ", "PA", "PB", "PE", "PI", "PPA", "PR", "RENAJUD", "RG", "RJ",
     "RN", "RO", "RR", "RS", "SA", "SAT", "SC", "SE", "SERASAJUD",
     "SISBAJUD", "SNIPER", "SOP", "SP", "STF", "STJ", "TJSP", "TO", "TRF",
     "TST", "UF", "VM", "VP",
 }
+
+# Regra de citação compartilhada entre Checklist RJ, Checklist de Créditos e Dossiê PPA
+# (checklist_rj.py importa esta constante — mantém as 3 fontes de extração JSON com o
+# mesmo formato de referência, revisado para incluir ID/Mov./Evento/fls. JUNTO com a
+# página, e indicar de qual PDF quando mais de um foi analisado).
+REGRA_CITACAO_PADRAO = """\
+═══ REGRA — REFERÊNCIA PROCESSUAL (identificador + página, sempre juntos) ═══
+Toda referência deve trazer DOIS elementos juntos, separados por " | ":
+  1. O identificador de movimentação do sistema do tribunal daquele processo — "ID <nº>"
+     (Projudi/outro), "Mov. <nº>" (PJe), "Evento <nº>" (Eproc) ou "fls. <nº>" (eSAJ/físico).
+  2. O número da folha onde a informação aparece, no formato "fl. <nº>".
+Formato-padrão: "(ID 188753786 | fl. 135)".
+Se MAIS DE 1 PDF foi analisado nesta análise, acrescente ao final de onde veio, preferindo
+o número do processo daquele PDF quando identificável no próprio texto, ou o nome do arquivo
+como alternativa: "(ID 188753786 | fl. 135 do pdf 0001259-66.1996.8.11.0041)". Com um único
+PDF analisado, NUNCA acrescente "do pdf ..." — é informação redundante e polui a leitura.
+NUNCA cite "texto bruto", "PARTE i/N" ou qualquer marcador técnico de divisão de arquivo como
+se fosse referência processual — são só limites internos de divisão, sem significado jurídico.
+Antes de responder, confira mentalmente se o identificador e a página citados são exatamente
+os que aparecem no trecho de onde a informação foi extraída — referências erradas (ID ou
+página incorretos) já causaram problemas antes; na dúvida, prefira omitir a referência a
+citar uma incorreta.
+Campos que NUNCA levam referência (só o valor puro, sem parênteses): número do processo,
+vara, nome do credor, nome do exequente, nome do executado.
+═══ REGRA — SIGLAS DE INSTRUMENTO EM MAIÚSCULA ═══
+Sempre que citar um instrumento de crédito por sigla (CCB, CRI, CPR, CPRF, CCI, NCE, CDCA,
+LCA ou similar), escreva a sigla inteira em MAIÚSCULA, mesmo que o restante da frase esteja
+em title case/minúsculas.
+═══ REGRA — STATUS PROCESSUAL LEGÍVEL (nunca "movimento" cru) ═══
+Campos de status/situação processual NUNCA devem reproduzir o texto literal de um andamento
+("movimento", "certidão", etc.) — escreva uma descrição curta e legível do estado real:
+"Suspenso" (sem caixa alta) quando o processo/recurso estiver de fato suspenso; senão, descreva
+a fase concreta, ex.: "Discussão de Embargos à Execução" (só se os embargos ainda não tiverem
+transitado em julgado), "Em fase de busca de bens", "Leilão agendado". Se um recurso já
+transitou em julgado, informe isso explicitamente no status.
+"""
 _PARTICULAS_NOME = {
     "a", "as", "à", "às", "ao", "aos", "com", "da", "das", "de", "do",
     "dos", "e", "em", "na", "nas", "no", "nos", "para", "pela", "pelas",
@@ -460,17 +496,12 @@ def _spacer(doc, pts=4):
 # Extração de dados via Gemini
 # ══════════════════════════════════════════════════════════════════════════
 
-_PROMPT_DOSSIE = """\
+_PROMPT_DOSSIE = REGRA_CITACAO_PADRAO + """
 Com base no material jurídico abaixo (extração completa do(s) processo(s) e, quando houver, relatório
 consolidado de apoio), extraia os dados para preencher um dossiê no formato JSON.
 Extraia APENAS o que está explicitamente no material. Use string vazia "" para o que não constar.
 NÃO invente números, nomes ou datas. Responda SOMENTE com o JSON, sem texto adicional.
-
-═══ REGRA 1 — REFERÊNCIA OBRIGATÓRIA DA FONTE ═══
-Para CADA informação preenchida, inclua ao final, entre parênteses, a referência da fonte no processo —
-use o parâmetro que o tribunal daquela execução usa (fls., Mov., Evento, ID ou página).
-Ex.: "R$ 12.450.000,00 (fls. 45)", "IPCA (cláusula 4ª — fls. 12)", "Penhora deferida (Mov. 120)".
-Se a referência realmente não constar, deixe o valor sem os parênteses (não invente a referência).
+As regras de referência/siglas/status acima (antes deste parágrafo) valem para TODOS os campos abaixo.
 
 ═══ REGRA 2 — CAMPOS QUE DEVEM SER PREENCHIDOS ═══
 - Índices de Correção do Contrato (ind_*): busque no título executivo (CCB/contrato/duplicata) e na
@@ -1509,7 +1540,29 @@ def _compactar_celula(cell, tamanho, centralizar=False):
             run.font.size = Pt(tamanho)
 
 
-def _preencher_ativos_detalhados(table, ativos):
+def _adicionar_coluna(table, header_texto: str):
+    """Insere uma coluna nova ao final da tabela via XML — python-docx não tem API de alto
+    nível pra isso. Clona o último <w:gridCol> e a última <w:tc> de cada linha (cabeçalho,
+    dados, total), zerando o texto da célula clonada mas preservando a formatação/largura."""
+    tbl = table._tbl
+    ultima_col = tbl.tblGrid.gridCol_lst[-1]
+    tbl.tblGrid.append(deepcopy(ultima_col))
+
+    for row in table.rows:
+        tr = row._tr
+        tcs = tr.findall(qn("w:tc"))
+        nova_tc = deepcopy(tcs[-1])
+        for t in nova_tc.findall(".//" + qn("w:t")):
+            t.text = ""
+        tr.append(nova_tc)
+
+    _substituir_texto_celula(table.rows[0].cells[-1], header_texto)
+
+
+def _preencher_ativos_detalhados(table, ativos, coluna_extra=None):
+    """coluna_extra: função opcional item -> valor, pra uma 11ª coluna já inserida na
+    tabela via _adicionar_coluna (usado hoje só na tabela de Fraude à Execução, coluna
+    'Transmissões')."""
     itens = list(ativos or [])
     _ajustar_linhas_com_total(table, len(itens))
     for indice, row in enumerate(table.rows[1:-1]):
@@ -1526,6 +1579,8 @@ def _preencher_ativos_detalhados(table, ativos):
             item.get("onus_total", ""),
             item.get("saldo", ""),
         ]
+        if coluna_extra is not None:
+            valores.append(coluna_extra(item))
         for coluna, valor in enumerate(valores):
             _substituir_texto_celula(row.cells[coluna], valor)
             _compactar_celula(
@@ -1542,6 +1597,8 @@ def _preencher_ativos_detalhados(table, ativos):
         _somar_moeda(itens, "onus_total"),
         _somar_moeda(itens, "saldo"),
     ]
+    if coluna_extra is not None:
+        totais.append("")
     for coluna, valor in enumerate(totais):
         _substituir_texto_celula(total.cells[coluna], valor)
         _compactar_celula(
@@ -1550,6 +1607,36 @@ def _preencher_ativos_detalhados(table, ativos):
             centralizar=coluna >= 5,
         )
     _nao_dividir_linha(total)
+
+
+def _preencher_ativos_teses_narrativas(doc, ativos: list):
+    """Preenche as tabelas de imóveis das subseções narrativas de '2. TESES DE
+    RECUPERAÇÃO' (Penhora Direta / IDPJ / Fraude à Execução) a partir da planilha de Coleta
+    de Informações, casando por palavra-chave no texto da Tese de cada item — um mesmo
+    imóvel entra em mais de uma tabela quando a Tese cita mais de uma palavra-chave (ex.:
+    "Fraude à Execução/IDPJ"), já que _filtrar_ativos roda uma vez por tabela/seção.
+    Localiza as tabelas pelo texto do subtítulo (robusto a deslocamento de índice causado
+    pelos blocos dinâmicos de Tese em "VISÃO GERAL DOS ATINGÍVEIS", que mudam de tamanho
+    conforme o caso) — nunca por índice fixo de tabela."""
+    if not ativos:
+        return
+    mapa = [
+        ("matrículas mapeadas", "penhora direta", False),
+        ("ativos atingíveis via idpj", "idpj", False),
+        ("ativos atingíveis via fraude à execução", "fraude à execução", True),
+    ]
+    for heading, table in _iter_headings_tables(doc):
+        h = heading.lower()
+        for chave_heading, chave_tese, com_transmissoes in mapa:
+            if chave_heading in h:
+                itens = _filtrar_ativos(ativos, chave_tese)
+                if com_transmissoes:
+                    if len(table.columns) == 10:
+                        _adicionar_coluna(table, "Transmissões")
+                    _preencher_ativos_detalhados(table, itens, coluna_extra=lambda item: item.get("transmissoes", ""))
+                else:
+                    _preencher_ativos_detalhados(table, itens)
+                break
 
 
 def _preencher_paragrafo_apos_titulo(doc, titulo, texto):
@@ -1786,14 +1873,17 @@ def _fmt_valor_br(v) -> str:
 
 
 def _proc_to_row(p: dict) -> list:
-    """Mapeia um processo Predictus para as 7 colunas do passivo do dossiê."""
+    """Mapeia um processo (Predictus ou Coleta de Informações) para as 7 colunas do
+    passivo do dossiê. "sat" só vem preenchido no fluxo da Coleta (Saldo Atualizado
+    estimado, já calculado na própria planilha de origem) — a Predictus não tem essa
+    informação, e _fmt_valor_br(None) devolve "" nesse caso."""
     return [
         p.get("cnj", ""),                 # Nº CNJ
-        p.get("vinc", ""),                # Vinculado a
+        p.get("vinc", ""),                # Executado
         p.get("data", "") or "",          # Distribuição
         p.get("ativo", ""),               # Exequente / Autor (polo ativo)
         _fmt_valor_br(p.get("valor")),    # Valor Causa (R$)
-        "",                               # SAT Est. (R$) — não consta na Predictus
+        _fmt_valor_br(p.get("sat")),      # SAT Est. (R$)
         p.get("status", ""),              # Status / Obs.
     ]
 
@@ -1804,6 +1894,9 @@ def _fill_passivo_table(table, registros: list):
     larguras = [c.width for c in table.rows[0].cells]
     _repetir_cabecalho(table.rows[0])
     _nao_dividir_linha(table.rows[0])
+    for header_cell in table.rows[0].cells:
+        if _chave_rotulo(header_cell.text) == "vinculado a":
+            _substituir_texto_celula(header_cell, "Executado")
     # remove linhas de dados (mantém a primeira = header laranja)
     for row in list(table.rows)[1:]:
         table._tbl.remove(row._tr)
@@ -1903,15 +1996,18 @@ def _preencher_visao_geral_atingiveis_dinamica(doc, ativos_visao_geral: list):
 
 
 def preencher_ativos_e_passivo_dossie(dossie_path, resumo_ativos: list, ativos_visao_geral: list,
-                                       fiscais: list, trabalhistas: list, civeis: list, ecac: list) -> str:
+                                       fiscais: list, trabalhistas: list, civeis: list, ecac: list,
+                                       ativos_detalhados: list = None) -> str:
     """
-    Preenche Ativos Atingíveis (Visão Consolidada + Visão Geral, dinâmico por Tese) e Passivo
-    (Fiscal/Trabalhista/Cível/e-CAC) de um dossiê PPA a partir dos dados já extraídos do Excel
-    de Coleta de Informações. Se dossie_path for None, gera um dossiê novo (esqueleto).
+    Preenche Ativos Atingíveis (Visão Consolidada + Visão Geral, dinâmico por Tese), as
+    tabelas de imóveis das subseções narrativas de "2. TESES DE RECUPERAÇÃO" (Penhora
+    Direta/IDPJ/Fraude à Execução, se ativos_detalhados for informado) e o Passivo
+    (Fiscal/Trabalhista/Cível/e-CAC) de um dossiê PPA a partir dos dados já extraídos do
+    Excel de Coleta de Informações. Se dossie_path for None, gera um dossiê novo (esqueleto).
 
-    Não mexe nas subseções narrativas de "2. TESES DE RECUPERAÇÃO" (Resumo da Tese,
-    Empresa-Alvo, Cronologia Societária etc.) nem em "Principais Credores" — são conteúdo de
-    análise jurídica manual, não derivável do Excel.
+    Não mexe no restante do conteúdo narrativo de "2. TESES DE RECUPERAÇÃO" (Resumo da
+    Tese, Empresa-Alvo, Cronologia Societária etc.) nem em "Principais Credores" — são
+    conteúdo de análise jurídica manual, não derivável do Excel.
     """
     if dossie_path:
         doc = Document(dossie_path)
@@ -1922,6 +2018,8 @@ def preencher_ativos_e_passivo_dossie(dossie_path, resumo_ativos: list, ativos_v
         _preencher_resumo_ativos(doc.tables[2], resumo_ativos, {})
     if ativos_visao_geral:
         _preencher_visao_geral_atingiveis_dinamica(doc, ativos_visao_geral)
+    if ativos_detalhados:
+        _preencher_ativos_teses_narrativas(doc, ativos_detalhados)
 
     for heading, table in _iter_headings_tables(doc):
         h = heading.lower()

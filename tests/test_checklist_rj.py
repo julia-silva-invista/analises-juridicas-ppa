@@ -370,6 +370,17 @@ def fixture_agc_vazio() -> dict:
     return dados
 
 
+def fixture_formato_citacao_novo() -> dict:
+    """Novo formato de referência (identificador + página juntos, com sufixo de qual pdf
+    quando há mais de um) — ver REGRA_CITACAO_PADRAO em dossie_ppa.py. Confirma que o
+    pipeline de renderização aceita o novo formato sem gerar vazamento nem falso-negativo
+    na contagem de referências."""
+    dados = _base_limpa("ID")
+    dados["consolidacao_substancial"] = "Deferido (ID 188753786 | fl. 135)"
+    dados["periodo_blindagem"] = "Ativo (ID 188753786 | fl. 135 do pdf 0001259-66.1996.8.11.0041)"
+    return dados
+
+
 FIXTURES = {
     "clean_pje": lambda: _base_limpa("Mov."),
     "clean_esaj": lambda: _base_limpa("fls."),
@@ -386,6 +397,7 @@ FIXTURES = {
     "checkbox_ambiguo": fixture_checkbox_ambiguo,
     "vazamento_proposital": fixture_vazamento_proposital,
     "agc_vazio": fixture_agc_vazio,
+    "formato_citacao_novo": fixture_formato_citacao_novo,
 }
 
 # fixtures que DEVEM sair 100% limpas (zero vazamento de placeholder)
@@ -394,6 +406,7 @@ FIXTURES_ESPERAM_ZERO_VAZAMENTO = {
     "processo_longo", "processo_gigante_120imoveis", "agc_vazio",
     "ocr_ruim", "mal_digitalizado_antigo", "referencias_quebradas",
     "ruido_estrutural_chunk", "vazio_total", "tipos_malformados", "checkbox_ambiguo",
+    "formato_citacao_novo",
 }
 # fixture que DEVE ter vazamento detectado (prova que o checador funciona)
 FIXTURES_ESPERAM_VAZAMENTO = {"vazamento_proposital"}

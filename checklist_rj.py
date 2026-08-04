@@ -32,7 +32,7 @@ from dossie_ppa import (
     _LARANJA, _CINZA, _BRANCO, _TXT, _TXT_MUTE,
     _write, _apply_font, _orange_header, _grid_table,
     _kv_table, _kv_label_table, _para, _sec_title, _sub_orange, _sub_gray,
-    _spacer, _montar_cabecalho_rodape,
+    _spacer, _montar_cabecalho_rodape, REGRA_CITACAO_PADRAO,
 )
 
 
@@ -180,8 +180,10 @@ _DOCS_ITEM6 = [
     ("atas_agc",              "Atas, laudo de credenciamento e de votação da AGC",  ["Anexado", "Não existente"]),
 ]
 
-_PROMPT_RJ = """Você vai preencher o Checklist de Recuperação Judicial (RJ) no formato JSON abaixo, a
-partir de duas fontes de texto que serão fornecidas depois deste prompt.
+_PROMPT_RJ = REGRA_CITACAO_PADRAO + """
+Você vai preencher o Checklist de Recuperação Judicial (RJ) no formato JSON abaixo, a
+partir de duas fontes de texto que serão fornecidas depois deste prompt. As regras de
+referência/siglas/status acima valem para todo campo abaixo, com os complementos a seguir.
 
 ═══ REGRA — PRIORIDADE DE FONTE ═══
 A primeira fonte é o RELATÓRIO CONSOLIDADO — um relatório jurídico já sintetizado, revisado e
@@ -193,25 +195,13 @@ relatório não cubra, ou para achar uma referência mais específica de algo qu
 citar página exata. Nunca contrarie o relatório com base em uma leitura isolada do texto bruto — se os
 dois divergirem, prefira o relatório.
 
-═══ REGRA — SISTEMA DO TRIBUNAL ═══
-Identifique, pelo cabeçalho/rodapé/numeração do processo, qual sistema processual gerou o
-documento, e use SEMPRE o rótulo correspondente nas referências:
-  - PJe                → "Mov. <nº>"
-  - eSAJ / físico       → "fls. <nº>"
-  - Eproc               → "Evento <nº>"
-  - Projudi / outro     → "ID <nº>"
-Use o MESMO rótulo em todo o documento (não misture "fls." com "Mov." sem necessidade). O texto bruto
-pode conter marcadores internos do tipo "PARTE i/N" ou "páginas X-Y" — são só limites técnicos de
-divisão do arquivo pelo nosso sistema, NUNCA uma referência processual real. Nunca cite "Parte N" como
-se fosse referência oficial. Se não houver ID/Mov./Evento disponível e só houver número de página, cite
-só a página (ex.: "pág. 340"), tratando o conjunto como um documento contínuo único — a menos que fique
-evidente que são processos ou documentos efetivamente distintos (números de processo diferentes,
-cabeçalhos de arquivo diferentes), caso em que identifique de qual documento veio.
-
-═══ REGRA — REFERÊNCIA OBRIGATÓRIA, UMA VEZ POR LINHA ═══
-Todo campo com conteúdo deve trazer ao final, entre parênteses, a referência de onde foi extraído
-(ex.: "(Mov. 340)", "(fls. 88)", "(Evento 12)", "(pág. 340)") — EXCETO "rj_numero" e "vara", que vão
-sem nenhuma referência (só o valor). O exemplo "(referência)" que aparece no molde abaixo é só uma
+═══ REGRA — REFERÊNCIA, UMA VEZ POR LINHA ═══
+Todo campo com conteúdo deve trazer ao final, entre parênteses, a referência de onde foi extraído no
+formato definido acima (ex.: "(ID 188753786 | fl. 135)"). Se não houver ID/Mov./Evento disponível e só
+houver número de página, cite só a página (ex.: "(fl. 340)"), tratando o conjunto como um documento
+contínuo único — a menos que fique evidente que são processos ou documentos efetivamente distintos
+(números de processo diferentes, cabeçalhos de arquivo diferentes), caso em que identifique de qual
+documento veio, conforme a regra acima. O exemplo "(referência)" que aparece no molde abaixo é só uma
 INSTRUÇÃO DE FORMATO PARA VOCÊ, não é texto para copiar — substitua sempre pela referência real.
 NUNCA devolva a anotação de formato vazia ou literal (nunca escreva "(referência)" ou
 "(Mov./ID/fls./Evento)" literalmente).
@@ -404,15 +394,11 @@ def gerar_checklist_rj(relatorio: str, texto_bruto: str, client, model: str) -> 
 # 2. ANÁLISE DE CRÉDITOS EM RECUPERAÇÃO JUDICIAL
 # ══════════════════════════════════════════════════════════════════════════
 
-_PROMPT_CRED = """\
+_PROMPT_CRED = REGRA_CITACAO_PADRAO + """
 Você está analisando o texto COMPLETO extraído de um processo de Recuperação Judicial e das
 execuções relacionadas a um crédito. Extraia os dados do CRÉDITO no formato JSON abaixo.
 Analise TODO o texto (não só um resumo) para preencher cédula, emitente, avalista, garantias, etc.
-NÃO invente.
-
-═══ REGRA — REFERÊNCIA OBRIGATÓRIA DA FONTE ═══
-Para CADA informação preenchida, inclua ao final, entre parênteses, ONDE foi extraída — a fls. do PDF
-e o parâmetro do tribunal (Mov./ID/fls./Evento). Ex.: "CCB nº 123 (fls. 45)", "R$ 8.000.000 (fls. 88)".
+NÃO invente. As regras de referência/siglas/status acima valem para todo campo abaixo.
 
 ═══ REGRA — CAMPO NÃO ENCONTRADO ═══
 Se um dado factual (cédula, emitente, avalista, matrícula, valor, data, etc.) NÃO constar em NENHUMA

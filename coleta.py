@@ -63,7 +63,11 @@ STATUS_MAP = {
     "EM TRAMITAÇÃO": "Em tramitação",
     "ARQUIVADO": "Arquivado definitivamente",
     "ARQUIVADO DEFINITIVAMENTE": "Arquivado definitivamente",
+    "ARQUIVAMENTO DEFINITIVO": "Arquivado definitivamente",
     "BAIXADO": "Arquivado definitivamente",
+    "ARQUIVAMENTO": "Arquivamento",
+    "ARQUIVAMENTO PROVISORIO": "Arquivamento provisório",
+    "ARQUIVAMENTO PROVISÓRIO": "Arquivamento provisório",
     "SUSPENSO": "Suspenso",
     "EXTINTO": "Extinto",
     "JULGADO": "Julgado",
@@ -491,7 +495,12 @@ def _num(v):
 
 
 def ler_matriculas_coleta(wb) -> list:
-    nome = _achar_aba(wb, "Matrículas", "Matriculas")
+    # "Detalha imóveis" é a aba de trabalho mais granular (uma linha por item, já com a
+    # nota da Tese emendada quando houver) — prioridade sobre "Matrículas", que pode ser
+    # uma cópia/versão mais antiga da mesma informação.
+    nome = _achar_aba(wb, "Detalha imóveis", "Detalha Imoveis")
+    if not nome:
+        nome = _achar_aba(wb, "Matrículas", "Matriculas", "Matrículas (2)", "Matriculas (2)")
     return _linhas_por_header(wb[nome]) if nome else []
 
 
@@ -503,6 +512,79 @@ def ler_processos_coleta(wb, *nomes_aba) -> list:
 def ler_ecac_coleta(wb) -> list:
     nome = _achar_aba(wb, "E-cac", "e-CAC", "Ecac")
     return _linhas_por_header(wb[nome]) if nome else []
+
+
+_RE_AREA = re.compile(
+    r"([\d]{1,3}(?:\.\d{3})*(?:,\d+)?|\d+(?:,\d+)?)\s*(hectares|ha\b|m[²2])",
+    re.IGNORECASE,
+)
+
+
+def _inferir_tipo_e_area(descricao: str) -> Tuple[str, str]:
+    """Infere Tipo de Ativo + área a partir da 'Descrição do Imóvel' — heurística por
+    palavra-chave, 100% determinística (sem IA, mantendo a arquitetura desse fluxo). É
+    melhor esforço: o campo é informativo dentro de um Word revisável manualmente."""
+    d = str(descricao or "")
+    dl = d.lower()
+
+    area = ""
+    m = _RE_AREA.search(d)
+    if m:
+        unidade = "ha" if m.group(2).lower().startswith(("hectare", "ha")) else "m²"
+        area = f"{m.group(1)} {unidade}"
+
+    if "apartamento" in dl:
+        tipo = "apartamento"
+    elif "casa residencial" in dl or re.search(r"\bcasa\b", dl):
+        tipo = "casa residencial"
+    elif "sala comercial" in dl:
+        tipo = "sala comercial"
+    elif any(kw in dl for kw in ("prédio comercial", "predio comercial", "galpão", "galpao",
+                                 "loja", "imóvel comercial", "imovel comercial")):
+        tipo = "imóvel comercial"
+    elif any(kw in dl for kw in ("hectare", "terras rurais", "área rural", "area rural",
+                                 "fazenda", "sítio", "sitio")):
+        tipo = "área rural"
+    elif any(kw in dl for kw in ("terreno", "lote")):
+        tipo = "terreno urbano"
+    else:
+        tipo = ""
+
+    return tipo, area
+
+
+def _fmt_matricula(matricula) -> str:
+    """Formata o número da matrícula com ponto de milhar (ex.: '9596' -> '9.596'). Se já
+    vier formatada, com letras, ou não for um número puro, devolve como está."""
+    s = str(matricula or "").strip()
+    if not s or not s.isdigit():
+        return s
+    return f"{int(s):,}".replace(",", ".")
+
+
+_RE_TRANSMISSAO_INICIO = re.compile(r"^(R|AV|Av)\.?\s*[\d]", re.IGNORECASE)
+
+
+def _ultima_transmissao(celula: str) -> str:
+    """Extrai a ÚLTIMA transmissão (entrada 'R.<n>...') da célula de Transmissões —
+    confirmado no arquivo real que as entradas vêm em ordem cronológica ascendente,
+    separadas por linha em branco OU só por quebra de linha simples, às vezes intercaladas
+    com 'AV./Av.' (averbações — não são transmissões de titularidade, são ignoradas)."""
+    texto = str(celula or "").strip()
+    if not texto:
+        return ""
+    entradas = []  # [tipo, texto_acumulado]
+    for linha in texto.split("\n"):
+        l = linha.strip()
+        if not l:
+            continue
+        if _RE_TRANSMISSAO_INICIO.match(l):
+            tipo = "R" if l[0].upper() == "R" else "AV"
+            entradas.append([tipo, l])
+        elif entradas:
+            entradas[-1][1] += " " + l
+    transmissoes = [t for tipo, t in entradas if tipo == "R"]
+    return transmissoes[-1] if transmissoes else texto
 
 
 def _chave_tese(tese: str) -> str:
@@ -553,27 +635,82 @@ def _agrupar_matriculas_por_tese(linhas: list) -> Tuple[list, list]:
         for i in itens:
             fracao = i.get("Fração Ideal")
             onus_item = _num(i.get("Valor Total do Ônus"))
+            tipo_ativo, area = _inferir_tipo_e_area(i.get("Descrição do Imóvel"))
             linhas_visao_geral.append([
-                str(i.get("Matrícula") or ""),
-                "", "", "", "",  # Tipo de Ativo / Área-Ha / Sit. Produtiva / Liquidez — sem fonte no Excel
+                _fmt_matricula(i.get("Matrícula")),
+                tipo_ativo, area, "", "",  # Sit. Produtiva / Liquidez — sem fonte no Excel
                 str(fracao) if fracao not in (None, "") else "",
-                _fmt_valor_br(onus_item) if onus_item is not None else "",
-                str(i.get("Observações") or ""),
+                _fmt_valor_br(onus_item) if onus_item is not None else "Não há",
+                "",  # Observações — não transpor (fica em branco a pedido)
             ])
         ativos_visao_geral.append({"tese": tese, "linhas": linhas_visao_geral})
 
     return resumo_ativos, ativos_visao_geral
 
 
+def _montar_ativos_detalhados(linhas: list) -> list:
+    """Monta a lista 'ativos' no formato que dossie_ppa._filtrar_ativos/
+    _preencher_ativos_detalhados esperam, pra preencher as tabelas de imóveis das seções
+    narrativas de teses (Penhora Direta/IDPJ/Fraude à Execução) a partir da planilha de
+    Coleta de Informações — mantém uma linha por matrícula (não agrupada por tese), já que
+    o casamento por palavra-chave roda sobre o texto de Tese de cada item individualmente."""
+    ativos = []
+    for i in linhas:
+        vm = _num(i.get("Valor da Avaliação Definitiva (VM)"))
+        vp = _num(i.get("Valor da Avaliação Definitiva (VP)"))
+        onus_total = _num(i.get("Valor Total do Ônus"))
+        saldo = _num(i.get("Saldo Avaliação - Ônus"))
+        ativos.append({
+            "tese": str(i.get("Tese") or ""),
+            "matricula": _fmt_matricula(i.get("Matrícula")),
+            "comarca": str(i.get("Comarca") or ""),
+            "proprietario_atual": str(i.get("Proprietário Atual") or ""),
+            "descricao": str(i.get("Descrição do Imóvel") or ""),
+            "onus_vigentes": str(i.get("Ônus Vigentes") or ""),
+            "fracao_atingivel": str(i.get("Fração Ideal") or ""),
+            "vm": _fmt_valor_br(vm) if vm is not None else "",
+            "vp": _fmt_valor_br(vp) if vp is not None else "",
+            "onus_total": _fmt_valor_br(onus_total) if onus_total is not None else "Não há",
+            "saldo": _fmt_valor_br(saldo) if saldo is not None else "",
+            "transmissoes": _ultima_transmissao(i.get("Transmissões")),
+        })
+    return ativos
+
+
+_RE_DOCUMENTO_PARTE = re.compile(r"\s*\((?:CNPJ|CPF)\s*n[ºo°]?\s*[\d./-]+\)", re.IGNORECASE)
+
+
+def _sem_documento(s: str) -> str:
+    """Remove o sufixo '(CNPJ nº ...)'/'(CPF nº ...)' de cada parte, mantendo o '; ' que
+    já separa múltiplas partes na célula (não precisamos do CNPJ/CPF no passivo)."""
+    return _RE_DOCUMENTO_PARTE.sub("", str(s or "")).strip()
+
+
 def _linha_processo_coleta(linha: dict) -> dict:
     return {
         "cnj":    str(linha.get("Número CNJ") or ""),
-        "vinc":   str(linha.get("Vinculado à") or ""),
+        "vinc":   _sem_documento(linha.get("Vinculado à") or ""),
         "data":   _parse_date(str(linha.get("Data da distribuição") or "")) or "",
-        "ativo":  str(linha.get("Polo ativo") or ""),
+        "ativo":  _sem_documento(linha.get("Polo ativo") or ""),
         "valor":  _num(linha.get("Valor da causa")),
         "status": str(linha.get("Situação atual") or ""),
+        "sat":    _num(linha.get("Saldo Atualizado estimado")),
     }
+
+
+def _arquivado_definitivamente(status: str) -> bool:
+    """Detecta 'arquivado/arquivamento definitivo' por palavra-chave (não por igualdade
+    exata) — a planilha real usa variações como 'Arquivamento Definitivo', não só
+    'Arquivado'/'Arquivado Definitivamente'. Arquivamento PROVISÓRIO ou um 'Arquivamento'
+    sem qualificador NÃO contam como definitivo — só excluímos quando "definitiv" aparece
+    explicitamente junto de "arquiv"."""
+    s = str(status or "").upper()
+    return "ARQUIV" in s and "DEFINITIV" in s
+
+
+def _excluir_arquivados(processos: list) -> list:
+    """Passivo: nunca lista processos já arquivados definitivamente."""
+    return [p for p in processos if not _arquivado_definitivamente(p.get("status", ""))]
 
 
 def _classificar_fiscal_civel_coleta(linhas: list) -> Tuple[list, list]:
@@ -584,7 +721,7 @@ def _classificar_fiscal_civel_coleta(linhas: list) -> Tuple[list, list]:
         classe = str(linha.get("Classe") or "")
         proc = _linha_processo_coleta(linha)
         (fiscais if _is_fiscal("", classe) else civeis).append(proc)
-    return fiscais, civeis
+    return _excluir_arquivados(fiscais), _excluir_arquivados(civeis)
 
 
 def _ler_ecac_processado(linhas: list) -> list:
@@ -637,8 +774,9 @@ def coleta_gerar_dossie_ativos_passivo(excel_coleta_file, dossie_file) -> Tuple[
         ), "Nenhum dado encontrado no Excel", None
 
     resumo_ativos, ativos_visao_geral = _agrupar_matriculas_por_tese(linhas_matriculas)
+    ativos_detalhados = _montar_ativos_detalhados(linhas_matriculas)
     fiscais, civeis = _classificar_fiscal_civel_coleta(linhas_fiscal_civel)
-    trabalhistas = [_linha_processo_coleta(l) for l in linhas_trabalhista]
+    trabalhistas = _excluir_arquivados([_linha_processo_coleta(l) for l in linhas_trabalhista])
     ecac = _ler_ecac_processado(linhas_ecac)
 
     log(f"   🏠 {len(linhas_matriculas)} matrícula(s) em {len(resumo_ativos)} tese(s)")
@@ -655,6 +793,7 @@ def coleta_gerar_dossie_ativos_passivo(excel_coleta_file, dossie_file) -> Tuple[
     try:
         out = preencher_ativos_e_passivo_dossie(
             dossie_path, resumo_ativos, ativos_visao_geral, fiscais, trabalhistas, civeis, ecac,
+            ativos_detalhados,
         )
     except Exception as exc:
         return log(f"\n❌ Erro ao preencher o dossiê: {exc}"), "Erro ao preencher o dossiê", None
