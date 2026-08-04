@@ -170,11 +170,6 @@ with gr.Blocks(
                             lines=4,
                             elem_classes=["instructions-field"],
                         )
-                        proc_usar_pro = gr.Checkbox(
-                            label="Usar Gemini Pro",
-                            value=False,
-                            elem_classes=["cb-slot", "cb-tip-gemini"],
-                        )
                         proc_versao_resumida = gr.Checkbox(
                             label="Versão resumida",
                             value=False,
@@ -522,7 +517,7 @@ with gr.Blocks(
     # Processos — análise apenas ao clicar no botão
     proc_analisar_btn.click(
         fn=proc_analisar,
-        inputs=[proc_pdf_principal, proc_pdf_relacionados, proc_instrucoes, proc_usar_pro, proc_versao_resumida],
+        inputs=[proc_pdf_principal, proc_pdf_relacionados, proc_instrucoes, proc_versao_resumida],
         outputs=[proc_log, proc_report, proc_relatorio_state, proc_extracao_state],
         concurrency_limit=2,
     )

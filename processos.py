@@ -16,20 +16,15 @@ from google.genai import types
 
 from report_template_processos import REPORT_TEMPLATE_INSTRUCTIONS, SYSTEM_PROMPT as SYSTEM_PROMPT_PROC
 from utils import (
-    _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_proc, _get_gemini_clients,
+    _retry, _gerar_docx, _responder_pergunta_generica, _get_gemini_clients,
     _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite, _filtrar_arquivos_existentes,
     _SEMAFORO_PROCESSAMENTO_PESADO, GEMINI_TIMEOUT_MS,
+    GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO, GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
 )
 from dossie_ppa import gerar_dossie_word
 
 CHUNK_MAX_PAGES_PROC    = 400
-MODO_DIRETO_MAX_PROC    = 700
-MODO_DIRETO_MAX_MB_PROC = 45
-COMPRESSAO_PRE_MB_PROC  = 50   # só pré-comprime se puder caber no modo direto
-MODEL_PROC_EXTR = os.getenv("GEMINI_MODEL_EXTRACAO", "gemini-2.5-flash")
-MODEL_PROC_FAST = os.getenv("GEMINI_MODEL_RAPIDO", "gemini-2.5-flash")
-MODEL_PROC_PRO = os.getenv("GEMINI_MODEL_CONSOLIDACAO", "gemini-2.5-pro")
-MODEL_PROC_CONS = MODEL_PROC_PRO
+COMPRESSAO_PRE_MB_PROC  = 50   # pré-compressão dos PDFs de porte intermediário
 # ══════════════════════════════════════════════════════════════════════════════
 # MÓDULO — ANÁLISE DE PROCESSOS (com melhorias Teste B)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -150,7 +145,7 @@ def _proc_extrair_chunk(args) -> tuple:
 
     def _call():
         contents = [types.Content(role="user", parts=all_parts)]
-        resp = client.models.generate_content(model=MODEL_PROC_EXTR, contents=contents)
+        resp = client.models.generate_content(model=GEMINI_MODEL_EXTRACAO, contents=contents)
         return resp.text
 
     resultado = _retry(_call)
@@ -224,7 +219,7 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
     ])]
 
     def _call():
-        return client.models.generate_content(model=MODEL_PROC_EXTR, contents=contents).text
+        return client.models.generate_content(model=GEMINI_MODEL_EXTRACAO, contents=contents).text
 
     resultado = _retry(_call, tentativas=2, espera_base=5)
 
@@ -436,36 +431,6 @@ REGRAS RÍGIDAS:
 """
 
 
-def _proc_analisar_direto(client, arquivos_gemini: list, instrucoes: str, model_cons: str, versao_resumida: bool = False) -> str:
-    instrucoes_extras = ""
-    if instrucoes and instrucoes.strip():
-        instrucoes_extras = (
-            "\n\nINSTRUCOES ADICIONAIS:\n" + instrucoes.strip()
-        )
-    if versao_resumida:
-        partes_prompt = [
-            SYSTEM_PROMPT_PROC,
-            "Você está em MODO RESUMO. Ignore qualquer template detalhado e siga ESTRITAMENTE o formato abaixo.",
-            TEMPLATE_RESUMIDO_PROC + instrucoes_extras,
-        ]
-    else:
-        partes_prompt = [
-            SYSTEM_PROMPT_PROC,
-            "Analise integralmente todos os PDFs e produza o relatorio juridico final "
-            "seguindo rigorosamente o modelo de formatacao abaixo.",
-            REPORT_TEMPLATE_INSTRUCTIONS + instrucoes_extras,
-        ]
-    # Texto e arquivos juntos num único Content para evitar 400 INVALID_ARGUMENT
-    parts = [types.Part(text="\n\n".join(partes_prompt))]
-    for arq in arquivos_gemini:
-        mime = getattr(arq, "mime_type", None) or "application/pdf"
-        parts.append(types.Part(file_data=types.FileData(file_uri=arq.uri, mime_type=mime)))
-    contents = [types.Content(role="user", parts=parts)]
-    def _fn():
-        return client.models.generate_content(model=model_cons, contents=contents).text
-    return _retry(_fn)
-
-
 def _erro_completo_relatorio_proc(exc: Exception) -> str:
     """Texto de erro pra aba Relatorio: traceback completo, nao so str(exc) — o Gradio
     (sem show_error=True) nao mostra nenhum detalhe do erro, entao a unica forma da
@@ -474,14 +439,14 @@ def _erro_completo_relatorio_proc(exc: Exception) -> str:
     return "❌ ERRO — a análise foi interrompida.\n\n" + traceback.format_exc()
 
 
-def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False, versao_resumida: bool = False):
+def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, versao_resumida: bool = False):
     try:
-        yield from _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes, usar_gemini_pro, versao_resumida)
+        yield from _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes, versao_resumida)
     except Exception as exc:
         yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio_proc(exc), "", ""
 
 
-def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False, versao_resumida: bool = False):
+def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_resumida: bool = False):
     if not pdf_files:
         yield "Nenhum arquivo enviado.", "", "", ""
         return
@@ -510,7 +475,7 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, usar_gemin
         return
 
     relatorio_state = ""
-    model_cons = MODEL_PROC_PRO if usar_gemini_pro else MODEL_PROC_FAST
+    model_cons = GEMINI_MODEL_RELATORIO
 
     log.append(f"Arquivo(s) recebido(s): {len(pdf_paths)}")
     for p in pdf_paths:
@@ -535,7 +500,7 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, usar_gemin
 
         path_proc = path
         if 10 <= mb_orig <= COMPRESSAO_PRE_MB_PROC:
-            # Arquivo pequeno: pré-comprime pois pode caber no modo direto
+            # Arquivo intermediário: pré-comprime antes de dividir em chunks
             log.append(f"   Comprimindo {nome} ({mb_orig:.0f} MB)...")
             yield "\n".join(log), "", "", ""
             comp_path, orig_mb, comp_mb = _comprimir_pdf(path)
@@ -572,132 +537,88 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, usar_gemin
             todos_chunks.append((chunk_path, offset, total, path))
 
     n = len(todos_chunks)
-    total_paginas = sum(c[2] for c in todos_chunks if c[2])
     compressed_total_mb = sum(Path(c[0]).stat().st_size for c in todos_chunks) / 1_048_576
     yield "\n".join(log), "", "", ""
 
     t_inicio = time.time()
     cache = None
-    texto_merged = ""  # texto OCR completo (modo chunked) — fonte para o dossiê PPA
+    texto_merged = ""  # texto OCR completo — fonte para o dossiê PPA
 
     try:
-        # Modo direto (1 chamada) para documentos pequenos
-        if total_paginas <= MODO_DIRETO_MAX_PROC and compressed_total_mb <= MODO_DIRETO_MAX_MB_PROC:
-            log.append(f"\nModo direto ({total_paginas} pag. · {compressed_total_mb:.0f} MB — 1 chamada ao {model_cons})")
-            yield "\n".join(log), "", "", ""
+        # Extração via File API — 4 workers, leitura nativa de PDF
+        log.append(f"\nExtração em chunks ({n} chunk(s) · {compressed_total_mb:.0f} MB · 4 workers · File API)...")
+        log.append(_barra_progresso(0, n))
+        yield "\n".join(log), "", "", ""
 
-            arquivos_gemini = []
-            for idx, (chunk_path, offset, total_pg, pdf_orig) in enumerate(todos_chunks, 1):
-                tam = Path(chunk_path).stat().st_size / 1_048_576
-                log.append(f"   Enviando {idx}/{len(todos_chunks)} ({tam:.1f} MB)...")
-                yield "\n".join(log), "", "", ""
+        parciais: dict = {}
 
+        def _worker_proc(idx):
+            cp, offset, total_pg, _ = todos_chunks[idx]
+            cli = clients[idx % len(clients)]
+            try:
+                return _retry(
+                    lambda: _proc_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
+                    tentativas=2, espera_base=15
+                )
+            except Exception as e:
+                msg_e = str(e)
+                if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
+                    ri, res, nota = _proc_extrair_chunk((idx, cp, offset, total_pg, n, cli))
+                    return ri, res, (nota + " | " if nota else "") + "fallback inline"
+                raise
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            futures = {ex.submit(_worker_proc, i): i for i in range(n)}
+            for future in concurrent.futures.as_completed(futures):
                 try:
-                    chunk_path.encode("ascii")
-                    upload_path = chunk_path
-                except UnicodeEncodeError:
-                    import shutil as _shutil
-                    tmp_ascii = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-                    tmp_ascii.close()
-                    _shutil.copy2(chunk_path, tmp_ascii.name)
-                    upload_path = tmp_ascii.name
-
-                arq = clients[0].files.upload(file=upload_path)
-                # Polling com backoff: 1s→2s→3s→4s→4s..., teto de 120s no total
-                total_wait = 0
-                wait_time = 1
-                while total_wait < 120:
-                    state = getattr(arq, "state", None)
-                    state_name = getattr(state, "name", str(state) if state is not None else "")
-                    if state_name in ("ACTIVE", "FAILED"):
-                        break
-                    time.sleep(wait_time)
-                    total_wait += wait_time
-                    arq = clients[0].files.get(name=arq.name)
-                    wait_time = min(wait_time + 1, 4)
-                arquivos_gemini.append(arq)
-                log[-1] = f"   Arquivo {idx}/{len(todos_chunks)} pronto."
-                yield "\n".join(log), "", "", ""
-
-            log.append("\nGerando relatorio...")
-            yield "\n".join(log), "", "", ""
-            relatorio = _proc_analisar_direto(clients[0], arquivos_gemini, instrucoes, model_cons, versao_resumida)
-
-        else:
-            # Modo chunked via File API — 4 workers, leitura nativa de PDF
-            log.append(f"\nModo chunked ({n} chunk(s) · {compressed_total_mb:.0f} MB · 4 workers · File API)...")
-            log.append(_barra_progresso(0, n))
-            yield "\n".join(log), "", "", ""
-
-            parciais: dict = {}
-
-            def _worker_proc(idx):
-                cp, offset, total_pg, _ = todos_chunks[idx]
-                cli = clients[idx % len(clients)]
-                try:
-                    return _retry(
-                        lambda: _proc_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
-                        tentativas=2, espera_base=15
+                    idx, res, nota = future.result()
+                    parciais[idx] = res
+                    c = len(parciais)
+                    log[-1] = _barra_progresso(c, n)
+                    log.append(
+                        f"   Chunk {idx+1}/{n} extraido"
+                        + (f" [{nota}]" if nota else "")
+                        + f" | {c}/{n} prontos"
                     )
                 except Exception as e:
-                    msg_e = str(e)
-                    if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                        ri, res, nota = _proc_extrair_chunk((idx, cp, offset, total_pg, n, cli))
-                        return ri, res, (nota + " | " if nota else "") + "fallback inline"
-                    raise
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-                futures = {ex.submit(_worker_proc, i): i for i in range(n)}
-                for future in concurrent.futures.as_completed(futures):
-                    try:
-                        idx, res, nota = future.result()
-                        parciais[idx] = res
-                        c = len(parciais)
-                        log[-1] = _barra_progresso(c, n)
-                        log.append(
-                            f"   Chunk {idx+1}/{n} extraido"
-                            + (f" [{nota}]" if nota else "")
-                            + f" | {c}/{n} prontos"
-                        )
-                    except Exception as e:
-                        i_f = futures[future]
-                        log.append(f"   Erro no chunk {i_f+1}: {e}")
-                    finally:
-                        # Libera o chunk do disco assim que termina (sucesso ou erro), em
-                        # vez de esperar a analise inteira acabar — reduz pico de disco.
-                        i_f = futures[future]
-                        cp_done, _, _, orig_done = todos_chunks[i_f]
-                        if cp_done != orig_done:
-                            try: os.remove(cp_done)
-                            except Exception: pass
-                    yield "\n".join(log), "", "", ""
-
-            t_extr = int(time.time() - t_inicio)
-            log.append(f"   Extracao: {t_extr//60}min{t_extr%60:02d}s")
-            yield "\n".join(log), "", "", ""
-
-            # Configurar cache (apenas para versao normal — resumida nao usa)
-            if versao_resumida:
-                cache = None
-                log.append("\nModo resumo — cache nao necessario.")
-            else:
-                log.append("\nConfigurando cache para consolidacao...")
+                    i_f = futures[future]
+                    log.append(f"   Erro no chunk {i_f+1}: {e}")
+                finally:
+                    # Libera o chunk do disco assim que termina (sucesso ou erro), em
+                    # vez de esperar a analise inteira acabar — reduz pico de disco.
+                    i_f = futures[future]
+                    cp_done, _, _, orig_done = todos_chunks[i_f]
+                    if cp_done != orig_done:
+                        try: os.remove(cp_done)
+                        except Exception: pass
                 yield "\n".join(log), "", "", ""
-                cache = _proc_obter_cache(clients[0], model_cons)
-                log[-1] = "Cache configurado." if cache else "Cache nao disponivel — usando prompt completo."
-            yield "\n".join(log), "", "", ""
 
-            # Consolidar
-            log.append(f"\nConsolidando relatorio ({model_cons})...")
+        t_extr = int(time.time() - t_inicio)
+        log.append(f"   Extracao: {t_extr//60}min{t_extr%60:02d}s")
+        yield "\n".join(log), "", "", ""
+
+        # Configurar cache (apenas para versao normal — resumida nao usa)
+        if versao_resumida:
+            cache = None
+            log.append("\nModo resumo — cache nao necessario.")
+        else:
+            log.append("\nConfigurando cache para consolidacao...")
             yield "\n".join(log), "", "", ""
-            lista = [parciais.get(i, "") for i in range(n)]
-            nomes_por_chunk = [Path(todos_chunks[i][3]).name for i in range(n)]
-            multi_arquivo = len(set(nomes_por_chunk)) > 1
-            texto_merged = "\n\n".join(
-                f"[PARTE {i+1}]" + (f" — arquivo: {nomes_por_chunk[i]}" if multi_arquivo else "") + f"\n{t}"
-                for i, t in enumerate(lista) if t and t.strip()
-            )
-            relatorio = _proc_consolidar(clients[0], lista, instrucoes, cache, model_cons, versao_resumida, nomes_por_chunk)
+            cache = _proc_obter_cache(clients[0], model_cons)
+            log[-1] = "Cache configurado." if cache else "Cache nao disponivel — usando prompt completo."
+        yield "\n".join(log), "", "", ""
+
+        # Consolidar
+        log.append(f"\nConsolidando relatorio ({model_cons})...")
+        yield "\n".join(log), "", "", ""
+        lista = [parciais.get(i, "") for i in range(n)]
+        nomes_por_chunk = [Path(todos_chunks[i][3]).name for i in range(n)]
+        multi_arquivo = len(set(nomes_por_chunk)) > 1
+        texto_merged = "\n\n".join(
+            f"[PARTE {i+1}]" + (f" — arquivo: {nomes_por_chunk[i]}" if multi_arquivo else "") + f"\n{t}"
+            for i, t in enumerate(lista) if t and t.strip()
+        )
+        relatorio = _proc_consolidar(clients[0], lista, instrucoes, cache, model_cons, versao_resumida, nomes_por_chunk)
 
         # Processos relacionados
         if pdf_relacionados:
@@ -747,7 +668,7 @@ def proc_gerar_dossie(relatorio: str, extracao: str = ""):
         client = genai.Client(api_key=k1, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
         # O dossiê exige síntese jurídica estruturada e completa; usa o modelo
         # de consolidação para reduzir omissões e preservar a fundamentação.
-        caminho = gerar_dossie_word(extracao or "", relatorio or "", client, MODEL_PROC_PRO)
+        caminho = gerar_dossie_word(extracao or "", relatorio or "", client, GEMINI_MODEL_ESTRUTURADO)
         yield gr.update(value=caminho, visible=True), "✅ Dossiê gerado — clique no arquivo para baixar."
     except Exception:
         yield gr.update(value=None, visible=False), "❌ Erro ao gerar dossiê:\n\n" + traceback.format_exc()
@@ -757,7 +678,7 @@ def proc_responder(pergunta: str, relatorio: str):
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
-        return _responder_pergunta_generica(pergunta, relatorio, client, MODEL_PROC_CONS)
+        return _responder_pergunta_generica(pergunta, relatorio, client, GEMINI_MODEL_QA)
     except Exception:
         return "❌ Erro:\n\n" + traceback.format_exc()
 

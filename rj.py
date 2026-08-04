@@ -20,21 +20,18 @@ from google.genai import types
 
 from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
 from utils import (
-    _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _get_gemini_clients,
+    _retry, _gerar_docx, _responder_pergunta_generica, _get_gemini_clients,
     _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite, _filtrar_arquivos_existentes,
     _SEMAFORO_PROCESSAMENTO_PESADO,
+    GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO, GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
 )
 from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos
 import rj_cache
 
 CHUNK_MAX_PAGES_RJ    = 400
-MODEL_EXTRACAO_RJ     = os.getenv("GEMINI_MODEL_EXTRACAO", "gemini-2.5-flash")
-MODEL_RAPIDO_RJ       = os.getenv("GEMINI_MODEL_RAPIDO", "gemini-2.5-flash")
-MODEL_PRO_RJ          = os.getenv("GEMINI_MODEL_CONSOLIDACAO", "gemini-2.5-pro")
-MODEL_CONSOLIDACAO_RJ = MODEL_PRO_RJ
 AVG_MIN_POR_CHUNK_RJ  = 3
 MIN_CONSOLIDACAO_RJ   = 8
-COMPRESSAO_PRE_MB_RJ  = 50   # só pré-comprime se puder caber no modo direto
+COMPRESSAO_PRE_MB_RJ  = 50   # pré-compressão dos PDFs de porte intermediário
 LIMITE_TRUNCAMENTO_CHECKLIST = 900_000   # mesmo limite usado em checklist_rj._extrair
 LIMITE_TRUNCAMENTO_CREDORES  = 150_000   # mesmo limite usado em _extrair_credores_json
 LIMITE_CONSOLIDACAO_RJ       = 3_000_000  # teto de seguranca p/ nao estourar contexto do modelo
@@ -157,7 +154,7 @@ def _rj_extrair_chunk(args) -> tuple:
 
     def _call():
         contents = [types.Content(role="user", parts=all_parts)]
-        resp = client.models.generate_content(model=MODEL_EXTRACAO_RJ, contents=contents)
+        resp = client.models.generate_content(model=GEMINI_MODEL_EXTRACAO, contents=contents)
         return resp.text
 
     resultado = _retry(_call)
@@ -232,7 +229,7 @@ def _rj_extrair_chunk_fileapi(args) -> tuple:
     ])]
 
     def _call():
-        return client.models.generate_content(model=MODEL_EXTRACAO_RJ, contents=contents).text
+        return client.models.generate_content(model=GEMINI_MODEL_EXTRACAO, contents=contents).text
 
     resultado = _retry(_call, tentativas=2, espera_base=5)
 
@@ -599,21 +596,21 @@ def _erro_completo_relatorio(exc: Exception) -> str:
     return "❌ ERRO — a análise foi interrompida.\n\n" + traceback.format_exc()
 
 
-def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_pro: bool = False, versao_resumida: bool = False):
+def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", versao_resumida: bool = False):
     try:
-        yield from _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes, usar_gemini_pro, versao_resumida)
+        yield from _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes, versao_resumida)
     except Exception as exc:
         yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio(exc), "", ""
 
 
-def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False):
+def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str):
     try:
-        yield from _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes, usar_gemini_pro)
+        yield from _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes)
     except Exception as exc:
         yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio(exc), "", ""
 
 
-def _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False):
+def _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes: str):
     """Analisa só 'processos relacionados' (execuções/ações avulsas), sem PDF principal de RJ.
 
     Gera um relatório objetivo por processo (reaproveitando o template de 'Processos
@@ -628,7 +625,7 @@ def _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes: str, us
         yield f"Erro de configuracao: {e}", "", "", ""
         return
 
-    model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
+    model_cons = GEMINI_MODEL_RELATORIO
     pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
 
     log: list = []
@@ -643,7 +640,9 @@ def _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes: str, us
     except Exception:
         pass
     try:
-        job_id = rj_cache.calcular_job_id([], pdf_paths_rel, instrucoes, False, usar_gemini_pro)
+        job_id = rj_cache.calcular_job_id(
+            [], pdf_paths_rel, instrucoes, False, GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO
+        )
     except Exception:
         job_id = None
     if job_id and not rj_cache.carregar_manifest(job_id):
@@ -713,16 +712,14 @@ def _extrair_texto_docx(path: str) -> str:
     return "\n".join(partes)
 
 
-def _rj_analisar_com_relatorio_existente(docx_paths: list, pdf_relacionados, instrucoes: str,
-                                          usar_gemini_pro: bool = False):
+def _rj_analisar_com_relatorio_existente(docx_paths: list, pdf_relacionados, instrucoes: str):
     try:
-        yield from _rj_analisar_com_relatorio_existente_impl(docx_paths, pdf_relacionados, instrucoes, usar_gemini_pro)
+        yield from _rj_analisar_com_relatorio_existente_impl(docx_paths, pdf_relacionados, instrucoes)
     except Exception as exc:
         yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio(exc), "", ""
 
 
-def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados, instrucoes: str,
-                                          usar_gemini_pro: bool = False):
+def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados, instrucoes: str):
     """Reaproveita um relatório de RJ (.docx) já gerado numa análise anterior, em vez de
     reprocessar o PDF original — só os processos relacionados (se houver) são extraídos de
     verdade. Permite gerar o Checklist de Créditos com processos relacionados novos sem
@@ -752,7 +749,7 @@ def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados
         yield f"Erro de configuracao: {e}", "", "", ""
         return
 
-    model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
+    model_cons = GEMINI_MODEL_RELATORIO
     pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
     pdf_paths_rel = _filtrar_arquivos_existentes(pdf_paths_rel, log)
     if not pdf_paths_rel:
@@ -765,7 +762,9 @@ def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados
     except Exception:
         pass
     try:
-        job_id = rj_cache.calcular_job_id(docx_paths, pdf_paths_rel, instrucoes, False, usar_gemini_pro)
+        job_id = rj_cache.calcular_job_id(
+            docx_paths, pdf_paths_rel, instrucoes, False, GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO
+        )
     except Exception:
         job_id = None
     if job_id and not rj_cache.carregar_manifest(job_id):
@@ -814,7 +813,7 @@ def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados
     yield "\n".join(log), relatorio_final, relatorio_final, texto_bruto_final
 
 
-def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_pro: bool = False, versao_resumida: bool = False):
+def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_resumida: bool = False):
     if not pdf_files and not pdf_relacionados:
         yield "Nenhum arquivo enviado.", "", "", ""
         return
@@ -829,7 +828,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_ge
                 # Relatório de RJ já gerado (Word) enviado junto na caixa de "Processos
                 # relacionados" — pula a extração da RJ inteira, só processa os PDFs novos
                 # que vieram junto (se houver).
-                yield from _rj_analisar_com_relatorio_existente(docx_paths, pdf_relacionados, instrucoes, usar_gemini_pro)
+                yield from _rj_analisar_com_relatorio_existente(docx_paths, pdf_relacionados, instrucoes)
                 return
             # Combinação não suportada (PDF de RJ + .docx em relacionados): o .docx é
             # ignorado aqui pra não quebrar a extração normal (que só lê PDF).
@@ -837,7 +836,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_ge
     if not pdf_files:
         # Sem PDF principal de RJ: analisa só os processos relacionados (execuções/ações
         # avulsas), num fluxo mais leve — sem Seção A (que pressupõe uma RJ principal).
-        yield from _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes, usar_gemini_pro)
+        yield from _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes)
         return
 
     yield "Iniciando analise de Recuperacao Judicial...", "", "", ""
@@ -871,7 +870,10 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_ge
     except Exception:
         pass
     try:
-        job_id = rj_cache.calcular_job_id(pdf_paths, pdf_paths_rel_all, instrucoes, versao_resumida, usar_gemini_pro)
+        job_id = rj_cache.calcular_job_id(
+            pdf_paths, pdf_paths_rel_all, instrucoes, versao_resumida,
+            GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO,
+        )
     except Exception:
         job_id = None
     manifest = rj_cache.carregar_manifest(job_id) if job_id else None
@@ -879,7 +881,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_ge
         manifest = rj_cache.novo_manifest(job_id)
         rj_cache.salvar_manifest(job_id, manifest)
 
-    model_cons = MODEL_PRO_RJ if usar_gemini_pro else MODEL_RAPIDO_RJ
+    model_cons = GEMINI_MODEL_RELATORIO
 
     log.append(f"Arquivo(s) recebido(s): {len(pdf_paths)}")
     for p in pdf_paths:
@@ -901,7 +903,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_ge
 
         path_proc = path
         if 10 <= mb_orig <= COMPRESSAO_PRE_MB_RJ:
-            # Arquivo pequeno: pré-comprime pois pode caber no modo direto
+            # Arquivo intermediário: pré-comprime antes de dividir em chunks
             log.append(f"   Comprimindo {nome} ({mb_orig:.0f} MB)...")
             yield "\n".join(log), "", "", ""
             comp_path, orig_mb, comp_mb = _comprimir_pdf(path)
@@ -1124,7 +1126,7 @@ def rj_responder(pergunta: str, relatorio: str):
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
-        return _responder_pergunta_generica(pergunta, relatorio, client, MODEL_CONSOLIDACAO_RJ)
+        return _responder_pergunta_generica(pergunta, relatorio, client, GEMINI_MODEL_QA)
     except Exception:
         return "❌ Erro:\n\n" + traceback.format_exc()
 
@@ -1139,7 +1141,7 @@ def rj_gerar_checklist(relatorio: str, texto_bruto: str = ""):
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
-        path = gerar_checklist_rj(relatorio, texto_bruto, client, MODEL_RAPIDO_RJ)
+        path = gerar_checklist_rj(relatorio, texto_bruto, client, GEMINI_MODEL_ESTRUTURADO)
         aviso = _aviso_truncamento(len(relatorio) + len(texto_bruto), LIMITE_TRUNCAMENTO_CHECKLIST)
         return gr.update(value=path, visible=True), "✅ Checklist RJ gerado — clique no arquivo para baixar." + aviso
     except Exception:
@@ -1159,7 +1161,7 @@ def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = "", *campos):
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
-        resultado = gerar_checklist_creditos(fonte, client, MODEL_RAPIDO_RJ, creditores=creditores or None)
+        resultado = gerar_checklist_creditos(fonte, client, GEMINI_MODEL_ESTRUTURADO, creditores=creditores or None)
         paths = resultado if isinstance(resultado, list) else [resultado]
         if creditores:
             msg = f"✅ {len(paths)} checklist(s) de crédito gerado(s) — um arquivo por credor, clique para baixar."
@@ -1483,10 +1485,10 @@ def rj_gerar_excel_credores(relatorio: str, texto_bruto: str = ""):
     try:
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
-        resultado = _extrair_credores_json(fonte, client, MODEL_CONSOLIDACAO_RJ)
+        resultado = _extrair_credores_json(fonte, client, GEMINI_MODEL_ESTRUTURADO)
         credores = resultado.get("credores", [])
         if not credores and texto_bruto and relatorio.strip() and fonte != relatorio.strip():
-            resultado = _extrair_credores_json(relatorio, client, MODEL_CONSOLIDACAO_RJ)
+            resultado = _extrair_credores_json(relatorio, client, GEMINI_MODEL_ESTRUTURADO)
             credores = resultado.get("credores", [])
         if not credores:
             return gr.update(value=None, visible=False), "Nenhum credor identificado. Verifique se o QGC consta no PDF."

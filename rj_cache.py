@@ -31,7 +31,7 @@ RETENCAO_DIAS_CONCLUIDO = int(os.getenv("RJ_CACHE_RETENCAO_DIAS_CONCLUIDO", "2")
 
 
 def calcular_job_id(pdf_paths_principal: list, pdf_paths_relacionados: list, instrucoes: str,
-                     versao_resumida: bool, usar_gemini_pro: bool) -> str:
+                     versao_resumida: bool, model_extracao: str, model_relatorio: str) -> str:
     """Hash estável: conteúdo dos PDFs (principal + relacionados, ordenados) + parâmetros que
     mudam o resultado. Usa bytes dos arquivos (não nome/caminho, que muda a cada upload no
     Gradio) para sobreviver a reenvio do mesmo PDF."""
@@ -48,7 +48,8 @@ def calcular_job_id(pdf_paths_principal: list, pdf_paths_relacionados: list, ins
                     h.update(chunk)
     h.update((instrucoes or "").strip().encode("utf-8", "ignore"))
     h.update(b"resumida" if versao_resumida else b"completa")
-    h.update(b"pro" if usar_gemini_pro else b"flash")
+    h.update((model_extracao or "").encode("utf-8", "ignore"))
+    h.update((model_relatorio or "").encode("utf-8", "ignore"))
     return h.hexdigest()[:20]
 
 

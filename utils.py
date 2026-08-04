@@ -19,6 +19,14 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 # 10 min cobre folgado ate a consolidacao; acima disso e hang de verdade.
 GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "600000"))
 
+# Modelos por responsabilidade. As variaveis permitem override no ambiente, mas os
+# defaults seguem a arquitetura recomendada: Lite para leitura/JSON em alto volume e
+# Flash 3.6 para sintese juridica e perguntas.
+GEMINI_MODEL_EXTRACAO = os.getenv("GEMINI_MODEL_EXTRACAO", "gemini-3.5-flash-lite")
+GEMINI_MODEL_RELATORIO = os.getenv("GEMINI_MODEL_RELATORIO", "gemini-3.6-flash")
+GEMINI_MODEL_ESTRUTURADO = os.getenv("GEMINI_MODEL_ESTRUTURADO", "gemini-3.5-flash-lite")
+GEMINI_MODEL_QA = os.getenv("GEMINI_MODEL_QA", "gemini-3.6-flash")
+
 # Trava global de processamento pesado de PDF (compressao/OCR via PyMuPDF) — compartilhada
 # entre rj.py e processos.py. Nao limita quantas analises rodam ao mesmo tempo (isso e o
 # concurrency_limit do Gradio); limita só quantos CHUNKS podem estar sendo comprimidos/
