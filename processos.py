@@ -243,9 +243,12 @@ def _proc_obter_cache(client, model_cons: str) -> Optional[str]:
             return None
 
 
-def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_cons: str, versao_resumida: bool = False) -> str:
+def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_cons: str, versao_resumida: bool = False, nomes_arquivos: list = None) -> str:
+    multi_arquivo = bool(nomes_arquivos) and len(set(nomes_arquivos)) > 1
     blocos = "\n\n".join(
-        f"{'='*60}\nPARTE {i+1}/{len(parciais)}\n{'='*60}\n{p}"
+        f"{'='*60}\nPARTE {i+1}/{len(parciais)}"
+        + (f" — arquivo: {nomes_arquivos[i]}" if multi_arquivo else "")
+        + f"\n{'='*60}\n{p}"
         for i, p in enumerate(parciais)
     )
 
@@ -632,8 +635,13 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
             log.append(f"\nConsolidando relatorio ({model_cons})...")
             yield "\n".join(log), "", "", ""
             lista = [parciais.get(i, "") for i in range(n)]
-            texto_merged = "\n\n".join(f"[PARTE {i+1}]\n{t}" for i, t in enumerate(lista) if t and t.strip())
-            relatorio = _proc_consolidar(client1, lista, instrucoes, cache, model_cons, versao_resumida)
+            nomes_por_chunk = [Path(todos_chunks[i][3]).name for i in range(n)]
+            multi_arquivo = len(set(nomes_por_chunk)) > 1
+            texto_merged = "\n\n".join(
+                f"[PARTE {i+1}]" + (f" — arquivo: {nomes_por_chunk[i]}" if multi_arquivo else "") + f"\n{t}"
+                for i, t in enumerate(lista) if t and t.strip()
+            )
+            relatorio = _proc_consolidar(client1, lista, instrucoes, cache, model_cons, versao_resumida, nomes_por_chunk)
 
         # Processos relacionados
         if pdf_relacionados:

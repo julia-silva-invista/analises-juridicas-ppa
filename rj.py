@@ -6,6 +6,7 @@ import math
 import time
 import tempfile
 import threading
+import traceback
 import concurrent.futures
 from pathlib import Path
 from typing import Optional
@@ -266,11 +267,19 @@ def _rj_obter_cache(client, model_cons: str) -> Optional[str]:
             return None
 
 
-def _rj_merge_textos(extracoes: list) -> str:
+def _rj_merge_textos(extracoes: list, nomes_arquivos: list = None) -> str:
+    """Junta os textos extraidos de cada chunk. Se houver mais de 1 PDF de origem
+    (nomes_arquivos com mais de um nome distinto), marca de qual arquivo veio cada parte —
+    sem isso, o modelo de consolidacao nao tem como indicar "de qual pdf" numa referencia
+    quando mais de um processo foi enviado junto."""
+    multi_arquivo = bool(nomes_arquivos) and len(set(nomes_arquivos)) > 1
     partes = []
     for i, txt in enumerate(extracoes):
         if txt:
-            partes.append(f"{'='*60}\nPARTE {i+1}/{len(extracoes)}\n{'='*60}\n{txt}")
+            cabecalho = f"PARTE {i+1}/{len(extracoes)}"
+            if multi_arquivo:
+                cabecalho += f" — arquivo: {nomes_arquivos[i]}"
+            partes.append(f"{'='*60}\n{cabecalho}\n{'='*60}\n{txt}")
     return "\n\n".join(partes)
 
 
@@ -572,7 +581,28 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
         yield "done", (f"Erro ao processar relacionados: {e}", "", avisos)
 
 
+def _erro_completo_relatorio(exc: Exception) -> str:
+    """Texto de erro pra aba Relatorio: traceback completo, nao so str(exc) — o Gradio (sem
+    show_error=True) nao mostra nenhum detalhe do erro, entao a unica forma da usuaria ver
+    o motivo real de um "Erro" vermelho e a propria funcao escrever isso num output visivel."""
+    return "❌ ERRO — a análise foi interrompida.\n\n" + traceback.format_exc()
+
+
+def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_pro: bool = False, versao_resumida: bool = False):
+    try:
+        yield from _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes, usar_gemini_pro, versao_resumida)
+    except Exception as exc:
+        yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio(exc), "", ""
+
+
 def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False):
+    try:
+        yield from _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes, usar_gemini_pro)
+    except Exception as exc:
+        yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio(exc), "", ""
+
+
+def _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False):
     """Analisa só 'processos relacionados' (execuções/ações avulsas), sem PDF principal de RJ.
 
     Gera um relatório objetivo por processo (reaproveitando o template de 'Processos
@@ -655,8 +685,8 @@ def _rj_analisar_somente_relacionados(pdf_relacionados, instrucoes: str, usar_ge
         yield "\n".join(log), relatorio, relatorio, texto_bruto
 
     except Exception as exc:
-        log.append(f"\nErro: {exc}")
-        yield "\n".join(log), f"Erro:\n{exc}", "", ""
+        log.append("\nErro — veja o traceback completo na aba Relatório.")
+        yield "\n".join(log), _erro_completo_relatorio(exc), "", ""
 
 
 def _extrair_texto_docx(path: str) -> str:
@@ -673,6 +703,14 @@ def _extrair_texto_docx(path: str) -> str:
 
 
 def _rj_analisar_com_relatorio_existente(docx_paths: list, pdf_relacionados, instrucoes: str,
+                                          usar_gemini_pro: bool = False):
+    try:
+        yield from _rj_analisar_com_relatorio_existente_impl(docx_paths, pdf_relacionados, instrucoes, usar_gemini_pro)
+    except Exception as exc:
+        yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio(exc), "", ""
+
+
+def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados, instrucoes: str,
                                           usar_gemini_pro: bool = False):
     """Reaproveita um relatório de RJ (.docx) já gerado numa análise anterior, em vez de
     reprocessar o PDF original — só os processos relacionados (se houver) são extraídos de
@@ -765,7 +803,7 @@ def _rj_analisar_com_relatorio_existente(docx_paths: list, pdf_relacionados, ins
     yield "\n".join(log), relatorio_final, relatorio_final, texto_bruto_final
 
 
-def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_pro: bool = False, versao_resumida: bool = False):
+def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_pro: bool = False, versao_resumida: bool = False):
     if not pdf_files and not pdf_relacionados:
         yield "Nenhum arquivo enviado.", "", "", ""
         return
@@ -960,7 +998,8 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
         log.append("\nConsolidando textos extraidos...")
         yield "\n".join(log), "", "", ""
         lista = [parciais.get(i, "") for i in range(n)]
-        texto_merged = _rj_merge_textos(lista)
+        nomes_por_chunk = [Path(todos_chunks[i][3]).name for i in range(n)]
+        texto_merged = _rj_merge_textos(lista, nomes_por_chunk)
         log.append(f"   {len(texto_merged):,} caracteres de informacao extraida")
         yield "\n".join(log), "", "", ""
 
@@ -1040,8 +1079,8 @@ def rj_analisar(pdf_files, pdf_relacionados, instrucoes: str = "", usar_gemini_p
         yield "\n".join(log), relatorio, relatorio, texto_merged
 
     except Exception as exc:
-        log.append(f"\nErro: {exc}")
-        yield "\n".join(log), f"Erro:\n{exc}", "", ""
+        log.append("\nErro — veja o traceback completo na aba Relatório.")
+        yield "\n".join(log), _erro_completo_relatorio(exc), "", ""
 
     finally:
         for cp, _, _, orig in todos_chunks:
@@ -1064,8 +1103,8 @@ def rj_responder(pergunta: str, relatorio: str):
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1)
         return _responder_pergunta_generica(pergunta, relatorio, client, MODEL_CONSOLIDACAO_RJ)
-    except Exception as e:
-        return f"Erro: {e}"
+    except Exception:
+        return "❌ Erro:\n\n" + traceback.format_exc()
 
 
 def rj_gerar_checklist(relatorio: str, texto_bruto: str = ""):
@@ -1081,8 +1120,8 @@ def rj_gerar_checklist(relatorio: str, texto_bruto: str = ""):
         path = gerar_checklist_rj(relatorio, texto_bruto, client, MODEL_RAPIDO_RJ)
         aviso = _aviso_truncamento(len(relatorio) + len(texto_bruto), LIMITE_TRUNCAMENTO_CHECKLIST)
         return gr.update(value=path, visible=True), "✅ Checklist RJ gerado — clique no arquivo para baixar." + aviso
-    except Exception as e:
-        return gr.update(value=None, visible=False), f"❌ Erro: {e}"
+    except Exception:
+        return gr.update(value=None, visible=False), "❌ Erro:\n\n" + traceback.format_exc()
 
 
 def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = "", *campos):
@@ -1108,8 +1147,8 @@ def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = "", *campos):
             msg = "✅ Checklist de créditos gerado (crédito identificado automaticamente)."
         msg += _aviso_truncamento(len(fonte), LIMITE_TRUNCAMENTO_CHECKLIST)
         return gr.update(value=paths, visible=True), msg
-    except Exception as e:
-        return gr.update(value=None, visible=False), f"❌ Erro: {e}"
+    except Exception:
+        return gr.update(value=None, visible=False), "❌ Erro:\n\n" + traceback.format_exc()
 
 
 # ── Excel de Credores ─────────────────────────────────────────────────────────
@@ -1442,8 +1481,8 @@ def rj_gerar_excel_credores(relatorio: str, texto_bruto: str = ""):
             msg += f" | {controver} com questão controversa"
         msg += _aviso_truncamento(len(fonte), LIMITE_TRUNCAMENTO_CREDORES)
         return gr.update(value=path, visible=True), msg
-    except Exception as e:
-        return gr.update(value=None, visible=False), f"Erro: {e}"
+    except Exception:
+        return gr.update(value=None, visible=False), "❌ Erro:\n\n" + traceback.format_exc()
 
 
 
