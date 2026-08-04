@@ -12,18 +12,18 @@ from typing import Optional
 
 import fitz
 import gradio as gr
-from google import genai
 from google.genai import types
 
 from report_template_processos import REPORT_TEMPLATE_INSTRUCTIONS, SYSTEM_PROMPT as SYSTEM_PROMPT_PROC
 from utils import (
     _retry, _gerar_docx, _responder_pergunta_generica, _get_gemini_clients,
-    _barra_progresso, _filtrar_arquivos_existentes, GEMINI_TIMEOUT_MS,
+    _executar_com_failover_gemini,
+    _barra_progresso, _filtrar_arquivos_existentes,
     GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO, GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
 )
 from analysis_runtime import (
-    ANALYSIS_MANAGER, file_sha256, iter_pdf_chunks, load_chunk_cache, pdf_preparation_slot,
-    queue_message, record_status, save_chunk_cache,
+    ANALYSIS_MANAGER, cleanup_chunk, file_sha256, iter_pdf_chunks, load_chunk_cache,
+    pdf_preparation_slot, queue_message, record_status, save_chunk_cache,
 )
 from dossie_ppa import gerar_dossie_word
 
@@ -83,13 +83,11 @@ def _proc_dividir_pdf(pdf_path: str) -> list:
     try:
         with pdf_preparation_slot():
             for chunk in iter_pdf_chunks(pdf_path, max_pages=CHUNK_MAX_PAGES_PROC):
-                chunks.append((chunk.path, chunk.start, chunk.total_pages))
+                chunks.append(chunk)
         return chunks
     except Exception:
-        for chunk_path, _offset, _total in chunks:
-            if chunk_path != pdf_path:
-                try: os.remove(chunk_path)
-                except OSError: pass
+        for chunk in chunks:
+            cleanup_chunk(chunk)
         raise
 
 
@@ -162,9 +160,6 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
     except Exception:
         pg_fim = min(offset + CHUNK_MAX_PAGES_PROC, total_pg) if total_pg else "?"
     source_for_upload = chunk_path
-    chunk_mb = Path(chunk_path).stat().st_size / 1_048_576
-    comp_nota = f"{chunk_mb:.1f}MB · original preservado"
-
     ascii_tmp = None
     try:
         source_for_upload.encode("ascii")
@@ -219,7 +214,7 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
         try: client.files.delete(name=arq.name)
         except Exception: pass
 
-    return idx, resultado, f"File API | {comp_nota}"
+    return idx, resultado, "File API"
 
 
 def _proc_obter_cache(client, model_cons: str) -> Optional[str]:
@@ -328,6 +323,38 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
         return _retry(_fn)
 
 
+def _proc_consolidar_com_failover(
+    clients: list,
+    parciais: list,
+    instrucoes: str,
+    cache_name,
+    model_cons: str,
+    versao_resumida: bool = False,
+    nomes_arquivos: list = None,
+    log: list = None,
+) -> str:
+    def _ao_falhar(indice, proximo, _exc):
+        if log is not None:
+            log.append(
+                f"   Credencial Gemini {indice + 1} recusada ou indisponível; "
+                f"tentando a credencial {proximo + 1}."
+            )
+
+    return _executar_com_failover_gemini(
+        clients,
+        lambda client, indice: _proc_consolidar(
+            client,
+            parciais,
+            instrucoes,
+            cache_name if indice == 0 else None,
+            model_cons,
+            versao_resumida,
+            nomes_arquivos,
+        ),
+        ao_falhar=_ao_falhar,
+    )
+
+
 def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, cache_name,
                                   model_cons: str, runtime_job=None) -> str:
     """Extrai e consolida processos relacionados, gerando seções B.1, B.2, etc."""
@@ -336,13 +363,16 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
         hashes_arquivos = {}
         for path in pdf_paths:
             hashes_arquivos[path] = file_sha256(path)
-            for chunk_path, offset, total in _proc_dividir_pdf(path):
-                todos_chunks.append((chunk_path, offset, total, path))
+            for chunk in _proc_dividir_pdf(path):
+                todos_chunks.append((
+                    chunk.path, chunk.start, chunk.total_pages, path,
+                    chunk.preparation_note,
+                ))
 
         resultados = {}
 
         def _worker_rel(i):
-            chunk_path, offset, total, original = todos_chunks[i]
+            chunk_path, offset, total, original, preparation_note = todos_chunks[i]
             try:
                 with fitz.open(chunk_path) as _chunk_doc:
                     chunk_end = offset + len(_chunk_doc)
@@ -354,29 +384,43 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
             )
             if cached is not None:
                 return i, cached, "cache por arquivo/páginas"
-            cli = clients[i % len(clients)]
             slot = runtime_job.worker_slot() if runtime_job else nullcontext()
             with slot:
                 record_status(
                     runtime_job, "extraindo_chunk", arquivo=Path(original).name,
                     paginas=f"{offset + 1}-{chunk_end}", chunk=i + 1,
                 )
-                try:
-                    result = _retry(
-                        lambda: _proc_extrair_chunk_fileapi(
-                            (i, chunk_path, offset, total, len(todos_chunks), cli)
-                        ),
-                        tentativas=2, espera_base=15,
-                    )
-                except Exception as exc:
-                    msg = str(exc)
-                    if any(code in msg for code in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                        ri, text, note = _proc_extrair_chunk(
-                            (i, chunk_path, offset, total, len(todos_chunks), cli)
+                trocas = []
+
+                def _extrair_com(client, _indice):
+                    try:
+                        return _retry(
+                            lambda: _proc_extrair_chunk_fileapi(
+                                (i, chunk_path, offset, total, len(todos_chunks), client)
+                            ),
+                            tentativas=2, espera_base=15,
                         )
-                        result = (ri, text, (note + " | " if note else "") + "fallback inline")
-                    else:
+                    except Exception as exc:
+                        msg = str(exc)
+                        if any(code in msg for code in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
+                            ri, text, note = _proc_extrair_chunk(
+                                (i, chunk_path, offset, total, len(todos_chunks), client)
+                            )
+                            return ri, text, (note + " | " if note else "") + "fallback inline"
                         raise
+
+                result = _executar_com_failover_gemini(
+                    clients,
+                    _extrair_com,
+                    indice_inicial=i % len(clients),
+                    ao_falhar=lambda atual, proximo, _exc: trocas.append(
+                        f"credencial Gemini {atual + 1}→{proximo + 1}"
+                    ),
+                )
+                result = (
+                    result[0], result[1],
+                    " | ".join(filter(None, [result[2], preparation_note, *trocas])),
+                )
             save_chunk_cache(
                 source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO,
                 "processo_relacionados", result[1],
@@ -393,13 +437,13 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
                 except Exception:
                     resultados[i] = ""
                 finally:
-                    chunk_path, _offset, _total, original = todos_chunks[i]
+                    chunk_path, _offset, _total, original, _preparation_note = todos_chunks[i]
                     if chunk_path != original:
                         try: os.remove(chunk_path)
                         except OSError: pass
 
         texto_relacionados = ""
-        for i, (_chunk_path, _offset, _total, original) in enumerate(todos_chunks):
+        for i, (_chunk_path, _offset, _total, original, _preparation_note) in enumerate(todos_chunks):
             if resultados.get(i):
                 texto_relacionados += f"\n--- {Path(original).name} ---\n{resultados[i]}"
 
@@ -419,34 +463,27 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
             prompt += f"INSTRUCOES: {instrucoes.strip()}\n\n"
         prompt += "Gere APENAS as secoes de processos relacionados."
 
-        if cache_name:
-            contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
-            config = types.GenerateContentConfig(cached_content=cache_name)
-            def _fn():
-                return clients[0].models.generate_content(
-                    model=model_cons, contents=contents, config=config
-                ).text
-            try:
-                return _retry(_fn)
-            except Exception as e:
-                msg = str(e)
-                if "PERMISSION_DENIED" in msg or "CachedContent not found" in msg or "403" in msg:
-                    with _proc_cache_lock:
-                        _proc_cache_nome.pop(model_cons, None)
-                    prompt_full = SYSTEM_PROMPT_PROC + "\n\n" + REPORT_TEMPLATE_INSTRUCTIONS + "\n\n" + prompt
-                    def _fn_fallback():
-                        return clients[0].models.generate_content(
-                            model=model_cons, contents=[prompt_full]
-                        ).text
-                    return _retry(_fn_fallback)
-                raise
-        else:
+        def _consolidar_com(client, indice):
+            if cache_name and indice == 0:
+                contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
+                config = types.GenerateContentConfig(cached_content=cache_name)
+                try:
+                    return _retry(lambda: client.models.generate_content(
+                        model=model_cons, contents=contents, config=config
+                    ).text)
+                except Exception as e:
+                    msg = str(e)
+                    if "PERMISSION_DENIED" in msg or "CachedContent not found" in msg or "403" in msg:
+                        with _proc_cache_lock:
+                            _proc_cache_nome.pop(model_cons, None)
+                    else:
+                        raise
             prompt_full = SYSTEM_PROMPT_PROC + "\n\n" + REPORT_TEMPLATE_INSTRUCTIONS + "\n\n" + prompt
-            def _fn():
-                return clients[0].models.generate_content(
-                    model=model_cons, contents=[prompt_full]
-                ).text
-            return _retry(_fn)
+            return _retry(lambda: client.models.generate_content(
+                model=model_cons, contents=[prompt_full]
+            ).text)
+
+        return _executar_com_failover_gemini(clients, _consolidar_com)
     except Exception:
         return ""
 
@@ -579,8 +616,15 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
         log.append(f"   · {nome}: {total_pg} pag. — {info_scan}")
         if len(chunks) > 1:
             log.append(f"     Dividido em {len(chunks)} partes de até {CHUNK_MAX_PAGES_PROC} pag. e 45 MB")
-        for chunk_path, offset, total in chunks:
-            todos_chunks.append((chunk_path, offset, total, path))
+        for chunk in chunks:
+            todos_chunks.append((
+                chunk.path, chunk.start, chunk.total_pages, path,
+                chunk.preparation_note,
+            ))
+            log.append(
+                f"     Páginas {chunk.page_start}-{chunk.page_end}: "
+                f"{chunk.preparation_note}"
+            )
 
     n = len(todos_chunks)
     chunks_total_mb = sum(Path(c[0]).stat().st_size for c in todos_chunks) / 1_048_576
@@ -603,7 +647,7 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
         parciais: dict = {}
 
         def _worker_proc(idx):
-            cp, offset, total_pg, original = todos_chunks[idx]
+            cp, offset, total_pg, original, preparation_note = todos_chunks[idx]
             try:
                 with fitz.open(cp) as _chunk_doc:
                     chunk_end = offset + len(_chunk_doc)
@@ -615,25 +659,39 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
             )
             if cached is not None:
                 return idx, cached, "cache por arquivo/páginas"
-            cli = clients[idx % len(clients)]
             slot = runtime_job.worker_slot() if runtime_job else nullcontext()
             with slot:
                 record_status(
                     runtime_job, "extraindo_chunk", arquivo=Path(original).name,
                     paginas=f"{offset + 1}-{chunk_end}", chunk=idx + 1,
                 )
-                try:
-                    result = _retry(
-                        lambda: _proc_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
-                        tentativas=2, espera_base=15
-                    )
-                except Exception as e:
-                    msg_e = str(e)
-                    if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                        ri, res, nota = _proc_extrair_chunk((idx, cp, offset, total_pg, n, cli))
-                        result = (ri, res, (nota + " | " if nota else "") + "fallback inline")
-                    else:
+                trocas = []
+
+                def _extrair_com(client, _indice):
+                    try:
+                        return _retry(
+                            lambda: _proc_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, client)),
+                            tentativas=2, espera_base=15,
+                        )
+                    except Exception as e:
+                        msg_e = str(e)
+                        if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
+                            ri, res, nota = _proc_extrair_chunk((idx, cp, offset, total_pg, n, client))
+                            return ri, res, (nota + " | " if nota else "") + "fallback inline"
                         raise
+
+                result = _executar_com_failover_gemini(
+                    clients,
+                    _extrair_com,
+                    indice_inicial=idx % len(clients),
+                    ao_falhar=lambda atual, proximo, _exc: trocas.append(
+                        f"credencial Gemini {atual + 1}→{proximo + 1}"
+                    ),
+                )
+                result = (
+                    result[0], result[1],
+                    " | ".join(filter(None, [result[2], preparation_note, *trocas])),
+                )
             save_chunk_cache(
                 source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO,
                 "processo_principal", result[1],
@@ -664,7 +722,7 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
                     # Libera o chunk do disco assim que termina (sucesso ou erro), em
                     # vez de esperar a analise inteira acabar — reduz pico de disco.
                     i_f = futures[future]
-                    cp_done, _, _, orig_done = todos_chunks[i_f]
+                    cp_done, _, _, orig_done, _preparation_note = todos_chunks[i_f]
                     if cp_done != orig_done:
                         try: os.remove(cp_done)
                         except Exception: pass
@@ -696,7 +754,10 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
             f"[PARTE {i+1}]" + (f" — arquivo: {nomes_por_chunk[i]}" if multi_arquivo else "") + f"\n{t}"
             for i, t in enumerate(lista) if t and t.strip()
         )
-        relatorio = _proc_consolidar(clients[0], lista, instrucoes, cache, model_cons, versao_resumida, nomes_por_chunk)
+        relatorio = _proc_consolidar_com_failover(
+            clients, lista, instrucoes, cache, model_cons,
+            versao_resumida, nomes_por_chunk, log,
+        )
 
         # Processos relacionados
         if pdf_relacionados:
@@ -722,7 +783,7 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
         yield "\n".join(log), _erro_completo_relatorio_proc(exc), "", ""
 
     finally:
-        for cp, _, _, orig in todos_chunks:
+        for cp, _, _, orig, _preparation_note in todos_chunks:
             if cp != orig:
                 try: os.remove(cp)
                 except: pass
@@ -742,11 +803,14 @@ def proc_gerar_dossie(relatorio: str, extracao: str = ""):
         return
     yield gr.update(visible=False), "⏳ Gerando dossiê PPA (extraindo dados via IA)..."
     try:
-        k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
-        client = genai.Client(api_key=k1, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
         # O dossiê exige síntese jurídica estruturada e completa; usa o modelo
         # de consolidação para reduzir omissões e preservar a fundamentação.
-        caminho = gerar_dossie_word(extracao or "", relatorio or "", client, GEMINI_MODEL_ESTRUTURADO)
+        caminho = _executar_com_failover_gemini(
+            _get_gemini_clients(),
+            lambda client, _indice: gerar_dossie_word(
+                extracao or "", relatorio or "", client, GEMINI_MODEL_ESTRUTURADO
+            ),
+        )
         yield gr.update(value=caminho, visible=True), "✅ Dossiê gerado — clique no arquivo para baixar."
     except Exception:
         yield gr.update(value=None, visible=False), "❌ Erro ao gerar dossiê:\n\n" + traceback.format_exc()
@@ -754,9 +818,12 @@ def proc_gerar_dossie(relatorio: str, extracao: str = ""):
 
 def proc_responder(pergunta: str, relatorio: str):
     try:
-        k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
-        client = genai.Client(api_key=k1, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
-        return _responder_pergunta_generica(pergunta, relatorio, client, GEMINI_MODEL_QA)
+        return _executar_com_failover_gemini(
+            _get_gemini_clients(),
+            lambda client, _indice: _responder_pergunta_generica(
+                pergunta, relatorio, client, GEMINI_MODEL_QA
+            ),
+        )
     except Exception:
         return "❌ Erro:\n\n" + traceback.format_exc()
 

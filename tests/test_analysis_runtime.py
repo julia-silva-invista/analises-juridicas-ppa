@@ -1,13 +1,39 @@
 import os
 import sys
 import json
+import random
 import threading
 import time
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
+
+import fitz
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import analysis_runtime as runtime
 from analysis_runtime import AnalysisManager, queue_message
+import rj_cache
+
+
+@contextmanager
+def _temporary_files():
+    paths = []
+
+    def make(suffix: str = ".pdf") -> Path:
+        path = Path(tempfile.mktemp(prefix="analysis_runtime_test_", suffix=suffix))
+        paths.append(path)
+        return path
+
+    try:
+        yield make
+    finally:
+        for path in paths:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _activate(manager, kind="teste"):
@@ -109,6 +135,147 @@ def test_cache_e_independente_por_arquivo_faixa_e_modelo():
     assert base != runtime._chunk_cache_path("a" * 64, 400, 800, "modelo-a", "rj")
     assert base != runtime._chunk_cache_path("a" * 64, 0, 400, "modelo-b", "rj")
     assert base != runtime._chunk_cache_path("b" * 64, 0, 400, "modelo-a", "rj")
+    assert "chunks_v2" in str(base)
+
+
+def _criar_pdf_pequeno(path: Path, texto: str = "PAGINA ORIGINAL") -> None:
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), texto)
+    doc.save(path)
+    doc.close()
+
+
+def _criar_pdf_recursos_compartilhados(path: Path, paginas: int = 6) -> None:
+    """Simula o Documento Unificado: todas as páginas enxergam todos os Forms."""
+    source = fitz.open()
+    samples = bytes(((i * 73 + 19) % 256 for i in range(200 * 200 * 3)))
+    pix = fitz.Pixmap(fitz.csRGB, 200, 200, samples, False)
+    for indice in range(paginas):
+        page = source.new_page(width=300, height=300)
+        page.insert_text((20, 20), f"UNIQUE PAGE {indice + 1}")
+        page.insert_image(fitz.Rect(20, 30, 280, 290), pixmap=pix)
+
+    unified = fitz.open()
+    forms = []
+    for indice in range(paginas):
+        page = unified.new_page(width=300, height=300)
+        forms.append(page.show_pdf_page(page.rect, source, indice))
+
+    resources = unified.get_new_xref()
+    xobjects = " ".join(f"/TPL{i} {xref} 0 R" for i, xref in enumerate(forms))
+    unified.update_object(resources, f"<< /XObject << {xobjects} >> >>")
+    for indice, page in enumerate(unified):
+        unified.xref_set_key(page.xref, "Resources", f"{resources} 0 R")
+        unified.update_stream(page.get_contents()[0], f"q /TPL{indice} Do Q".encode())
+
+    unified.save(path, garbage=0, deflate=False)
+    unified.close()
+    source.close()
+
+
+def _criar_pdf_imagem_incompressivel(path: Path) -> None:
+    doc = fitz.open()
+    page = doc.new_page(width=600, height=800)
+    samples = random.Random(123).randbytes(1000 * 1000 * 3)
+    pix = fitz.Pixmap(fitz.csRGB, 1000, 1000, samples, False)
+    page.insert_image(page.rect, pixmap=pix)
+    doc.save(path, deflate=False)
+    doc.close()
+
+
+def test_pdf_pequeno_permanece_original():
+    with _temporary_files() as make:
+        source = make("_pequeno.pdf")
+        _criar_pdf_pequeno(source)
+        chunks = list(runtime.iter_pdf_chunks(str(source)))
+        assert len(chunks) == 1
+        chunk = chunks[0]
+        assert chunk.path == str(source)
+        assert chunk.temporary is False
+        assert chunk.preparation_mode == "original"
+        assert "original preservado" in chunk.preparation_note
+
+
+def test_recursos_globais_sao_removidos_sem_perder_paginas_ou_texto():
+    with _temporary_files() as make:
+        source = make("_unificado.pdf")
+        _criar_pdf_recursos_compartilhados(source)
+        chunks = list(runtime.iter_pdf_chunks(str(source), max_pages=2, max_mb=0.05))
+        try:
+            assert [(chunk.start, chunk.end) for chunk in chunks] == [(0, 2), (2, 4), (4, 6)]
+            assert all(chunk.preparation_mode == "resources_cleaned" for chunk in chunks)
+            assert all(Path(chunk.path).stat().st_size <= 0.05 * 1024 * 1024 for chunk in chunks)
+            textos = []
+            for chunk in chunks:
+                with fitz.open(chunk.path) as doc:
+                    textos.extend(page.get_text() for page in doc)
+            assert [f"UNIQUE PAGE {i}" in textos[i - 1] for i in range(1, 7)] == [True] * 6
+        finally:
+            temporarios = [Path(chunk.path) for chunk in chunks if chunk.temporary]
+            for chunk in chunks:
+                runtime.cleanup_chunk(chunk)
+            assert all(not path.exists() for path in temporarios)
+
+
+def test_pagina_realmente_grande_e_rasterizada_ate_caber():
+    with _temporary_files() as make:
+        source = make("_pagina_grande.pdf")
+        _criar_pdf_imagem_incompressivel(source)
+        chunks = list(runtime.iter_pdf_chunks(str(source), max_pages=1, max_mb=2))
+        try:
+            assert len(chunks) == 1
+            chunk = chunks[0]
+            assert chunk.preparation_mode == "page_rasterized"
+            assert chunk.raster_dpi in {180, 144, 108}
+            assert Path(chunk.path).stat().st_size <= 2 * 1024 * 1024
+            assert "rasterizada" in chunk.preparation_note
+        finally:
+            for chunk in chunks:
+                runtime.cleanup_chunk(chunk)
+
+
+def test_temporarios_sao_removidos_quando_pagina_nao_cabe():
+    with _temporary_files() as make:
+        source = make("_pagina_impossivel.pdf")
+        _criar_pdf_imagem_incompressivel(source)
+        created = []
+        original_named_temporary_file = runtime.tempfile.NamedTemporaryFile
+
+        def tracked_named_temporary_file(*args, **kwargs):
+            result = original_named_temporary_file(*args, **kwargs)
+            created.append(Path(result.name))
+            return result
+
+        runtime.tempfile.NamedTemporaryFile = tracked_named_temporary_file
+        try:
+            try:
+                list(runtime.iter_pdf_chunks(str(source), max_pages=1, max_mb=0.5))
+                raise AssertionError("Era esperado OversizedPdfPageError")
+            except runtime.OversizedPdfPageError:
+                pass
+            assert created
+            assert all(not path.exists() for path in created)
+        finally:
+            runtime.tempfile.NamedTemporaryFile = original_named_temporary_file
+
+
+def test_versao_do_pipeline_invalida_job_id_de_rj():
+    with _temporary_files() as make:
+        source = make("_rj.pdf")
+        _criar_pdf_pequeno(source)
+        original = rj_cache.ANALYSIS_PIPELINE_VERSION
+        try:
+            first = rj_cache.calcular_job_id(
+                [str(source)], [], "", False, "extracao", "relatorio"
+            )
+            rj_cache.ANALYSIS_PIPELINE_VERSION = original + "-outro"
+            second = rj_cache.calcular_job_id(
+                [str(source)], [], "", False, "extracao", "relatorio"
+            )
+            assert first != second
+        finally:
+            rj_cache.ANALYSIS_PIPELINE_VERSION = original
 
 
 if __name__ == "__main__":
@@ -117,4 +284,9 @@ if __name__ == "__main__":
     test_seis_workers_globais_e_rebalanceamento_sem_interromper_tarefa()
     test_registro_persistente_e_pequeno_e_guarda_a_faixa_de_paginas()
     test_cache_e_independente_por_arquivo_faixa_e_modelo()
-    print("5 testes de coordenação/cache: OK")
+    test_pdf_pequeno_permanece_original()
+    test_recursos_globais_sao_removidos_sem_perder_paginas_ou_texto()
+    test_pagina_realmente_grande_e_rasterizada_ate_caber()
+    test_temporarios_sao_removidos_quando_pagina_nao_cabe()
+    test_versao_do_pipeline_invalida_job_id_de_rj()
+    print("10 testes de coordenação/PDF/cache: OK")

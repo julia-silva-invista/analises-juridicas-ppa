@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from analysis_runtime import ANALYSIS_PIPELINE_VERSION
+
 
 def _base_dir() -> Path:
     override = os.getenv("RJ_CACHE_DIR")
@@ -50,6 +52,7 @@ def calcular_job_id(pdf_paths_principal: list, pdf_paths_relacionados: list, ins
     h.update(b"resumida" if versao_resumida else b"completa")
     h.update((model_extracao or "").encode("utf-8", "ignore"))
     h.update((model_relatorio or "").encode("utf-8", "ignore"))
+    h.update(ANALYSIS_PIPELINE_VERSION.encode("ascii"))
     return h.hexdigest()[:20]
 
 

@@ -4,7 +4,8 @@
 O módulo não cria processos nem monitora a máquina continuamente. Ele apenas:
 - limita a quatro análises ativas;
 - divide seis slots de extração entre elas;
-- produz chunks PDF sem rasterizar/recomprimir imagens;
+- produz chunks PDF removendo recursos globais não utilizados;
+- rasteriza apenas uma página isolada que permaneça acima do limite;
 - registra mudanças de etapa e reaproveita extrações por arquivo/faixa de páginas.
 """
 from __future__ import annotations
@@ -26,6 +27,7 @@ from typing import Iterator, Optional
 MAX_ACTIVE_ANALYSES = int(os.getenv("MAX_ACTIVE_ANALYSES", "4"))
 TOTAL_EXTRACTION_WORKERS = int(os.getenv("TOTAL_EXTRACTION_WORKERS", "6"))
 PDF_CHUNK_MAX_MB = float(os.getenv("PDF_CHUNK_MAX_MB", "45"))
+ANALYSIS_PIPELINE_VERSION = "pdf-resources-v2"
 _PDF_PREPARATION_SEMAPHORE = threading.Semaphore(
     max(1, int(os.getenv("PDF_PREPARATION_CONCURRENCY", "2")))
 )
@@ -43,7 +45,7 @@ def _base_dir() -> Path:
 
 BASE_DIR = _base_dir()
 _STATUS_DIR = BASE_DIR / "status"
-_CHUNK_CACHE_DIR = BASE_DIR / "chunks_v1"
+_CHUNK_CACHE_DIR = BASE_DIR / "chunks_v2"
 _RETENTION_DAYS = int(os.getenv("ANALYSIS_CACHE_RETENTION_DAYS", "7"))
 _cleanup_lock = threading.Lock()
 _last_cleanup = 0.0
@@ -280,6 +282,9 @@ class PdfChunk:
     end: int
     total_pages: int
     temporary: bool
+    preparation_mode: str = "original"
+    size_mb: float = 0.0
+    raster_dpi: Optional[int] = None
 
     @property
     def page_start(self) -> int:
@@ -288,6 +293,17 @@ class PdfChunk:
     @property
     def page_end(self) -> int:
         return self.end
+
+    @property
+    def preparation_note(self) -> str:
+        if self.preparation_mode == "page_rasterized":
+            return (
+                f"{self.size_mb:.1f}MB · página excepcional rasterizada "
+                f"a {self.raster_dpi or '?'} DPI"
+            )
+        if self.preparation_mode == "resources_cleaned":
+            return f"{self.size_mb:.1f}MB · recursos compartilhados removidos sem perda"
+        return f"{self.size_mb:.1f}MB · original preservado"
 
 
 class OversizedPdfPageError(RuntimeError):
@@ -299,10 +315,10 @@ def iter_pdf_chunks(
     max_pages: int = 400,
     max_mb: float = PDF_CHUNK_MAX_MB,
 ) -> Iterator[PdfChunk]:
-    """Gera um chunk por vez, bissectando por tamanho sem rasterizar páginas.
+    """Gera chunks seguros, removendo recursos não usados antes de medir.
 
-    ``garbage=4`` e ``deflate=True`` apenas limpam/compactam os streams PDF sem alterar
-    resolução ou qualidade das imagens. Não há conversão das páginas para JPEG.
+    O caminho normal preserva texto, vetores e imagens. Somente uma página isolada
+    que continue maior que o limite é rasterizada, em qualidade progressivamente menor.
     """
     import fitz
 
@@ -315,9 +331,58 @@ def iter_pdf_chunks(
         doc.close()
         raise ValueError(f"PDF sem páginas: {Path(source_path).name}")
 
+    def rasterize_single_page(page_number: int) -> tuple[str, int, float]:
+        attempts = ((180, 85), (144, 78), (108, 70))
+        last_size = 0
+        for dpi, quality in attempts:
+            raster_tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+            raster_path = raster_tmp.name
+            raster_tmp.close()
+            raster_doc = fitz.open()
+            try:
+                source_page = doc[page_number]
+                scale = dpi / 72
+                pix = source_page.get_pixmap(
+                    matrix=fitz.Matrix(scale, scale),
+                    colorspace=fitz.csRGB,
+                    alpha=False,
+                )
+                image = pix.tobytes("jpeg", jpg_quality=quality)
+                target_page = raster_doc.new_page(
+                    width=source_page.rect.width,
+                    height=source_page.rect.height,
+                )
+                target_page.insert_image(target_page.rect, stream=image)
+                raster_doc.save(raster_path, garbage=4, deflate=True)
+            except Exception:
+                try:
+                    os.remove(raster_path)
+                except OSError:
+                    pass
+                raise
+            finally:
+                raster_doc.close()
+
+            last_size = Path(raster_path).stat().st_size
+            if last_size <= limit_bytes:
+                return raster_path, dpi, last_size / 1_048_576
+            try:
+                os.remove(raster_path)
+            except OSError:
+                pass
+
+        raise OversizedPdfPageError(
+            f"A página {page_number + 1} de '{Path(source_path).name}' ainda possui "
+            f"{last_size / 1_048_576:.1f} MB apó limpeza e rasterização "
+            f"(limite seguro: {max_mb:.0f} MB)."
+        )
+
     def produce(start: int, end: int) -> Iterator[PdfChunk]:
         if start == 0 and end == total and total <= max_pages and source_size <= limit_bytes:
-            yield PdfChunk(source_path, source_path, start, end, total, False)
+            yield PdfChunk(
+                source_path, source_path, start, end, total, False,
+                "original", source_size / 1_048_576,
+            )
             return
 
         tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -327,6 +392,8 @@ def iter_pdf_chunks(
             sub = fitz.open()
             try:
                 sub.insert_pdf(doc, from_page=start, to_page=end - 1)
+                for page in sub:
+                    page.clean_contents(sanitize=True)
                 sub.save(tmp_path, garbage=4, deflate=True)
             finally:
                 sub.close()
@@ -334,14 +401,23 @@ def iter_pdf_chunks(
             if size <= limit_bytes:
                 accepted_path = tmp_path
                 tmp_path = ""
-                yield PdfChunk(accepted_path, source_path, start, end, total, True)
+                yield PdfChunk(
+                    accepted_path, source_path, start, end, total, True,
+                    "resources_cleaned", size / 1_048_576,
+                )
                 return
             if end - start <= 1:
-                raise OversizedPdfPageError(
-                    f"A página {start + 1} de '{Path(source_path).name}' ainda possui "
-                    f"{size / 1_048_576:.1f} MB sozinha (limite seguro: {max_mb:.0f} MB). "
-                    "Ela precisa de tratamento manual antes da análise."
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                tmp_path = ""
+                raster_path, raster_dpi, raster_size_mb = rasterize_single_page(start)
+                yield PdfChunk(
+                    raster_path, source_path, start, end, total, True,
+                    "page_rasterized", raster_size_mb, raster_dpi,
                 )
+                return
             middle = start + (end - start) // 2
             yield from produce(start, middle)
             yield from produce(middle, end)
@@ -383,7 +459,10 @@ def _chunk_cache_path(
     model: str,
     namespace: str,
 ) -> Path:
-    identity = f"{namespace}|{source_hash}|{start}|{end}|{model}|v1"
+    identity = (
+        f"{namespace}|{source_hash}|{start}|{end}|{model}|"
+        f"{ANALYSIS_PIPELINE_VERSION}"
+    )
     key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     return _CHUNK_CACHE_DIR / source_hash[:2] / f"{key}.txt"
 

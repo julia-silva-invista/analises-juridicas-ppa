@@ -16,18 +16,19 @@ from collections import defaultdict
 import fitz
 import gradio as gr
 from docx import Document
-from google import genai
 from google.genai import types
 
 from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
 from utils import (
     _retry, _gerar_docx, _responder_pergunta_generica, _get_gemini_clients,
+    _executar_com_failover_gemini,
     _barra_progresso, _filtrar_arquivos_existentes,
     GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO, GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
 )
 from analysis_runtime import (
-    ANALYSIS_MANAGER, file_sha256, iter_pdf_chunks, pdf_preparation_slot,
-    load_chunk_cache, queue_message, record_status, save_chunk_cache,
+    ANALYSIS_MANAGER, cleanup_chunk, file_sha256, iter_pdf_chunks,
+    pdf_preparation_slot, load_chunk_cache, queue_message, record_status,
+    save_chunk_cache,
 )
 from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos, _montar_fonte_rj
 import rj_cache
@@ -92,13 +93,11 @@ def _rj_dividir_pdf(path: str) -> list:
     try:
         with pdf_preparation_slot():
             for chunk in iter_pdf_chunks(path, max_pages=CHUNK_MAX_PAGES_RJ):
-                chunks.append((chunk.path, chunk.start, chunk.total_pages))
+                chunks.append(chunk)
         return chunks
     except Exception:
-        for chunk_path, _offset, _total in chunks:
-            if chunk_path != path:
-                try: os.remove(chunk_path)
-                except OSError: pass
+        for chunk in chunks:
+            cleanup_chunk(chunk)
         raise
 
 
@@ -171,9 +170,6 @@ def _rj_extrair_chunk_fileapi(args) -> tuple:
     except Exception:
         pg_fim = min(offset + CHUNK_MAX_PAGES_RJ, total_pg) if total_pg else "?"
     source_for_upload = chunk_path
-    chunk_mb = Path(chunk_path).stat().st_size / 1_048_576
-    comp_nota = f"{chunk_mb:.1f}MB · original preservado"
-
     ascii_tmp = None
     try:
         source_for_upload.encode("ascii")
@@ -228,7 +224,7 @@ def _rj_extrair_chunk_fileapi(args) -> tuple:
         try: client.files.delete(name=arq.name)
         except Exception: pass
 
-    return idx, resultado, f"File API | {comp_nota}"
+    return idx, resultado, "File API"
 
 
 def _rj_obter_cache(client, model_cons: str) -> Optional[str]:
@@ -376,6 +372,36 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
         return _retry(_fn)
 
 
+def _rj_consolidar_secao_a_com_failover(
+    clients: list,
+    texto_merged: str,
+    instrucoes: str,
+    cache_name,
+    model_cons: str,
+    versao_resumida: bool = False,
+    log: list = None,
+) -> str:
+    def _ao_falhar(indice, proximo, _exc):
+        if log is not None:
+            log.append(
+                f"   Credencial Gemini {indice + 1} recusada ou indisponível; "
+                f"tentando a credencial {proximo + 1}."
+            )
+
+    return _executar_com_failover_gemini(
+        clients,
+        lambda client, indice: _rj_consolidar_secao_a(
+            client,
+            texto_merged,
+            instrucoes,
+            cache_name if indice == 0 else None,
+            model_cons,
+            versao_resumida,
+        ),
+        ao_falhar=_ao_falhar,
+    )
+
+
 def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, cache_name, model_cons: str,
                                 standalone: bool = False, job_id: str = None, runtime_job=None):
     """Extrai e consolida os 'processos relacionados'. GERADOR — durante a extração, produz
@@ -411,15 +437,18 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
         hashes_arquivos_rel = {}
         for path in pdf_paths:
             hashes_arquivos_rel[path] = file_sha256(path)
-            for chunk_path, offset, total in _rj_dividir_pdf(path):
-                todos_chunks_rel.append((chunk_path, offset, total, path))
+            for chunk in _rj_dividir_pdf(path):
+                todos_chunks_rel.append((
+                    chunk.path, chunk.start, chunk.total_pages, path,
+                    chunk.preparation_note,
+                ))
 
         n_rel = len(todos_chunks_rel)
         if n_rel == 0:
             yield "done", ("", "", avisos)
             return
 
-        nomes_arquivos = sorted({Path(p).name for _, _, _, p in todos_chunks_rel})
+        nomes_arquivos = sorted({Path(p).name for _, _, _, p, _ in todos_chunks_rel})
         yield "progress", (
             f"   {n_rel} trecho(s) a extrair de {len(pdf_paths)} processo(s): "
             + ", ".join(nomes_arquivos)
@@ -428,7 +457,7 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
         resultados: dict = {}
 
         def _worker_rel(i):
-            cp, offset, total_pg, original = todos_chunks_rel[i]
+            cp, offset, total_pg, original, preparation_note = todos_chunks_rel[i]
             try:
                 with fitz.open(cp) as _chunk_doc:
                     chunk_end = offset + len(_chunk_doc)
@@ -443,25 +472,39 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
                 return i, cached, "cache por arquivo/páginas"
             if job_id and manifest and manifest["chunks_status_relacionados"].get(str(i)) == "ok":
                 return i, rj_cache.carregar_chunk(job_id, "relacionados", i), "cache"
-            cli = clients[i % len(clients)]
             slot = runtime_job.worker_slot() if runtime_job else nullcontext()
             with slot:
                 record_status(
                     runtime_job, "extraindo_chunk", arquivo=Path(original).name,
                     paginas=f"{offset + 1}-{chunk_end}", chunk=i + 1,
                 )
-                try:
-                    result = _retry(
-                        lambda: _rj_extrair_chunk_fileapi((i, cp, offset, total_pg, n_rel, cli)),
-                        tentativas=2, espera_base=15
-                    )
-                except Exception as e:
-                    msg_e = str(e)
-                    if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                        ri, res, nota = _rj_extrair_chunk((i, cp, offset, total_pg, n_rel, cli))
-                        result = (ri, res, (nota + " | " if nota else "") + "fallback inline")
-                    else:
+                trocas = []
+
+                def _extrair_com(client, _indice):
+                    try:
+                        return _retry(
+                            lambda: _rj_extrair_chunk_fileapi((i, cp, offset, total_pg, n_rel, client)),
+                            tentativas=2, espera_base=15,
+                        )
+                    except Exception as e:
+                        msg_e = str(e)
+                        if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
+                            ri, res, nota = _rj_extrair_chunk((i, cp, offset, total_pg, n_rel, client))
+                            return ri, res, (nota + " | " if nota else "") + "fallback inline"
                         raise
+
+                result = _executar_com_failover_gemini(
+                    clients,
+                    _extrair_com,
+                    indice_inicial=i % len(clients),
+                    ao_falhar=lambda atual, proximo, _exc: trocas.append(
+                        f"credencial Gemini {atual + 1}→{proximo + 1}"
+                    ),
+                )
+                result = (
+                    result[0], result[1],
+                    " | ".join(filter(None, [result[2], preparation_note, *trocas])),
+                )
             save_chunk_cache(
                 source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, cache_namespace, result[1]
             )
@@ -496,18 +539,18 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
                 finally:
                     # Libera o chunk do disco assim que termina, em vez de so no final de
                     # todos os trechos — reduz o pico de uso de disco com PDFs grandes.
-                    cp_done, _, _, orig_done = todos_chunks_rel[i_f]
+                    cp_done, _, _, orig_done, _preparation_note = todos_chunks_rel[i_f]
                     if cp_done != orig_done:
                         try: os.remove(cp_done)
                         except Exception: pass
 
-        for cp, _off, _tot, orig in todos_chunks_rel:
+        for cp, _off, _tot, orig, _preparation_note in todos_chunks_rel:
             if cp != orig:
                 try: os.remove(cp)
                 except: pass
 
         texto_relacionados = ""
-        for i, (_cp, _offset, _total_pg, orig_path) in enumerate(todos_chunks_rel):
+        for i, (_cp, _offset, _total_pg, orig_path, _preparation_note) in enumerate(todos_chunks_rel):
             res = resultados.get(i, "")
             if res:
                 texto_relacionados += f"\n--- {Path(orig_path).name} ---\n{res}"
@@ -564,35 +607,34 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
             "Gere APENAS as secoes de processos relacionados (B.1, B.2, etc.)."
         )
 
-        if cache_name:
-            contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
-            config = types.GenerateContentConfig(cached_content=cache_name)
-            def _fn():
-                return clients[0].models.generate_content(
-                    model=model_cons, contents=contents, config=config
-                ).text
-            try:
-                secao = _retry(_fn)
-            except Exception as e:
-                msg = str(e)
-                if "PERMISSION_DENIED" in msg or "CachedContent not found" in msg or "403" in msg:
-                    with _rj_cache_lock:
-                        _rj_cache_nome.pop(model_cons, None)
-                    conteudo = SYSTEM_PROMPT_RJ + "\n\n" + REPORT_TEMPLATE_RJ + "\n\n" + prompt
-                    def _fn_fallback():
-                        return clients[0].models.generate_content(
-                            model=model_cons, contents=[conteudo]
-                        ).text
-                    secao = _retry(_fn_fallback)
-                else:
-                    raise
-        else:
+        def _consolidar_com(client, indice):
+            if cache_name and indice == 0:
+                contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
+                config = types.GenerateContentConfig(cached_content=cache_name)
+                try:
+                    return _retry(lambda: client.models.generate_content(
+                        model=model_cons, contents=contents, config=config
+                    ).text)
+                except Exception as e:
+                    msg = str(e)
+                    if "PERMISSION_DENIED" in msg or "CachedContent not found" in msg or "403" in msg:
+                        with _rj_cache_lock:
+                            _rj_cache_nome.pop(model_cons, None)
+                    else:
+                        raise
             conteudo = SYSTEM_PROMPT_RJ + "\n\n" + REPORT_TEMPLATE_RJ + "\n\n" + prompt
-            def _fn():
-                return clients[0].models.generate_content(
-                    model=model_cons, contents=[conteudo]
-                ).text
-            secao = _retry(_fn)
+            return _retry(lambda: client.models.generate_content(
+                model=model_cons, contents=[conteudo]
+            ).text)
+
+        secao = _executar_com_failover_gemini(
+            clients,
+            _consolidar_com,
+            ao_falhar=lambda atual, proximo, _exc: avisos.append(
+                f"Credencial Gemini {atual + 1} recusada ou indisponível; "
+                f"usada a credencial {proximo + 1}."
+            ),
+        )
 
         if job_id:
             try:
@@ -942,7 +984,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
         hashes_arquivos[path] = file_sha256(path)
         record_status(runtime_job, "dividindo_pdf", arquivo=nome, tamanho_mb=round(mb_orig, 1))
         chunks = _rj_dividir_pdf(path)
-        total_pg = chunks[0][2] if chunks else 0
+        total_pg = chunks[0].total_pages if chunks else 0
         doc_tmp = fitz.open(path)
         esc = []
         for i, p in enumerate(doc_tmp):
@@ -959,8 +1001,15 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
         log.append(f"   · {nome}: {total_pg} pag. — {info_scan}")
         if len(chunks) > 1:
             log.append(f"     Dividido em {len(chunks)} partes de até {CHUNK_MAX_PAGES_RJ} pag. e 45 MB")
-        for chunk_path, offset, total in chunks:
-            todos_chunks.append((chunk_path, offset, total, path))
+        for chunk in chunks:
+            todos_chunks.append((
+                chunk.path, chunk.start, chunk.total_pages, path,
+                chunk.preparation_note,
+            ))
+            log.append(
+                f"     Páginas {chunk.page_start}-{chunk.page_end}: "
+                f"{chunk.preparation_note}"
+            )
 
     n = len(todos_chunks)
     workers_iniciais = ANALYSIS_MANAGER.worker_cap() if runtime_job else 6
@@ -985,7 +1034,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
         parciais: dict = {}
 
         def _worker_rj(idx):
-            cp, offset, total_pg, original = todos_chunks[idx]
+            cp, offset, total_pg, original, preparation_note = todos_chunks[idx]
             try:
                 with fitz.open(cp) as _chunk_doc:
                     chunk_end = offset + len(_chunk_doc)
@@ -999,25 +1048,39 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
                 return idx, cached, "cache por arquivo/páginas"
             if job_id and manifest and manifest["chunks_status_principal"].get(str(idx)) == "ok":
                 return idx, rj_cache.carregar_chunk(job_id, "principal", idx), "cache"
-            cli = clients[idx % len(clients)]
             slot = runtime_job.worker_slot() if runtime_job else nullcontext()
             with slot:
                 record_status(
                     runtime_job, "extraindo_chunk", arquivo=Path(original).name,
                     paginas=f"{offset + 1}-{chunk_end}", chunk=idx + 1,
                 )
-                try:
-                    result = _retry(
-                        lambda: _rj_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
-                        tentativas=2, espera_base=15
-                    )
-                except Exception as e:
-                    msg_e = str(e)
-                    if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                        ri, res, nota = _rj_extrair_chunk((idx, cp, offset, total_pg, n, cli))
-                        result = (ri, res, (nota + " | " if nota else "") + "fallback inline")
-                    else:
+                trocas = []
+
+                def _extrair_com(client, _indice):
+                    try:
+                        return _retry(
+                            lambda: _rj_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, client)),
+                            tentativas=2, espera_base=15,
+                        )
+                    except Exception as e:
+                        msg_e = str(e)
+                        if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
+                            ri, res, nota = _rj_extrair_chunk((idx, cp, offset, total_pg, n, client))
+                            return ri, res, (nota + " | " if nota else "") + "fallback inline"
                         raise
+
+                result = _executar_com_failover_gemini(
+                    clients,
+                    _extrair_com,
+                    indice_inicial=idx % len(clients),
+                    ao_falhar=lambda atual, proximo, _exc: trocas.append(
+                        f"credencial Gemini {atual + 1}→{proximo + 1}"
+                    ),
+                )
+                result = (
+                    result[0], result[1],
+                    " | ".join(filter(None, [result[2], preparation_note, *trocas])),
+                )
             save_chunk_cache(
                 source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, "rj_principal", result[1]
             )
@@ -1062,7 +1125,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
                     # finally geral), o que agrava a pressao de disco com varias analises
                     # rodando ao mesmo tempo.
                     i_f = futures[future]
-                    cp_done, _, _, orig_done = todos_chunks[i_f]
+                    cp_done, _, _, orig_done, _preparation_note = todos_chunks[i_f]
                     if cp_done != orig_done:
                         try: os.remove(cp_done)
                         except Exception: pass
@@ -1108,8 +1171,14 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
                     "estourar o contexto do modelo)."
                 )
                 texto_para_secao_a = texto_para_secao_a[:LIMITE_CONSOLIDACAO_RJ]
-            secao_a = _rj_consolidar_secao_a(clients[0], texto_para_secao_a, instrucoes, cache, model_cons, versao_resumida)
-            log[-1] = "   Secao A gerada."
+            secao_a = _rj_consolidar_secao_a_com_failover(
+                clients, texto_para_secao_a, instrucoes, cache,
+                model_cons, versao_resumida, log,
+            )
+            if log and log[-1].startswith("   Credencial Gemini"):
+                log.append("   Secao A gerada.")
+            else:
+                log[-1] = "   Secao A gerada."
             if job_id:
                 try:
                     rj_cache.salvar_secao(job_id, "secao_a", secao_a)
@@ -1163,7 +1232,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
         yield "\n".join(log), _erro_completo_relatorio(exc), "", ""
 
     finally:
-        for cp, _, _, orig in todos_chunks:
+        for cp, _, _, orig, _preparation_note in todos_chunks:
             if cp != orig:
                 try: os.remove(cp)
                 except: pass
@@ -1177,9 +1246,12 @@ def rj_gerar_word(relatorio: str):
 
 def rj_responder(pergunta: str, relatorio: str):
     try:
-        k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
-        client = genai.Client(api_key=k1)
-        return _responder_pergunta_generica(pergunta, relatorio, client, GEMINI_MODEL_QA)
+        return _executar_com_failover_gemini(
+            _get_gemini_clients(),
+            lambda client, _indice: _responder_pergunta_generica(
+                pergunta, relatorio, client, GEMINI_MODEL_QA
+            ),
+        )
     except Exception:
         return "❌ Erro:\n\n" + traceback.format_exc()
 
@@ -1192,9 +1264,12 @@ def rj_gerar_checklist(relatorio: str, texto_bruto: str = ""):
     if not relatorio and not texto_bruto:
         return gr.update(value=None, visible=False), "Gere uma análise primeiro."
     try:
-        k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
-        client = genai.Client(api_key=k1)
-        path = gerar_checklist_rj(relatorio, texto_bruto, client, GEMINI_MODEL_ESTRUTURADO)
+        path = _executar_com_failover_gemini(
+            _get_gemini_clients(),
+            lambda client, _indice: gerar_checklist_rj(
+                relatorio, texto_bruto, client, GEMINI_MODEL_ESTRUTURADO
+            ),
+        )
         aviso = _aviso_truncamento(len(relatorio) + len(texto_bruto), LIMITE_TRUNCAMENTO_CHECKLIST)
         return gr.update(value=path, visible=True), "✅ Checklist RJ gerado — clique no arquivo para baixar." + aviso
     except Exception:
@@ -1213,9 +1288,13 @@ def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = "", *campos):
     creditores = [(str(nomes[i]).strip(), str(docs[i]).strip())
                   for i in range(meia) if nomes[i] and str(nomes[i]).strip()]
     try:
-        k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
-        client = genai.Client(api_key=k1)
-        resultado = gerar_checklist_creditos(fonte, client, GEMINI_MODEL_ESTRUTURADO, creditores=creditores or None)
+        resultado = _executar_com_failover_gemini(
+            _get_gemini_clients(),
+            lambda client, _indice: gerar_checklist_creditos(
+                fonte, client, GEMINI_MODEL_ESTRUTURADO,
+                creditores=creditores or None,
+            ),
+        )
         paths = resultado if isinstance(resultado, list) else [resultado]
         if creditores:
             msg = f"✅ {len(paths)} checklist(s) de crédito gerado(s) — um arquivo por credor, clique para baixar."
@@ -1537,13 +1616,21 @@ def rj_gerar_excel_credores(relatorio: str, texto_bruto: str = ""):
     if not fonte:
         return gr.update(value=None, visible=False), "Gere uma análise primeiro."
     try:
-        k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
-        client = genai.Client(api_key=k1)
-        resultado = _extrair_credores_json(fonte, client, GEMINI_MODEL_ESTRUTURADO)
+        def _extrair_com(client, _indice):
+            resultado_local = _extrair_credores_json(
+                fonte, client, GEMINI_MODEL_ESTRUTURADO
+            )
+            credores_local = resultado_local.get("credores", [])
+            if not credores_local and texto_bruto and relatorio.strip() and fonte != relatorio.strip():
+                resultado_local = _extrair_credores_json(
+                    relatorio, client, GEMINI_MODEL_ESTRUTURADO
+                )
+            return resultado_local
+
+        resultado = _executar_com_failover_gemini(
+            _get_gemini_clients(), _extrair_com
+        )
         credores = resultado.get("credores", [])
-        if not credores and texto_bruto and relatorio.strip() and fonte != relatorio.strip():
-            resultado = _extrair_credores_json(relatorio, client, GEMINI_MODEL_ESTRUTURADO)
-            credores = resultado.get("credores", [])
         if not credores:
             return gr.update(value=None, visible=False), "Nenhum credor identificado. Verifique se o QGC consta no PDF."
         path = _gerar_excel_credores(resultado)
