@@ -7,7 +7,6 @@ import os
 import json
 import inspect
 import tempfile
-from pathlib import Path
 
 import gradio as gr
 
@@ -34,22 +33,6 @@ os.makedirs("tmp_pdfs", exist_ok=True)
 # quando a primeira requisicao chega, causando FileNotFoundError no preprocess do gr.File.
 _GRADIO_TEMP_DIR = os.environ.setdefault("GRADIO_TEMP_DIR", os.path.join(tempfile.gettempdir(), "gradio"))
 os.makedirs(_GRADIO_TEMP_DIR, exist_ok=True)
-
-_ASSETS_DIR = Path(__file__).parent / "assets"
-
-
-def _ler_painel_html(nome_arquivo: str) -> str:
-    """Lê o HTML de um painel (Alinhado/Desalinhado) já publicado como Space estático e
-    devolve embrulhado num iframe via srcdoc — mantém o CSS/JS do painel isolado do resto
-    do robô (evita colisão com as regras !important de design.py)."""
-    conteudo = (_ASSETS_DIR / nome_arquivo).read_text(encoding="utf-8")
-    srcdoc = conteudo.replace("&", "&amp;").replace('"', "&quot;")
-    return (
-        f'<iframe srcdoc="{srcdoc}" '
-        'style="width:100%; height:1400px; border:none; border-radius:12px;" '
-        'scrolling="yes"></iframe>'
-    )
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INTERFACE GRADIO
@@ -82,19 +65,15 @@ _FORCE_LIGHT_JS = """
         if (!card || !value || !field) return;
         try {
             const status = JSON.parse(field.value || "{}");
-            card.dataset.status = status.state || "stable";
-            value.textContent = status.label || "Estável";
-            card.title = `${status.active || 0} análise(s) ativa(s) · ${status.waiting || 0} na fila`;
+            const nextState = status.state || "stable";
+            const nextLabel = status.label || "Estável";
+            const nextTitle = `${status.active || 0} análise(s) ativa(s) · ${status.waiting || 0} na fila`;
+            if (card.dataset.status !== nextState) card.dataset.status = nextState;
+            if (value.textContent !== nextLabel) value.textContent = nextLabel;
+            if (card.title !== nextTitle) card.title = nextTitle;
         } catch (_) {}
     };
     applyStatus();
-    new MutationObserver(applyStatus).observe(document.body, {
-        subtree: true,
-        childList: true,
-        characterData: true,
-        attributes: true,
-        attributeFilter: ["value"],
-    });
     window.setInterval(applyStatus, 1000);
 
     // Carrossel de abas — setinhas discretas quando as abas nao cabem na largura da tela.
@@ -541,14 +520,6 @@ with gr.Blocks(
                         label="Dossiê atualizado (passivo)", interactive=False, height=72,
                         elem_classes=["compact-file-output"],
                     )
-
-        # ── Tab 6: Sugestões e Feedbacks ─────────────────────────────────────
-        with gr.Tab("HTMLs"):
-            with gr.Tabs():
-                with gr.Tab("Alinhado"):
-                    gr.HTML(_ler_painel_html("painel_alinhado.html"))
-                with gr.Tab("Desalinhado"):
-                    gr.HTML(_ler_painel_html("painel_desalinhado.html"))
 
     gr.HTML(FOOTER_HTML)
 
