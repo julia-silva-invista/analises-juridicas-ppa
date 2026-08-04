@@ -4,6 +4,7 @@ import re
 import time
 import tempfile
 import threading
+import traceback
 import concurrent.futures
 from pathlib import Path
 from typing import Optional
@@ -14,7 +15,11 @@ from google import genai
 from google.genai import types
 
 from report_template_processos import REPORT_TEMPLATE_INSTRUCTIONS, SYSTEM_PROMPT as SYSTEM_PROMPT_PROC
-from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_proc, _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite, GEMINI_TIMEOUT_MS
+from utils import (
+    _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_proc, _get_gemini_clients,
+    _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite, _filtrar_arquivos_existentes,
+    _SEMAFORO_PROCESSAMENTO_PESADO, GEMINI_TIMEOUT_MS,
+)
 from dossie_ppa import gerar_dossie_word
 
 CHUNK_MAX_PAGES_PROC    = 400
@@ -38,12 +43,24 @@ PROMPT_EXTR_PROC = (
     "pelo tribunal, OU pode ser um processo independente. Extraia o numero do processo se disponivel — "
     "isso sera usado para detectar continuidade na consolidacao. Trate cada fragmento como parte de "
     "um documento continuo; a consolidacao final verificara se sao o mesmo processo ou processos distintos.\n"
+    "REFERENCIA OBRIGATORIA EM TODA INFORMACAO EXTRAIDA: cada pagina do processo tem um identificador "
+    "proprio do sistema do tribunal, estampado no cabecalho/rodape/lateral da pagina — 'fls. NN' (fisico/"
+    "eSAJ), 'Mov. NN' (PJe), 'Evento NN' (Eproc) ou 'ID NNNNNN' (Projudi/outro). Ao extrair QUALQUER dado "
+    "abaixo (nao so andamentos), registre junto o identificador exato da pagina/movimento onde aquele dado "
+    "especifico aparece — nao apenas uma vez no topo do trecho, mas ao lado de cada informacao. Se essa "
+    "referencia nao for capturada agora, ela se perde e nao pode ser reconstruida depois. Nunca invente ou "
+    "estime uma referencia — se nao conseguir ler o identificador da pagina (ex.: digitalizacao ilegivel), "
+    "registre isso explicitamente em vez de adivinhar.\n\n"
     "Extraia e registre COM MAXIMO DETALHE todas as informacoes presentes nestas paginas:\n"
     "- Partes (nomes, CPF/CNPJ, qualidade: exequente, executado, avalista, etc.)\n"
     "- Advogados e OABs\n"
     "- Datas de todos os atos\n"
     "- Valores monetarios (exatamente como constam)\n"
-    "- Indices contratuais: juros remuneratorios, moratorios, correcao monetaria, multa\n"
+    "- Indices contratuais do LASTRO/titulo executivo (contrato, CCB, CPR, CPRF, duplicata): juros "
+    "remuneratorios, moratorios, correcao monetaria, multa — o INDICE OU TAXA que o contrato disciplina,\n"
+    "  nao um valor calculado a partir dele.\n"
+    "- Indices/taxas aplicados em cada planilha de calculo/memoria de debito encontrada (idem: o "
+    "indice/taxa usado no calculo, alem do valor total resultante)\n"
     "- Identificacao dos titulos: numero da CCB, contrato, duplicata, etc.\n"
     "- Garantias e seus detalhes\n"
     "- Assinaturas e representantes\n"
@@ -147,8 +164,11 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
     pg_ini = offset + 1
     pg_fim = min(offset + CHUNK_MAX_PAGES_PROC, total_pg) if total_pg else "?"
 
-    # Comprimir chunk antes do upload; garante <= 40 MB para o File API
-    comp_chunk, orig_mb, comp_mb = _comprimir_pdf_limite(chunk_path, max_mb=40.0)
+    # Comprimir chunk antes do upload — etapa pesada em CPU/RAM (renderiza paginas como
+    # imagem), protegida por semaforo global (utils.py, compartilhado com rj.py) pra nao
+    # rodar N-way em paralelo com outras analises simultaneas e sufocar o container.
+    with _SEMAFORO_PROCESSAMENTO_PESADO:
+        comp_chunk, orig_mb, comp_mb = _comprimir_pdf_limite(chunk_path, max_mb=40.0)
     source_for_upload = comp_chunk
     if comp_chunk != chunk_path:
         comp_nota = f"{orig_mb:.0f}→{comp_mb:.0f}MB"
@@ -320,13 +340,13 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
         return _retry(_fn)
 
 
-def _proc_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: str, cache_name, model_cons: str) -> str:
+def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, cache_name, model_cons: str) -> str:
     """Extrai e consolida processos relacionados, gerando seções B.1, B.2, etc."""
     try:
         texto_relacionados = ""
         for idx, path in enumerate(pdf_paths):
             chunks = _proc_dividir_pdf(path)
-            cli = client1 if idx % 2 == 0 else client2
+            cli = clients[idx % len(clients)]
             for chunk_path, offset, total in chunks:
                 try:
                     _, res, _ = _proc_extrair_chunk((idx, chunk_path, offset, total, len(chunks), cli))
@@ -334,6 +354,13 @@ def _proc_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: 
                         texto_relacionados += f"\n--- {Path(path).name} ---\n{res}"
                 except Exception:
                     pass
+                finally:
+                    # _proc_dividir_pdf grava cada chunk em arquivo temporario e nunca
+                    # limpava — em processos relacionados grandes, isso acumulava disco
+                    # sem necessidade (nem havia um cleanup no final desta funcao).
+                    if chunk_path != path:
+                        try: os.remove(chunk_path)
+                        except Exception: pass
 
         if not texto_relacionados.strip():
             return ""
@@ -355,7 +382,7 @@ def _proc_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: 
             contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
             config = types.GenerateContentConfig(cached_content=cache_name)
             def _fn():
-                return client1.models.generate_content(
+                return clients[0].models.generate_content(
                     model=model_cons, contents=contents, config=config
                 ).text
             try:
@@ -367,7 +394,7 @@ def _proc_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: 
                         _proc_cache_nome.pop(model_cons, None)
                     prompt_full = SYSTEM_PROMPT_PROC + "\n\n" + REPORT_TEMPLATE_INSTRUCTIONS + "\n\n" + prompt
                     def _fn_fallback():
-                        return client1.models.generate_content(
+                        return clients[0].models.generate_content(
                             model=model_cons, contents=[prompt_full]
                         ).text
                     return _retry(_fn_fallback)
@@ -375,7 +402,7 @@ def _proc_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: 
         else:
             prompt_full = SYSTEM_PROMPT_PROC + "\n\n" + REPORT_TEMPLATE_INSTRUCTIONS + "\n\n" + prompt
             def _fn():
-                return client1.models.generate_content(
+                return clients[0].models.generate_content(
                     model=model_cons, contents=[prompt_full]
                 ).text
             return _retry(_fn)
@@ -439,7 +466,22 @@ def _proc_analisar_direto(client, arquivos_gemini: list, instrucoes: str, model_
     return _retry(_fn)
 
 
+def _erro_completo_relatorio_proc(exc: Exception) -> str:
+    """Texto de erro pra aba Relatorio: traceback completo, nao so str(exc) — o Gradio
+    (sem show_error=True) nao mostra nenhum detalhe do erro, entao a unica forma da
+    usuaria ver o motivo real de um "Erro" vermelho e a propria funcao escrever isso
+    num output visivel. Mesmo padrao ja usado em rj.py."""
+    return "❌ ERRO — a análise foi interrompida.\n\n" + traceback.format_exc()
+
+
 def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False, versao_resumida: bool = False):
+    try:
+        yield from _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes, usar_gemini_pro, versao_resumida)
+    except Exception as exc:
+        yield "Erro inesperado — veja o traceback completo na aba Relatório.", _erro_completo_relatorio_proc(exc), "", ""
+
+
+def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro: bool = False, versao_resumida: bool = False):
     if not pdf_files:
         yield "Nenhum arquivo enviado.", "", "", ""
         return
@@ -447,7 +489,7 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
     yield "Iniciando analise de processo judicial...", "", "", ""
 
     try:
-        client1, client2 = _get_clients_proc()
+        clients = _get_gemini_clients()
     except Exception as e:
         yield f"Erro de configuracao: {e}", "", "", ""
         return
@@ -461,6 +503,12 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
         key=_nat_key
     )
     log = []
+    pdf_paths = _filtrar_arquivos_existentes(pdf_paths, log)
+    if not pdf_paths:
+        log.append("\nNenhum dos arquivos enviados pôde ser lido — tente reenviar.")
+        yield "\n".join(log), "", "", ""
+        return
+
     relatorio_state = ""
     model_cons = MODEL_PROC_PRO if usar_gemini_pro else MODEL_PROC_FAST
 
@@ -554,7 +602,7 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
                     _shutil.copy2(chunk_path, tmp_ascii.name)
                     upload_path = tmp_ascii.name
 
-                arq = client1.files.upload(file=upload_path)
+                arq = clients[0].files.upload(file=upload_path)
                 # Polling com backoff: 1s→2s→3s→4s→4s..., teto de 120s no total
                 total_wait = 0
                 wait_time = 1
@@ -565,7 +613,7 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
                         break
                     time.sleep(wait_time)
                     total_wait += wait_time
-                    arq = client1.files.get(name=arq.name)
+                    arq = clients[0].files.get(name=arq.name)
                     wait_time = min(wait_time + 1, 4)
                 arquivos_gemini.append(arq)
                 log[-1] = f"   Arquivo {idx}/{len(todos_chunks)} pronto."
@@ -573,7 +621,7 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
 
             log.append("\nGerando relatorio...")
             yield "\n".join(log), "", "", ""
-            relatorio = _proc_analisar_direto(client1, arquivos_gemini, instrucoes, model_cons, versao_resumida)
+            relatorio = _proc_analisar_direto(clients[0], arquivos_gemini, instrucoes, model_cons, versao_resumida)
 
         else:
             # Modo chunked via File API — 4 workers, leitura nativa de PDF
@@ -585,7 +633,7 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
 
             def _worker_proc(idx):
                 cp, offset, total_pg, _ = todos_chunks[idx]
-                cli = client1 if idx % 2 == 0 else client2
+                cli = clients[idx % len(clients)]
                 try:
                     return _retry(
                         lambda: _proc_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
@@ -614,6 +662,14 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
                     except Exception as e:
                         i_f = futures[future]
                         log.append(f"   Erro no chunk {i_f+1}: {e}")
+                    finally:
+                        # Libera o chunk do disco assim que termina (sucesso ou erro), em
+                        # vez de esperar a analise inteira acabar — reduz pico de disco.
+                        i_f = futures[future]
+                        cp_done, _, _, orig_done = todos_chunks[i_f]
+                        if cp_done != orig_done:
+                            try: os.remove(cp_done)
+                            except Exception: pass
                     yield "\n".join(log), "", "", ""
 
             t_extr = int(time.time() - t_inicio)
@@ -627,7 +683,7 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
             else:
                 log.append("\nConfigurando cache para consolidacao...")
                 yield "\n".join(log), "", "", ""
-                cache = _proc_obter_cache(client1, model_cons)
+                cache = _proc_obter_cache(clients[0], model_cons)
                 log[-1] = "Cache configurado." if cache else "Cache nao disponivel — usando prompt completo."
             yield "\n".join(log), "", "", ""
 
@@ -641,14 +697,14 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
                 f"[PARTE {i+1}]" + (f" — arquivo: {nomes_por_chunk[i]}" if multi_arquivo else "") + f"\n{t}"
                 for i, t in enumerate(lista) if t and t.strip()
             )
-            relatorio = _proc_consolidar(client1, lista, instrucoes, cache, model_cons, versao_resumida, nomes_por_chunk)
+            relatorio = _proc_consolidar(clients[0], lista, instrucoes, cache, model_cons, versao_resumida, nomes_por_chunk)
 
         # Processos relacionados
         if pdf_relacionados:
             pdf_paths_rel = [f.name if hasattr(f, "name") else str(f) for f in pdf_relacionados]
             log.append(f"\nProcessando {len(pdf_paths_rel)} processo(s) relacionado(s)...")
             yield "\n".join(log), "", "", ""
-            secao_rel = _proc_processar_relacionados(pdf_paths_rel, client1, client2, instrucoes, cache, model_cons)
+            secao_rel = _proc_processar_relacionados(pdf_paths_rel, clients, instrucoes, cache, model_cons)
             if secao_rel:
                 relatorio = relatorio + "\n\n" + secao_rel
             log[-1] = "   Processos relacionados analisados." if secao_rel else "   Nenhuma informacao relevante nos processos relacionados."
@@ -660,8 +716,8 @@ def proc_analisar(pdf_files, pdf_relacionados, instrucoes: str, usar_gemini_pro:
         yield "\n".join(log), relatorio, relatorio_state, texto_merged
 
     except Exception as exc:
-        log.append(f"\nErro: {exc}")
-        yield "\n".join(log), f"Erro:\n{exc}", "", ""
+        log.append("\nErro — veja o traceback completo na aba Relatório.")
+        yield "\n".join(log), _erro_completo_relatorio_proc(exc), "", ""
 
     finally:
         for cp, _, _, orig in todos_chunks:
@@ -693,8 +749,8 @@ def proc_gerar_dossie(relatorio: str, extracao: str = ""):
         # de consolidação para reduzir omissões e preservar a fundamentação.
         caminho = gerar_dossie_word(extracao or "", relatorio or "", client, MODEL_PROC_PRO)
         yield gr.update(value=caminho, visible=True), "✅ Dossiê gerado — clique no arquivo para baixar."
-    except Exception as e:
-        yield gr.update(value=None, visible=False), f"❌ Erro ao gerar dossiê: {e}"
+    except Exception:
+        yield gr.update(value=None, visible=False), "❌ Erro ao gerar dossiê:\n\n" + traceback.format_exc()
 
 
 def proc_responder(pergunta: str, relatorio: str):
@@ -702,8 +758,8 @@ def proc_responder(pergunta: str, relatorio: str):
         k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=k1, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
         return _responder_pergunta_generica(pergunta, relatorio, client, MODEL_PROC_CONS)
-    except Exception as e:
-        return f"Erro: {e}"
+    except Exception:
+        return "❌ Erro:\n\n" + traceback.format_exc()
 
 
 

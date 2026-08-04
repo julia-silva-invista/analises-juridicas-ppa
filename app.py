@@ -155,14 +155,12 @@ with gr.Blocks(
                         label="Processo principal",
                         file_types=[".pdf", ".PDF"],
                         file_count="multiple",
-                        elem_classes=["equal-input-box", "upload-equal-panel"],
                     )
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
                     proc_pdf_relacionados = gr.File(
                         label="Processos relacionados (opcional)",
                         file_types=[".pdf", ".PDF"],
                         file_count="multiple",
-                        elem_classes=["equal-input-box", "upload-equal-panel"],
                     )
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
                     with gr.Group(elem_classes=["instructions-with-gemini"]):

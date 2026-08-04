@@ -19,7 +19,11 @@ from google import genai
 from google.genai import types
 
 from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
-from utils import _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite
+from utils import (
+    _retry, _gerar_docx, _responder_pergunta_generica, _get_clients_rj, _get_gemini_clients,
+    _barra_progresso, _comprimir_pdf, _comprimir_pdf_limite, _filtrar_arquivos_existentes,
+    _SEMAFORO_PROCESSAMENTO_PESADO,
+)
 from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos
 import rj_cache
 
@@ -34,19 +38,6 @@ COMPRESSAO_PRE_MB_RJ  = 50   # só pré-comprime se puder caber no modo direto
 LIMITE_TRUNCAMENTO_CHECKLIST = 900_000   # mesmo limite usado em checklist_rj._extrair
 LIMITE_TRUNCAMENTO_CREDORES  = 150_000   # mesmo limite usado em _extrair_credores_json
 LIMITE_CONSOLIDACAO_RJ       = 3_000_000  # teto de seguranca p/ nao estourar contexto do modelo
-
-
-def _filtrar_arquivos_existentes(paths: list, log: list) -> list:
-    """Remove da lista qualquer arquivo que tenha sumido do disco entre o upload e o
-    processamento (ex.: limpeza do /tmp do container) — evita que o processamento inteiro
-    trave com um FileNotFoundError cru por causa de UM arquivo problemático."""
-    existentes = []
-    for p in paths:
-        if Path(p).exists():
-            existentes.append(p)
-        else:
-            log.append(f"   ⚠️ '{Path(p).name}' não encontrado após o upload (tente reenviar este arquivo).")
-    return existentes
 
 
 def _aviso_truncamento(tamanho: int, limite: int) -> str:
@@ -70,6 +61,15 @@ PROMPT_RJ = (
     "um documento continuo; a consolidacao final verificara se sao o mesmo processo ou processos distintos.\n"
     "Extraia COM MAXIMO DETALHE todas as informacoes presentes nestas paginas.\n"
     "Para paginas escaneadas: aplique OCR visual completo.\n\n"
+    "REFERENCIA OBRIGATORIA EM TODA INFORMACAO EXTRAIDA: cada pagina do processo tem um identificador "
+    "proprio do sistema do tribunal, estampado no cabecalho/rodape/lateral da pagina — 'fls. NN' (fisico/"
+    "eSAJ), 'Mov. NN' (PJe), 'Evento NN' (Eproc) ou 'ID NNNNNN' (Projudi/outro). Ao extrair QUALQUER dado "
+    "(valor, data, indice, nome, garantia, andamento, clausula contratual etc.), registre junto o "
+    "identificador exato da pagina/movimento onde aquele dado especifico aparece — nao apenas uma vez no "
+    "topo do trecho, mas ao lado de cada informacao. Se essa referencia nao for capturada agora, ela se "
+    "perde e nao pode ser reconstruida depois. Nunca invente ou estime uma referencia — se nao conseguir "
+    "ler o identificador da pagina (ex.: digitalizacao ilegivel), registre isso explicitamente em vez de "
+    "adivinhar.\n\n"
     "Cubra TODOS os itens encontrados:\n"
     "- Recuperandos (nome, CPF/CNPJ, papel)\n"
     "- Administrador Judicial\n"
@@ -171,8 +171,12 @@ def _rj_extrair_chunk_fileapi(args) -> tuple:
     pg_ini = offset + 1
     pg_fim = min(offset + CHUNK_MAX_PAGES_RJ, total_pg) if total_pg else "?"
 
-    # Comprimir chunk antes do upload (acontece em paralelo nos workers)
-    comp_chunk, orig_mb, comp_mb = _comprimir_pdf_limite(chunk_path, max_mb=40.0)
+    # Comprimir chunk antes do upload — etapa pesada em CPU/RAM (renderiza paginas como
+    # imagem), protegida por semaforo global (utils.py) pra nao rodar N-way em paralelo com
+    # outras analises simultaneas e sufocar o container. O upload/chamada a Gemini (I/O)
+    # roda fora da trava, livre pra paralelizar.
+    with _SEMAFORO_PROCESSAMENTO_PESADO:
+        comp_chunk, orig_mb, comp_mb = _comprimir_pdf_limite(chunk_path, max_mb=40.0)
     source_for_upload = comp_chunk
     if comp_chunk != chunk_path:
         comp_nota = f"{orig_mb:.0f}→{comp_mb:.0f}MB"
@@ -383,7 +387,7 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
         return _retry(_fn)
 
 
-def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: str, cache_name, model_cons: str,
+def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, cache_name, model_cons: str,
                                 standalone: bool = False, job_id: str = None):
     """Extrai e consolida os 'processos relacionados'. GERADOR — durante a extração, produz
     ("progress", linha_de_log) a cada trecho concluído (qual processo, X/N trechos); ao final,
@@ -436,7 +440,7 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
             cp, offset, total_pg, _ = todos_chunks_rel[i]
             if job_id and manifest and manifest["chunks_status_relacionados"].get(str(i)) == "ok":
                 return i, rj_cache.carregar_chunk(job_id, "relacionados", i), "cache"
-            cli = client1 if i % 2 == 0 else client2
+            cli = clients[i % len(clients)]
             try:
                 return _retry(
                     lambda: _rj_extrair_chunk_fileapi((i, cp, offset, total_pg, n_rel, cli)),
@@ -475,6 +479,13 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
                 except Exception as e:
                     avisos.append(f"Aviso: nao foi possivel extrair um trecho de '{nome_arq}' ({e}) — pode faltar informacao desse processo.")
                     yield "progress", f"   {nome_arq} — trecho {i_f+1}/{n_rel}: erro ({e}) | {concluidos}/{n_rel} concluidos"
+                finally:
+                    # Libera o chunk do disco assim que termina, em vez de so no final de
+                    # todos os trechos — reduz o pico de uso de disco com PDFs grandes.
+                    cp_done, _, _, orig_done = todos_chunks_rel[i_f]
+                    if cp_done != orig_done:
+                        try: os.remove(cp_done)
+                        except Exception: pass
 
         for cp, _off, _tot, orig in todos_chunks_rel:
             if cp != orig:
@@ -543,7 +554,7 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
             contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
             config = types.GenerateContentConfig(cached_content=cache_name)
             def _fn():
-                return client1.models.generate_content(
+                return clients[0].models.generate_content(
                     model=model_cons, contents=contents, config=config
                 ).text
             try:
@@ -555,7 +566,7 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
                         _rj_cache_nome.pop(model_cons, None)
                     conteudo = SYSTEM_PROMPT_RJ + "\n\n" + REPORT_TEMPLATE_RJ + "\n\n" + prompt
                     def _fn_fallback():
-                        return client1.models.generate_content(
+                        return clients[0].models.generate_content(
                             model=model_cons, contents=[conteudo]
                         ).text
                     secao = _retry(_fn_fallback)
@@ -564,7 +575,7 @@ def _rj_processar_relacionados(pdf_paths: list, client1, client2, instrucoes: st
         else:
             conteudo = SYSTEM_PROMPT_RJ + "\n\n" + REPORT_TEMPLATE_RJ + "\n\n" + prompt
             def _fn():
-                return client1.models.generate_content(
+                return clients[0].models.generate_content(
                     model=model_cons, contents=[conteudo]
                 ).text
             secao = _retry(_fn)
@@ -612,7 +623,7 @@ def _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes: str, us
     yield "Iniciando analise dos processos relacionados (sem RJ principal)...", "", "", ""
 
     try:
-        client1, client2 = _get_clients_rj()
+        clients = _get_gemini_clients()
     except Exception as e:
         yield f"Erro de configuracao: {e}", "", "", ""
         return
@@ -652,7 +663,7 @@ def _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes: str, us
     try:
         secao_rel, texto_bruto, avisos = "", "", []
         for kind, payload in _rj_processar_relacionados(
-            pdf_paths_rel, client1, client2, instrucoes, cache_name=None, model_cons=model_cons,
+            pdf_paths_rel, clients, instrucoes, cache_name=None, model_cons=model_cons,
             standalone=True, job_id=job_id,
         ):
             if kind == "progress":
@@ -736,7 +747,7 @@ def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados
         return
 
     try:
-        client1, client2 = _get_clients_rj()
+        clients = _get_gemini_clients()
     except Exception as e:
         yield f"Erro de configuracao: {e}", "", "", ""
         return
@@ -766,7 +777,7 @@ def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados
 
     secao_rel, texto_bruto_rel, avisos = "", "", []
     for kind, payload in _rj_processar_relacionados(
-        pdf_paths_rel, client1, client2, instrucoes, cache_name=None, model_cons=model_cons,
+        pdf_paths_rel, clients, instrucoes, cache_name=None, model_cons=model_cons,
         standalone=False, job_id=job_id,
     ):
         if kind == "progress":
@@ -832,7 +843,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_ge
     yield "Iniciando analise de Recuperacao Judicial...", "", "", ""
 
     try:
-        client1, client2 = _get_clients_rj()
+        clients = _get_gemini_clients()
     except Exception as e:
         yield f"Erro de configuracao: {e}", "", "", ""
         return
@@ -948,7 +959,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_ge
             cp, offset, total_pg, _ = todos_chunks[idx]
             if job_id and manifest and manifest["chunks_status_principal"].get(str(idx)) == "ok":
                 return idx, rj_cache.carregar_chunk(job_id, "principal", idx), "cache"
-            cli = client1 if idx % 2 == 0 else client2
+            cli = clients[idx % len(clients)]
             try:
                 return _retry(
                     lambda: _rj_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, cli)),
@@ -988,6 +999,17 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_ge
                 except Exception as e:
                     i_f = futures[future]
                     log.append(f"   Erro no chunk {i_f+1}: {e}")
+                finally:
+                    # Libera o arquivo do chunk do disco assim que ele termina (sucesso ou
+                    # erro) — sem isso, todos os chunks de um PDF grande ficavam ocupando
+                    # disco simultaneamente ate o fim da analise inteira (so limpos no
+                    # finally geral), o que agrava a pressao de disco com varias analises
+                    # rodando ao mesmo tempo.
+                    i_f = futures[future]
+                    cp_done, _, _, orig_done = todos_chunks[i_f]
+                    if cp_done != orig_done:
+                        try: os.remove(cp_done)
+                        except Exception: pass
                 yield "\n".join(log), "", "", ""
 
         t_extr_s = int(time.time() - t_extr)
@@ -1006,7 +1028,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_ge
         # Cache
         log.append(f"\nConfigurando context cache ({model_cons})...")
         yield "\n".join(log), "", "", ""
-        cache = _rj_obter_cache(client1, model_cons)
+        cache = _rj_obter_cache(clients[0], model_cons)
         log[-1] = "Cache configurado." if cache else "Cache nao disponivel — usando prompt completo."
         yield "\n".join(log), "", "", ""
 
@@ -1029,7 +1051,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_ge
                     "estourar o contexto do modelo)."
                 )
                 texto_para_secao_a = texto_para_secao_a[:LIMITE_CONSOLIDACAO_RJ]
-            secao_a = _rj_consolidar_secao_a(client1, texto_para_secao_a, instrucoes, cache, model_cons, versao_resumida)
+            secao_a = _rj_consolidar_secao_a(clients[0], texto_para_secao_a, instrucoes, cache, model_cons, versao_resumida)
             log[-1] = "   Secao A gerada."
             if job_id:
                 try:
@@ -1046,7 +1068,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", usar_ge
             yield "\n".join(log), "", "", ""
             secao_rel, texto_bruto_rel, avisos_rel = "", "", []
             for kind, payload in _rj_processar_relacionados(
-                pdf_paths_rel, client1, client2, instrucoes, cache, model_cons, job_id=job_id
+                pdf_paths_rel, clients, instrucoes, cache, model_cons, job_id=job_id
             ):
                 if kind == "progress":
                     log.append(payload)

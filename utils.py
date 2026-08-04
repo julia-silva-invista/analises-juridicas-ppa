@@ -3,6 +3,7 @@ import os
 import re
 import time
 import tempfile
+import threading
 from pathlib import Path
 
 import fitz
@@ -18,29 +19,61 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 # 10 min cobre folgado ate a consolidacao; acima disso e hang de verdade.
 GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "600000"))
 
+# Trava global de processamento pesado de PDF (compressao/OCR via PyMuPDF) — compartilhada
+# entre rj.py e processos.py. Nao limita quantas analises rodam ao mesmo tempo (isso e o
+# concurrency_limit do Gradio); limita só quantos CHUNKS podem estar sendo comprimidos/
+# renderizados em CPU/RAM ao mesmo tempo no container inteiro, independente de quantas
+# analises/abas dispararam esse trabalho. A espera pela resposta da Gemini (I/O, nao CPU)
+# NAO passa por essa trava — só a etapa de compressao, que é o gargalo real de recurso.
+LIMITE_PROCESSAMENTO_PESADO = int(os.getenv("LIMITE_PROCESSAMENTO_PESADO_PDF", "6"))
+_SEMAFORO_PROCESSAMENTO_PESADO = threading.Semaphore(LIMITE_PROCESSAMENTO_PESADO)
 
-def _get_clients_rj():
+
+def _get_gemini_clients() -> list:
+    """Lê GEMINI_API_KEY_1, _2, _3, ... (nesta ordem, sem pular número) e devolve um
+    client por chave configurada — permite espalhar carga entre N contas/projetos Google
+    distintos (cada um com sua própria cota), em vez de fixar em 2. GEMINI_API_KEY (sem
+    sufixo) é o fallback legado só pra chave 1."""
+    http_opts = types.HttpOptions(timeout=GEMINI_TIMEOUT_MS)
+    chaves = []
     k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
-    k2 = os.getenv("GEMINI_API_KEY_2") or k1
     if not k1:
         raise RuntimeError("GEMINI_API_KEY_1 não configurada.")
-    http_opts = types.HttpOptions(timeout=GEMINI_TIMEOUT_MS)
-    return (
-        genai.Client(api_key=k1, http_options=http_opts),
-        genai.Client(api_key=k2, http_options=http_opts),
-    )
+    chaves.append(k1)
+    n = 2
+    while True:
+        k = os.getenv(f"GEMINI_API_KEY_{n}")
+        if not k:
+            break
+        chaves.append(k)
+        n += 1
+    return [genai.Client(api_key=k, http_options=http_opts) for k in chaves]
+
+
+def _get_clients_rj():
+    """Mantido por compatibilidade — usa só as 2 primeiras chaves (client1, client2)."""
+    clients = _get_gemini_clients()
+    return clients[0], (clients[1] if len(clients) > 1 else clients[0])
 
 
 def _get_clients_proc():
-    k1 = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
-    k2 = os.getenv("GEMINI_API_KEY_2") or k1
-    if not k1:
-        raise RuntimeError("GEMINI_API_KEY_1 não configurada.")
-    http_opts = types.HttpOptions(timeout=GEMINI_TIMEOUT_MS)
-    return (
-        genai.Client(api_key=k1, http_options=http_opts),
-        genai.Client(api_key=k2, http_options=http_opts),
-    )
+    """Mantido por compatibilidade — usa só as 2 primeiras chaves (client1, client2)."""
+    clients = _get_gemini_clients()
+    return clients[0], (clients[1] if len(clients) > 1 else clients[0])
+
+
+def _filtrar_arquivos_existentes(paths: list, log: list) -> list:
+    """Remove da lista qualquer arquivo que tenha sumido do disco entre o upload e o
+    processamento (ex.: limpeza do /tmp do container) — evita que o processamento inteiro
+    trave com um FileNotFoundError cru por causa de UM arquivo problemático."""
+    existentes = []
+    for p in paths:
+        if Path(p).exists():
+            existentes.append(p)
+        else:
+            log.append(f"   ⚠️ '{Path(p).name}' não encontrado após o upload (tente reenviar este arquivo).")
+    return existentes
+
 
 def _retry(fn, tentativas=5, espera_base=20):
     for t in range(1, tentativas + 1):

@@ -504,11 +504,28 @@ NÃO invente números, nomes ou datas. Responda SOMENTE com o JSON, sem texto ad
 As regras de referência/siglas/status acima (antes deste parágrafo) valem para TODOS os campos abaixo.
 
 ═══ REGRA 2 — CAMPOS QUE DEVEM SER PREENCHIDOS ═══
-- Índices de Correção do Contrato (ind_*): busque no título executivo (CCB/contrato/duplicata) e na
-  petição inicial — correção monetária, juros remuneratórios, juros moratórios, multa, capitalização.
-- Planilha Inicial (plan_*): a memória de cálculo que instruiu a petição inicial.
-- Última Memória de Cálculo (memoria_*): a memória de débito MAIS RECENTE juntada aos autos
-  (data da juntada, total atualizado, data-base, índices aplicados, ponderações).
+- Índices de Correção do Contrato (ind_*): fonte é SEMPRE o LASTRO/TÍTULO EXECUTIVO em si — o
+  contrato, CCB, CPR, CPRF, duplicata etc. que disciplina a dívida. Esses instrumentos costumam
+  estar digitalizados/escaneados no INÍCIO do processo (aplique OCR visual se necessário) — NÃO
+  extraia esses campos de petições, decisões ou outras peças processuais, mesmo que elas
+  mencionem os índices de passagem; a fonte é sempre a cláusula contratual que os disciplina.
+  Cada campo (ind_cm/ind_jr/ind_jm/ind_multa/ind_cap) é o ÍNDICE OU A TAXA que o contrato prevê
+  — nunca um valor em R$. Exemplos corretos: "IPCA" (ind_cm), "1% ao mês" (ind_jr), "1% ao mês"
+  (ind_jm), "2% sobre o débito" (ind_multa), "capitalização mensal/anual" (ind_cap). Se o contrato
+  não disciplinar algum desses itens, deixe "" — nunca infira um valor calculado como se fosse o
+  índice.
+- Planilha Inicial (plan_*): fonte é a PRIMEIRA memória de cálculo/planilha que instruiu a petição
+  inicial (a que embasou o valor da causa). Mesma regra de conteúdo dos campos ind_*: cada campo
+  (plan_cm/plan_jr/plan_multa/plan_cap) deve trazer o ÍNDICE OU A TAXA que essa planilha efetivamente
+  aplicou no cálculo (ex.: "INPC", "1,5% ao mês", "10% sobre o débito") — NUNCA o valor em R$
+  resultante do cálculo (isso NÃO é o que se quer aqui). "plan_ponderacoes" é o único campo de
+  texto livre deste bloco (ex.: alguma ressalva ou observação sobre a planilha).
+- Última Memória de Cálculo (memoria_*): a memória de débito GENUINAMENTE mais recente JUNTADA
+  aos autos — confira a data de juntada de cada memória de cálculo encontrada no processo e use
+  a de data MAIS RECENTE, não a que aparecer por último na leitura ou a mais citada. Aqui sim
+  "memoria_total" é o valor em R$ total atualizado (é o objetivo deste bloco: qual o débito
+  atualizado segundo o cálculo mais recente) e "memoria_indices" descreve os índices/taxas que
+  essa memória aplicou.
 - Liste TODOS os embargos à execução, TODAS as exceções/objeções de pré-executividade e TODOS os
   recursos que aparecerem (não apenas o primeiro). No campo "tipo" de cada defesa informe
   "Embargos à Execução" ou "Exceção de Pré-Executividade".
@@ -598,8 +615,8 @@ campo "data" as datas das tentativas e no campo "fls" as páginas correspondente
       "lastro": "CCB nº / Contrato nº (fls.)", "data_emissao": "DD/MM/AAAA (fls.)", "data_vencimento": "DD/MM/AAAA (fls.)",
       "assinaturas": "Nomes (fls.)", "garantia": "descrição da garantia (fls.)",
       "status_processo": "ex: em fase de penhora (Mov.)",
-      "ind_cm": "correção monetária (fls.)", "ind_jr": "juros remuneratórios (fls.)", "ind_jm": "juros moratórios (fls.)", "ind_multa": "multa (fls.)", "ind_cap": "capitalização (fls.)",
-      "plan_cm": "(fls.)", "plan_jr": "(fls.)", "plan_multa": "(fls.)", "plan_cap": "(fls.)", "plan_ponderacoes": "(fls.)",
+      "ind_cm": "índice do CONTRATO/lastro, ex: IPCA (fls.)", "ind_jr": "taxa do CONTRATO, ex: 1% ao mês (fls.)", "ind_jm": "taxa do CONTRATO, ex: 1% ao mês (fls.)", "ind_multa": "percentual do CONTRATO, ex: 2% (fls.)", "ind_cap": "ex: mensal/anual, conforme o CONTRATO (fls.)",
+      "plan_cm": "índice aplicado na PLANILHA INICIAL, ex: INPC (fls.) — nunca o valor em R$", "plan_jr": "taxa aplicada na planilha, ex: 1,5% ao mês (fls.)", "plan_multa": "percentual aplicado na planilha, ex: 10% (fls.)", "plan_cap": "ex: mensal/anual (fls.)", "plan_ponderacoes": "(fls.)",
       "memoria_data_juntada": "DD/MM/AAAA (fls.)", "memoria_total": "R$ ... (fls.)", "memoria_data_base": "DD/MM/AAAA",
       "memoria_indices": "índices aplicados (fls.)", "memoria_ponderacoes": "",
       "citacoes": [{"executado": "Nome", "modalidade": "AR/OJ/Edital ou Pendente", "data": "data citação OU datas das tentativas", "fls": "fls. citação OU fls. das tentativas"}],
