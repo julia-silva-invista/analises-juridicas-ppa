@@ -318,9 +318,59 @@ body,
     padding: 0 8px !important;
     margin-top: 0 !important;
     display: flex !important;
-    flex-wrap: wrap !important;
-    overflow: visible !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scroll-behavior: smooth !important;
     row-gap: 4px !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+}
+
+.tab-nav::-webkit-scrollbar {
+    display: none !important;
+    height: 0 !important;
+}
+
+/* Carrossel de abas — setinhas discretas que aparecem só quando há mais abas pra rolar
+   naquela direção (ver JS em HEADER_HTML). O wrapper (pai de .tab-nav) precisa de
+   position:relative pra ancorar as setas nas pontas — isso é aplicado via JS também. */
+.tab-nav-arrow {
+    position: absolute !important;
+    top: 0 !important;
+    bottom: 1px !important;
+    width: 28px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border: none !important;
+    cursor: pointer !important;
+    font-size: 18px !important;
+    line-height: 1 !important;
+    color: rgba(55, 58, 54, 0.55) !important;
+    background: linear-gradient(90deg, #FCFCFA 0%, #FCFCFA 55%, rgba(252, 252, 250, 0) 100%) !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transition: opacity 0.15s ease, color 0.15s ease !important;
+    z-index: 5 !important;
+}
+
+.tab-nav-arrow:hover {
+    color: var(--invista-orange) !important;
+}
+
+.tab-nav-arrow.is-visible {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+}
+
+.tab-nav-arrow--prev {
+    left: 0 !important;
+}
+
+.tab-nav-arrow--next {
+    right: 0 !important;
+    background: linear-gradient(270deg, #FCFCFA 0%, #FCFCFA 55%, rgba(252, 252, 250, 0) 100%) !important;
 }
 
 .tab-nav button {
@@ -1544,11 +1594,13 @@ button[title*="copy"] {
     min-height: clamp(280px, 28vw, 350px) !important;
     max-height: clamp(280px, 28vw, 350px) !important;
     border-radius: 16px !important;
-    overflow: visible !important;
+    overflow: hidden !important;
 }
 
 /* A lista de arquivos enviados (file-preview) precisa rolar internamente quando há vários
-   arquivos — "overflow: visible" aqui fazia a lista vazar pra fora da caixa de upload. */
+   arquivos — o painel (.upload-equal-panel, acima) agora usa "overflow: hidden" pra bater
+   com esse "overflow-y: auto" do filho; antes o painel tinha "overflow: visible" e a lista
+   vazava pra fora da caixa de upload. */
 .upload-equal-panel .file-preview,
 .upload-equal-panel .file-preview-holder {
     width: 100% !important;
@@ -2004,43 +2056,12 @@ HEADER_HTML = """
     </aside>
   </div>
 </div>
-<script>
-(() => {
-  const applyStatus = () => {
-    const selected = document.querySelector('button[role="tab"][aria-selected="true"]');
-    const label = (selected?.textContent || "").trim().toLowerCase();
-    const unstable = label.includes("feedback") || label.includes("datajud");
-    const card = document.querySelector(".inv-status-card");
-    const value = document.querySelector(".inv-status-value");
-    if (!card || !value) return;
-    card.dataset.status = unstable ? "instability" : "operational";
-    value.textContent = unstable ? "Instabilidade" : "Operacional";
-  };
-  applyStatus();
-  document.addEventListener("click", (event) => {
-    if (event.target.closest('button[role="tab"]')) setTimeout(applyStatus, 80);
-  });
-  document.addEventListener("dblclick", (event) => {
-    const tab = event.target?.closest?.('button[role="tab"], button, .tab-nav button');
-    const label = (tab?.textContent || "").trim().toLowerCase();
-    if (!label.includes("feedback")) return;
-    const download = () => {
-      const root = document.querySelector('#feedback-secret-download');
-      const trigger = root?.querySelector?.('a[download], a[href], button') || root;
-      trigger?.click?.();
-    };
-    download();
-    window.setTimeout(download, 180);
-    window.setTimeout(download, 600);
-  });
-  new MutationObserver(applyStatus).observe(document.body, {
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["aria-selected"],
-  });
-})();
-</script>
 """
+# NOTA: a logica de status/carrossel de abas NAO fica num <script> aqui dentro — HTML
+# inserido via innerHTML (que e como gr.HTML() renderiza isso) nunca executa <script>
+# tags, em nenhum navegador (confirmado: mesmo o script antigo que só vivia aqui nunca
+# rodava de fato). Essa logica agora mora em app.py, passada via `js=` do gr.Blocks —
+# o unico mecanismo do Gradio que realmente executa JS no carregamento da pagina.
 
 
 FOOTER_HTML = '<div class="inv-footer">Invista — Análises Jurídicas · Uso interno restrito</div>'

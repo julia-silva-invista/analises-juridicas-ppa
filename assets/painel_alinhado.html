@@ -1,0 +1,2977 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel Deals — Análise Prévia e Recuperação Judicial</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #F7F6F3; --surface: #FFFFFF; --surface-alt: #F2F1EE;
+  --border: #E4E2DC; --border-strong: #C8C5BC;
+  --text-primary: #1A1916; --text-secondary: #5C5A54; --text-muted: #9A9890;
+  --accent: #1A56A0; --accent-bg: #EBF1FA; --accent-text: #1A4A8A;
+  --success: #1A7A4A; --success-bg: #E8F5EE;
+  --warning: #8A5C00; --warning-bg: #FDF3DC;
+  --danger: #A0251A; --danger-bg: #FAEAE8;
+  --purple: #5B21B6; --purple-bg: #EDE9FE;
+  --radius: 6px; --radius-lg: 10px;
+}
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text-primary); font-size: 13px; line-height: 1.5; min-height: 100vh; }
+
+/* Header */
+.app-header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 2rem; display: flex; align-items: center; justify-content: space-between; height: 52px; position: sticky; top: 0; z-index: 100; }
+.app-logo { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.app-logo span { color: var(--text-muted); font-weight: 400; }
+.logo-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+
+/* Upload screen */
+#screen-upload { max-width: 920px; margin: 4rem auto; padding: 0 1.5rem; }
+.upload-intro { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.1rem 1.25rem; margin-bottom: 1.35rem; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+.upload-kicker { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+.upload-heading { font-size: 15px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; line-height: 1.3; }
+.upload-sub { font-size: 12px; color: var(--text-muted); line-height: 1.55; max-width: 720px; }
+
+/* API key block */
+.apikey-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+.apikey-label { font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.apikey-label svg { color: var(--purple); }
+.apikey-input { width: 100%; padding: 7px 10px; border-radius: var(--radius); border: 1px solid var(--border-strong); font-size: 12px; font-family: monospace; color: var(--text-primary); background: var(--surface-alt); }
+.apikey-input:focus { outline: none; border-color: var(--accent); }
+.apikey-hint { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+
+.upload-slots { display: flex; flex-direction: column; gap: 10px; margin-bottom: 1.5rem; }
+.upload-slot { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: 0; cursor: pointer; transition: border-color .15s; }
+.slot-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; width: 100%; }
+.upload-slot:hover { border-color: var(--accent); }
+.upload-slot.filled { border-color: var(--success); background: var(--success-bg); }
+.upload-slot input[type=file] { display: none; }
+.slot-left { display: flex; align-items: center; gap: 10px; }
+.slot-icon { width: 34px; height: 34px; border-radius: var(--radius); background: var(--surface-alt); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.upload-slot.filled .slot-icon { background: var(--success-bg); border-color: #9ed4b8; }
+.slot-label { font-size: 12px; font-weight: 500; }
+.slot-hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.upload-slot.filled .slot-hint { color: var(--success); }
+.slot-badge { font-size: 11px; font-weight: 500; padding: 3px 8px; border-radius: 4px; }
+.slot-badge.pending { background: var(--surface-alt); color: var(--text-muted); border: 1px solid var(--border); }
+.slot-badge.done { background: var(--success-bg); color: var(--success); }
+.btn-primary { width: 100%; padding: 10px; border-radius: var(--radius); font-size: 13px; font-weight: 500; background: var(--accent); color: #fff; border: none; cursor: pointer; font-family: inherit; transition: background .12s; }
+.btn-primary:hover { background: #174d92; }
+.btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+.slot-url { width: 100%; margin-top: 10px; padding: 6px 8px; border-radius: var(--radius); border: 1px dashed var(--border-strong); font-size: 11px; font-family: inherit; color: var(--text-secondary); background: var(--surface); display: none; box-sizing: border-box; }
+.upload-slot.filled .slot-url { display: block; }
+.slot-url::placeholder { color: var(--text-muted); }
+.slot-url:focus { outline: none; border-color: var(--accent); border-style: solid; }
+
+/* Painel screen */
+#screen-painel { display: none; }
+.top-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 8px 2rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: nowrap; }
+.top-bar-left-group { display:flex; align-items:center; gap:10px; min-width:0; flex-shrink:0; }
+.top-bar-left { font-size: 12px; color: var(--text-muted); max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.panel-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:nowrap; min-width:0; overflow-x:auto; scrollbar-width:thin; padding-bottom:1px; }
+.btn-back { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: var(--radius); font-size: 12px; font-weight: 500; border: 1px solid var(--border-strong); color: var(--text-secondary); background: var(--surface); cursor: pointer; font-family: inherit; }
+.btn-back:hover { background: var(--surface-alt); }
+.btn-dl { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: var(--radius); font-size: 12px; font-weight: 500; border: 1px solid var(--border-strong); color: var(--text-secondary); background: var(--surface); cursor: pointer; text-decoration: none; white-space: nowrap; font-family: inherit; }
+.btn-dl:hover { background: var(--surface-alt); color: var(--text-primary); }
+.btn-dl-primary { border-color: var(--accent); color: var(--accent-text); background: var(--accent-bg); }
+.btn-dl-primary:hover { background: #d4e6f7; }
+.container { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+/* Deal header */
+.deal-header { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1.25rem 1.5rem; margin-bottom: 1.25rem; display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.deal-kicker { font-size: 10px; font-weight: 600; color: var(--accent-text); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+.deal-title { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
+.deal-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+.deal-pill { font-size: 11px; font-weight: 500; color: var(--text-secondary); background: var(--surface-alt); border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; }
+.dl-group { display: flex; gap: 8px; flex-wrap: nowrap; }
+.editable-field { outline: 1px dashed #8FB2DA; outline-offset: 2px; border-radius: 3px; background: rgba(235,241,250,.38); cursor: text; }
+.editable-field:focus { outline: 2px solid var(--accent); background: var(--surface); }
+.party-list { display:flex; flex-direction:column; gap:4px; }
+.party-line { display:block; }
+
+/* Tabs */
+.tabs-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.tabs-nav { display: flex; border-bottom: 1px solid var(--border); padding: 0 1.5rem; overflow-x: auto; }
+.tab-btn { padding: 12px 16px; font-size: 12px; font-weight: 500; color: var(--text-muted); border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color .12s; display: flex; align-items: center; gap: 6px; font-family: inherit; white-space: nowrap; flex-shrink: 0; }
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-btn.ai-tab.active { color: var(--purple); border-bottom-color: var(--purple); }
+.tab-panel { display: none; padding: 1.5rem; }
+.tab-panel.active { display: block; }
+
+/* Sections */
+.section-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--text-muted); margin: 1.5rem 0 .75rem; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+
+/* Busca e filtros da tabela de Matrículas */
+.table-search { display: flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 5px 10px; color: var(--text-muted); min-width: 220px; }
+.table-search input { border: none; outline: none; background: none; font-size: 12px; font-family: inherit; color: var(--text-primary); width: 100%; }
+.table-search input::placeholder { color: var(--text-muted); }
+.filter-control { width: 100%; padding: 7px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); font: inherit; font-size: 11px; color: var(--text-primary); }
+.filter-control:focus { outline: none; border-color: #7D8388; box-shadow: 0 0 0 3px rgba(48,53,58,.08); }
+.asset-filters { display: grid; grid-template-columns: minmax(250px,1.5fr) repeat(2,minmax(145px,.75fr)); gap: 8px; margin-bottom: 1rem; align-items: center; }
+@media (max-width: 620px) { .asset-filters { grid-template-columns: 1fr; } }
+.section-title:first-child { margin-top: 0; }
+
+/* Grids & Fields */
+.grid   { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 1rem; }
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 1rem; }
+.grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 1rem; }
+.grid-4-fixed { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 1rem; }
+.field-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: .7rem .9rem; box-shadow: 0 1px 3px rgba(23,25,27,.08); }
+@media (max-width: 700px) { .grid-4-fixed { grid-template-columns: repeat(2, 1fr); } }
+.field { display: flex; flex-direction: column; gap: 3px; }
+.field label { font-size: 10px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: .05em; }
+.field .val { font-size: 13px; font-weight: 500; }
+.field .val.prose { font-weight: 400; line-height: 1.6; }
+
+/* Cards */
+.card { background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1rem 1.25rem; margin-bottom: .75rem; min-width: 0; box-shadow: 0 1px 3px rgba(23,25,27,.08); }
+.card-title { font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+.cards-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 1rem; }
+.stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: .875rem 1.25rem; box-shadow: 0 1px 3px rgba(23,25,27,.08); }
+.stat-card .stat-label { font-size: 10px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+.stat-card .stat-val { font-size: 16px; font-weight: 600; }
+
+/* Caixinhas de estatística centralizadas (mesmo padrão do Desalinhados) —
+   usadas no cartão de Passivo preferencial. */
+.subcard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.stat-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: .9rem 1rem; text-align: center; min-width: 0; box-shadow: 0 1px 3px rgba(23,25,27,.08); }
+.stat-box .stat-box-label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+.stat-box .stat-box-val { font-size: 16px; font-weight: 600; color: var(--text-primary); overflow-wrap: normal; }
+.stat-box .stat-box-sub { font-size: 12px; font-weight: 500; color: var(--text-primary); margin-top: 4px; }
+.passivo-highlight { min-height: 96px; display: flex; flex-direction: column; justify-content: center; border-color: #D7DBDE; background: linear-gradient(180deg,#FFFFFF 0%,#F8F9F9 100%); }
+.passivo-highlight .stat-box-label { font-size: 11px; color: #687077; }
+.passivo-highlight .stat-box-val { font-size: 19px; font-weight: 750; }
+
+/* KV rows */
+.kv-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--border); gap: 1rem; }
+.kv-row:last-child { border-bottom: none; }
+.kv-row .kv-label { font-size: 12px; color: var(--text-secondary); flex-shrink: 0; }
+.kv-row .kv-val, .checklist-row .kv-val { font-size: 12px; font-weight: 500; text-align: right; }
+.kv-row .kv-val-long { text-align: justify; text-justify: inter-word; }
+
+/* Risk */
+.risk-block { background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1rem 1.25rem; margin-bottom: 1rem; }
+.risk-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); margin-bottom: 4px; }
+.risk-text { font-size: 13px; color: var(--text-primary); }
+.risk-block.risk-success { background: var(--success-bg); border-color:#B7DEC8; }
+.risk-block.risk-success .risk-label, .risk-block.risk-success .risk-text { color:var(--success); }
+.risk-block.risk-warning { background: var(--warning-bg); border-color:#E8D5A3; }
+.risk-block.risk-warning .risk-label, .risk-block.risk-warning .risk-text { color:var(--warning); }
+.risk-block.risk-danger { background: var(--danger-bg); border-color:#F0C0BC; }
+.risk-block.risk-danger .risk-label, .risk-block.risk-danger .risk-text { color:var(--danger); }
+.risk-block.risk-neutral { background: var(--surface-alt); border-color:var(--border); }
+
+/* Caixa de destaque azul (info) — ex.: Resumo do caso */
+.info-block { background: var(--accent-bg); border: 1px solid #c5d9f0; border-radius: var(--radius-lg); padding: 1rem 1.25rem; margin-bottom: 1rem; }
+.info-block .risk-label, .info-block .card-title { color: var(--accent-text); }
+.info-block .risk-text, .info-block .val { color: var(--accent-text); text-align: justify; text-justify: inter-word; }
+
+/* Ícone à esquerda do título do card */
+.card-title-icon { width: 13px; height: 13px; flex-shrink: 0; opacity: .65; vertical-align: -2px; margin-right: 5px; }
+.card-title { display: flex; align-items: center; }
+
+/* Uma parte (nome + advogados) em card branco próprio, dentro do card
+   cinza de Exequente(s)/Executado(s) — mesmo padrão do painel Desalinhados. */
+.party-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: .8rem 1rem; margin-bottom: 8px; }
+.party-card:last-child { margin-bottom: 0; }
+.party-card .parte-nome { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.party-card .parte-adv { font-size: 11px; color: var(--accent-text); line-height: 1.6; }
+
+/* Checklist */
+.checklist-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--border); gap: 1rem; }
+.checklist-row:last-child { border-bottom: none; }
+.checklist-label { font-size: 12px; color: var(--text-secondary); }
+.badge { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.badge.success { background: var(--success-bg); color: var(--success); }
+.badge.warning { background: var(--warning-bg); color: var(--warning); }
+.badge.accent  { background: var(--accent-bg);  color: var(--accent-text); }
+.icon { width: 14px; height: 14px; vertical-align: -2px; flex-shrink: 0; }
+
+/* Utilitários de célula, usados em qualquer .mini-table */
+.td-mono { font-weight: 600; }
+.td-desc, .td-onus { color: var(--text-secondary); text-align: justify !important; text-justify: inter-word; }
+.td-num  { text-align: right; font-weight: 500; white-space: nowrap; }
+.td-saldo-pos { text-align: right; font-weight: 600; color: var(--success); white-space: nowrap; }
+.td-saldo-neg { text-align: right; font-weight: 600; color: var(--danger); white-space: nowrap; }
+.mat-link { display: inline; font-weight: 600; color: var(--accent-text); text-decoration: none; }
+.mat-link:hover { text-decoration: underline; }
+
+/* Tabelas compactas (Lastros / Garantias) — layout fixo para nunca precisar de
+   rolagem horizontal: o navegador distribui a largura entre as colunas e o
+   conteúdo quebra linha em vez de forçar a tabela a ficar mais larga. */
+.mini-table-wrap { border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 1rem; }
+.mini-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+.mini-table th { text-align: center; vertical-align: middle; padding: 8px 10px; font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; background: var(--surface-alt); border-bottom: 1px solid var(--border); }
+.mini-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; text-align: center; line-height: 1.5; overflow-wrap: normal; word-break: normal; }
+.mini-table tbody tr:nth-child(even) td { background: rgba(242,241,238,.48); }
+.mini-table tr:last-child td { border-bottom: none; }
+.mini-table tr:hover td { background: var(--accent-bg); }
+.mini-table summary { cursor: pointer; font-size: 11px; color: var(--accent-text); }
+.mini-table details[open] summary { color: var(--text-secondary); }
+.mini-table .mt-detail { margin-top: 6px; font-size: 11px; color: var(--text-secondary); font-weight: 400; }
+.mini-table.compact { font-size: 11px; }
+.ver-detail-btn { display: block; margin-top: 4px; padding: 0; border: none; background: none; font-size: 11px; color: var(--accent-text); cursor: pointer; font-family: inherit; text-align: right; width: 100%; }
+#ativos-tbody .ver-detail-btn { text-align: center; }
+.ver-detail-btn:hover { text-decoration: underline; }
+
+/* Popup de detalhes (ex.: Ônus vigentes) */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 1.5rem; }
+.modal-box { background: var(--surface); border-radius: var(--radius-lg); max-width: 560px; width: 100%; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+.modal-close { background: none; border: none; font-size: 20px; line-height: 1; color: var(--text-muted); cursor: pointer; padding: 0 4px; }
+.modal-close:hover { color: var(--text-primary); }
+.modal-body { padding: 1.25rem; overflow-y: auto; font-size: 12px; }
+.assets-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 1rem; }
+.asset-stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: .75rem 1rem; box-shadow: 0 1px 3px rgba(23,25,27,.08); }
+.asset-stat .as-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin-bottom: 4px; }
+.asset-stat .as-val   { font-size: 15px; font-weight: 600; }
+
+/* ── Análise IA ── */
+.ai-header { display: flex; align-items: center; gap: 10px; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
+.ai-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px; background: var(--purple-bg); color: var(--purple); }
+.ai-model { font-size: 11px; color: var(--text-muted); }
+
+.ai-section { margin-bottom: 1.5rem; }
+.ai-section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); margin-bottom: .75rem; display: flex; align-items: center; gap: 6px; }
+.ai-prose { font-size: 13px; line-height: 1.75; color: var(--text-primary); white-space: pre-wrap; }
+
+.ai-risk-item { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.ai-risk-item:last-child { border-bottom: none; }
+.ai-risk-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+.ai-risk-dot.high   { background: var(--danger); }
+.ai-risk-dot.medium { background: var(--warning); }
+.ai-risk-dot.low    { background: var(--success); }
+.ai-risk-text { font-size: 12px; line-height: 1.6; color: var(--text-primary); }
+
+.ai-flag { background: var(--warning-bg); border: 1px solid #E8D5A3; border-radius: var(--radius-lg); padding: .875rem 1rem; margin-bottom: .625rem; display: flex; gap: 10px; }
+.ai-flag-icon { font-size: 14px; flex-shrink: 0; line-height: 1.5; }
+.ai-flag-text { font-size: 12px; line-height: 1.6; color: var(--text-primary); }
+
+.ai-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3rem 1rem; gap: 1rem; color: var(--text-muted); }
+.ai-spinner { width: 28px; height: 28px; border: 2px solid var(--border); border-top-color: var(--purple); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.ai-loading-text { font-size: 12px; }
+
+.ai-error { background: var(--danger-bg); border: 1px solid #F0C0BC; border-radius: var(--radius-lg); padding: 1rem 1.25rem; font-size: 12px; color: var(--danger); }
+.ai-empty { text-align: center; padding: 3rem 1rem; color: var(--text-muted); font-size: 13px; }
+
+.ai-regenerate { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: var(--radius); font-size: 11px; font-weight: 500; border: 1px solid var(--border-strong); color: var(--text-secondary); background: var(--surface); cursor: pointer; font-family: inherit; margin-top: 1rem; }
+.ai-regenerate:hover { background: var(--surface-alt); }
+
+/* ── Q&A ── */
+.qa-wrap { border-top: 1px solid var(--border); margin-top: 1.5rem; padding-top: 1.5rem; }
+.qa-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+.qa-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+.qa-meta { font-size: 11px; color: var(--text-muted); }
+.qa-cost-warn { background: var(--warning-bg); border: 1px solid #E8D5A3; border-radius: var(--radius); padding: 6px 10px; font-size: 11px; color: var(--warning); display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.qa-messages { display: flex; flex-direction: column; gap: 10px; margin-bottom: 1rem; min-height: 0; }
+.qa-msg { display: flex; flex-direction: column; gap: 3px; }
+.qa-msg-user { align-items: flex-end; }
+.qa-msg-assistant { align-items: flex-start; }
+.qa-bubble { max-width: 85%; padding: 8px 12px; border-radius: 10px; font-size: 12px; line-height: 1.6; }
+.qa-bubble-user { background: var(--accent); color: #fff; border-radius: 10px 10px 2px 10px; }
+.qa-bubble-assistant { background: var(--surface-alt); border: 1px solid var(--border); color: var(--text-primary); border-radius: 10px 10px 10px 2px; white-space: pre-wrap; }
+.qa-bubble-thinking { background: var(--surface-alt); border: 1px dashed var(--border-strong); color: var(--text-muted); border-radius: 10px; font-style: italic; display: flex; align-items: center; gap: 8px; }
+.qa-input-row { display: flex; gap: 8px; }
+.qa-input { flex: 1; padding: 8px 12px; border-radius: var(--radius); border: 1px solid var(--border-strong); font-size: 12px; font-family: inherit; color: var(--text-primary); background: var(--surface); resize: none; line-height: 1.5; }
+.qa-input:focus { outline: none; border-color: var(--accent); }
+.qa-send { padding: 8px 16px; border-radius: var(--radius); font-size: 12px; font-weight: 500; background: var(--accent); color: #fff; border: none; cursor: pointer; font-family: inherit; white-space: nowrap; flex-shrink: 0; }
+.qa-send:hover { background: #174d92; }
+.qa-send:disabled { opacity: .4; cursor: not-allowed; }
+.qa-clear { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: var(--radius); font-size: 11px; font-weight: 500; border: 1px solid var(--border-strong); color: var(--danger); background: var(--surface); cursor: pointer; font-family: inherit; }
+.qa-clear:hover { background: var(--danger-bg); }
+
+@media (max-width: 760px) { .top-bar { padding:8px 1rem; align-items:flex-start; flex-direction:column; } .top-bar-left-group { width:100%; } .panel-actions { width:100%; justify-content:flex-start; } }
+@media (max-width: 600px) { .container { padding: 1rem; } .tabs-nav { overflow-x: auto; padding: 0 .75rem; } .tab-panel { padding: 1rem; } }
+
+
+/* ══ Refinamentos solicitados — alinhamento com o Painel Desalinhados ═════ */
+:root {
+  --toolbar-dark: #30353A;
+  --toolbar-dark-hover: #202428;
+}
+body { background:#F2F3F4; }
+.app-header { height:56px; box-shadow:0 1px 0 rgba(23,25,27,.03); }
+.top-bar { position:sticky; top:56px; z-index:90; background:var(--surface); box-shadow:0 1px 0 rgba(23,25,27,.03); }
+.panel-actions { margin-left:auto; }
+.container { max-width:1040px; }
+.deal-header, .tabs-wrap { box-shadow:0 2px 9px rgba(23,25,27,.035); }
+
+/* Barra de ações: documentos, edição e exportação na mesma linha. */
+.toolbar-btn {
+  height:34px; min-height:34px; display:inline-flex; align-items:center; justify-content:center;
+  gap:6px; padding:6px 10px; border-radius:7px; border:1px solid var(--border-strong);
+  background:var(--surface); color:var(--text-secondary); font-family:inherit;
+  font-size:11.5px; font-weight:600; line-height:1; text-decoration:none;
+  white-space:nowrap; cursor:pointer; transition:background .12s,border-color .12s,color .12s;
+}
+.toolbar-btn:hover { background:var(--surface-alt); color:var(--text-primary); border-color:#92989D; }
+.toolbar-btn-primary { background:var(--toolbar-dark); border-color:var(--toolbar-dark); color:#fff; }
+.toolbar-btn-primary:hover { background:var(--toolbar-dark-hover); color:#fff; }
+.toolbar-btn.is-disabled { opacity:.42; pointer-events:none; cursor:not-allowed; }
+.toolbar-btn .icon { width:13px; height:13px; }
+.dl-group, .panel-actions { display:flex; align-items:center; gap:8px; flex-wrap:nowrap; }
+
+/* Modo de edição. */
+.edit-status { display:none; align-items:center; gap:7px; font-size:11px; color:var(--warning); background:var(--warning-bg); border:1px solid #E2D09C; padding:5px 9px; border-radius:999px; }
+.edit-mode .edit-status { display:inline-flex; }
+.edit-mode [contenteditable="true"] { outline:1px dashed #8FB2DA; outline-offset:2px; border-radius:3px; background:rgba(235,241,250,.38); cursor:text; }
+.edit-mode [contenteditable="true"]:focus { outline:2px solid var(--accent); background:var(--surface); }
+
+/* Tabelas: alinhamento central, vertical no meio e zebrado discreto. */
+.mini-table th, .mini-table td { text-align:center; vertical-align:middle; }
+.mini-table tbody tr:nth-child(even) td { background:#FAFAF9; }
+.mini-table .td-num, .mini-table .td-saldo-pos, .mini-table .td-saldo-neg, .mini-table .td-mono { text-align:center; }
+.mini-table .td-desc, .mini-table .td-onus {
+  text-align:justify !important; text-justify:inter-word; hyphens:auto; vertical-align:middle;
+}
+#ativos-tbody td:nth-child(4), #cr-garantias-container td:nth-child(4), #p-imoveis-container td:nth-child(5),
+#cr-lastros-container td:nth-child(1), #cr-lastros-container td:nth-child(2),
+#p-processos-container td:nth-child(2), #p-processos-container td:nth-child(3) {
+  text-align:justify !important; text-justify:inter-word; hyphens:auto;
+}
+.modal-body { text-align:justify; text-justify:inter-word; }
+.party-list { width:100%; display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:8px; }
+.party-line {
+  display:flex; align-items:center; justify-content:center; text-align:justify; text-justify:inter-word;
+  background:var(--surface-alt); border:1px solid var(--border); border-radius:var(--radius);
+  padding:10px 12px; min-height:64px; font-weight:500; line-height:1.4; word-break:normal; overflow-wrap:break-word;
+  box-shadow: 0 1px 3px rgba(23,25,27,.08);
+}
+/* Uma única caixa (sem dividir por parte) — usada em Devedor(es)/Garantidor(es). */
+.party-box { background:var(--surface-alt); border:1px solid var(--border); border-radius:var(--radius); padding:10px 12px; text-align:justify; text-justify:inter-word; box-shadow: 0 1px 3px rgba(23,25,27,.08); }
+.party-box .party-box-line { padding:3px 0; }
+.subcard { background:var(--surface-alt); border:1px solid var(--border); border-radius:var(--radius); padding:.7rem .9rem; box-shadow: 0 1px 3px rgba(23,25,27,.08); }
+.subcard-title { font-size:10px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
+
+/* SOP e SAT em destaque moderado. */
+.cards-row .stat-card { min-height:64px; padding:.9rem 1rem; display:flex; flex-direction:column; justify-content:center; text-align:center; border-color:#D7DBDE; background:linear-gradient(180deg,#FFFFFF 0%,#F8F9F9 100%); box-shadow: 0 1px 3px rgba(23,25,27,.08); }
+.cards-row .stat-card .stat-val { font-size:16px; }
+
+/* Modal de senha de edição. */
+.edit-access-box { max-width:520px; }
+.edit-access-body { padding:1.35rem 1.4rem 1.45rem; }
+.edit-access-copy { margin:0 0 1rem; color:var(--text-secondary); font-size:13px; line-height:1.65; }
+.edit-access-label { display:block; margin-bottom:6px; color:var(--text-secondary); font-size:11px; font-weight:650; text-transform:uppercase; letter-spacing:.045em; }
+.edit-access-input { width:100%; padding:10px 12px; border:1px solid var(--border-strong); border-radius:var(--radius); background:var(--surface); color:var(--text-primary); font-family:inherit; font-size:13px; outline:none; }
+.edit-access-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(26,86,160,.10); }
+.edit-access-error { display:none; margin-top:7px; color:var(--danger); font-size:11px; }
+.edit-access-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:1rem; }
+.edit-access-actions .toolbar-btn { min-width:92px; }
+
+@media (max-width:900px) {
+  .top-bar { overflow-x:auto; }
+  .top-bar-left-group { display:none; }
+  .panel-actions { width:max-content; min-width:max-content; justify-content:flex-start; }
+  .toolbar-btn { padding:6px 8px; font-size:10.5px; }
+}
+
+
+/* ══ v3 — Compatibilização visual com o Painel Desalinhados ══════════════════
+   Mesma escala, paleta, tipografia, justificação e hierarquia de cartões do
+   index (7). Nenhuma alteração de conteúdo: apenas apresentação.            */
+
+/* Escala visual padrão: equivalente a 75% de zoom do navegador. */
+html { zoom: 0.75; }
+@supports not (zoom: 1) {
+  html { transform: scale(0.75); transform-origin: top left; width: 133.3334%; min-height: 133.3334%; }
+}
+
+:root {
+  --bg:#F2F3F4; --surface:#FFFFFF; --surface-alt:#F6F6F5;
+  --border:#E0E2E4; --border-strong:#BFC3C7;
+  --text-primary:#17191B; --text-secondary:#555B60; --text-muted:#8B9196;
+  --accent:#30353A; --accent-bg:#EEF0F1; --accent-text:#252A2E;
+  --brand:#24538C; --brand-soft:#EDF3FB;
+  --success:#1C7048; --success-bg:#E9F4EE;
+  --warning:#876000; --warning-bg:#FBF2DB;
+  --danger:#A3342A; --danger-bg:#F9EAE8;
+  --purple:#5B3A8D; --purple-bg:#F0EBF7;
+  --popup-blue:#163A63; --popup-blue-hover:#0F2D4F;
+  --radius:7px; --radius-lg:12px;
+}
+body { background:var(--bg); color:var(--text-primary); letter-spacing:.002em; }
+.logo-dot { background:var(--brand); }
+.app-logo { letter-spacing:.01em; }
+
+/* Números sempre alinhados coluna a coluna. */
+.stat-val, .stat-box-val, .stat-box-sub, .as-val, .td-num, .td-saldo-pos, .td-saldo-neg,
+.kv-val, .field .val { font-variant-numeric: tabular-nums; }
+
+/* ── Tela de upload ── */
+#screen-upload { max-width:720px; margin:2.75rem auto 4rem; }
+.upload-intro { padding:1.35rem 1.45rem; border:1px solid var(--border); border-radius:16px;
+  background:linear-gradient(135deg,#FFFFFF 0%,#F7F8F9 100%); box-shadow:0 8px 26px rgba(23,25,27,.055); }
+.upload-kicker { font-size:11px; font-weight:650; text-transform:none; letter-spacing:.035em; color:var(--text-muted); margin-bottom:8px; }
+.upload-heading { font-size:26px; font-weight:700; line-height:1.15; letter-spacing:-.02em; color:#161A1E; margin-bottom:12px; text-wrap:balance; }
+.upload-sub { max-width:none; margin-bottom:0; font-size:13px; line-height:1.7; text-align:justify; color:var(--text-secondary); }
+.apikey-label { font-size:12px; font-weight:600; text-transform:none; letter-spacing:normal; color:var(--text-primary); }
+.upload-slot { border-width:1.5px; box-shadow:0 1px 2px rgba(23,25,27,.025); }
+.upload-slot:hover { border-color:#8E9499; box-shadow:0 4px 14px rgba(23,25,27,.055); }
+.upload-slot.filled { border-color:var(--success); }
+.btn-primary { min-height:38px; background:var(--accent); }
+.btn-primary:hover { background:#202428; }
+
+/* ── Barra superior alinhada à largura do conteúdo ── */
+.container { max-width:1360px; }
+.top-bar { padding:8px max(1rem,calc((100vw - 1360px)/2 + 1.5rem)); box-shadow:0 1px 0 rgba(23,25,27,.025); }
+
+/* ── Cabeçalho do deal ── */
+.deal-header { min-height:118px; padding:1.35rem 1.55rem 1.3rem; align-items:center;
+  background:linear-gradient(120deg,#FFFFFF 0%,#FAFAFA 100%); box-shadow:0 2px 8px rgba(23,25,27,.035); }
+.deal-kicker { font-size:9px; font-weight:800; letter-spacing:.13em; color:var(--text-muted); margin-bottom:7px; }
+.deal-title { max-width:1120px; font-size:21px; line-height:1.27; font-weight:720; letter-spacing:-.018em; margin-bottom:0; text-wrap:balance; }
+.deal-meta { gap:7px; margin-top:10px; }
+.deal-pill { display:inline-flex; align-items:center; min-height:23px; padding:3px 8px; border-radius:999px;
+  background:#F7F7F6; border:1px solid var(--border); color:var(--text-secondary); font-size:10.5px; font-weight:600; }
+
+/* ── Abas: largura igual, ícone acima do rótulo ── */
+.tabs-wrap { box-shadow:0 2px 10px rgba(23,25,27,.035); }
+.tabs-nav { background:#FCFCFC; padding:0 6px; overflow:visible; }
+.tab-btn { flex:1 1 0; min-width:0; flex-direction:column; justify-content:center; gap:3px;
+  padding:10px 4px; font-size:12px; line-height:1.18; white-space:normal; text-align:center; }
+.tab-btn.active, .tab-btn.ai-tab.active { color:var(--popup-blue); border-bottom-color:var(--popup-blue); }
+.tab-panel { padding:1.65rem; }
+
+/* ── Cartões e caixas: sombra discreta e uniforme ── */
+.card, .subcard, .stat-card, .stat-box, .asset-stat, .field-box, .party-card, .party-line, .party-box {
+  box-shadow:0 1px 2px rgba(23,25,27,.025); }
+.section-title { color:#73797E; }
+
+/* Números-chave da análise prévia (SOP/SAT) com o peso do painel Desalinhados. */
+#tab-previa .cards-row .stat-card { min-height:78px; }
+#tab-previa .cards-row .stat-card .stat-label { font-size:10px; letter-spacing:.06em; }
+#tab-previa .cards-row .stat-card .stat-val { font-size:22px; font-weight:700; letter-spacing:-.01em; line-height:1.2; }
+#p-sat { color:var(--brand); }
+
+/* Caixa de destaque (Resumo do caso) no mesmo azul institucional. */
+.info-block { background:var(--brand-soft); border-color:#C5D9F0; }
+.info-block .risk-label, .info-block .card-title { color:var(--brand); }
+.info-block .risk-text, .info-block .val { color:var(--brand); }
+
+/* Texto corrido justificado, como no painel Desalinhados. */
+.ai-prose, .field .val.prose, .risk-text, .modal-body { text-align:justify; text-justify:inter-word; hyphens:auto; }
+.ai-risk-text, .ai-flag-text { text-align:justify; hyphens:auto; }
+
+/* Tabelas. */
+.mini-table th { padding:8px 10px; font-size:10px; border-bottom:2px solid var(--border-strong); }
+.mini-table td { padding:8px 10px; }
+.mini-table tbody tr:nth-child(even) td { background:#FAFAFA; }
+.mini-table tr:hover td { background:var(--surface-alt); }
+.mini-table.compact { font-size:11px; }
+.mini-table.compact th { font-size:9.5px; line-height:1.35; }
+.ver-detail-btn { display:block; width:max-content; margin-top:6px; color:var(--popup-blue); font-weight:650; text-decoration:underline; }
+.ver-detail-btn:hover { color:var(--popup-blue-hover); }
+#ativos-tbody .ver-detail-btn { margin-left:auto; margin-right:auto; }
+.mat-link { color:var(--popup-blue); font-weight:650; }
+
+/* Popups. */
+.modal-box { max-width:760px; max-height:86vh; }
+.modal-body { padding:1.4rem 1.5rem; }
+.edit-access-box { max-width:520px; }
+.edit-access-input:focus { border-color:var(--popup-blue); box-shadow:0 0 0 3px rgba(22,58,99,.10); }
+
+/* Foco visível e consistente nos controles. */
+.toolbar-btn:focus-visible, .btn-back:focus-visible, .btn-primary:focus-visible,
+.tab-btn:focus-visible, .filter-control:focus-visible, .qa-send:focus-visible {
+  outline:2px solid var(--popup-blue); outline-offset:2px; }
+
+/* Modo de edição. */
+.edit-mode [contenteditable="true"] { outline:1px dashed #B58A29; background:transparent; }
+.edit-mode [contenteditable="true"]:focus { outline:2px solid #B58A29; background:#FFFCF2; }
+.editable-field { outline:1px dashed #B58A29; background:transparent; }
+.editable-field:focus { outline:2px solid #B58A29; background:#FFFCF2; }
+
+@media (max-width:1020px) { .tab-btn { font-size:11.4px; padding:9px 3px; } .toolbar-btn { padding:6px 8px; font-size:10.5px; } }
+@media (max-width:700px) { #tab-previa .cards-row .stat-card .stat-val { font-size:19px; } .deal-title { font-size:18px; } }
+
+
+/* ══ v4 — Invista Design System (charcoal + neutros, sem laranja) ════════════
+   Paleta institucional carvão #283030 sobre brancos e cremes quentes, tipografia
+   Poppins nos títulos e rótulos, cantos generosos, sombras ambientes suaves e
+   um degradê branco→cinza discreto nas caixas. Nenhuma alteração de conteúdo. */
+
+:root {
+  /* Carvão da marca */
+  --inv-charcoal:#283030; --inv-charcoal-700:#3A4444; --inv-charcoal-500:#5A6363;
+  --inv-cream:#F7F6F2; --inv-cream-deep:#F2EDE3; --inv-hairline:#E6E3DA;
+
+  --bg:#F4F3F0; --surface:#FFFFFF; --surface-alt:#F7F6F2;
+  --border:#E6E3DA; --border-strong:#CFCBC0;
+  --text-primary:#1E2424; --text-secondary:#5A6363; --text-muted:#8C9191;
+  --accent:#283030; --accent-bg:#F0EFEA; --accent-text:#283030;
+  --brand:#283030; --brand-soft:#F2EDE3;
+  --popup-blue:#283030; --popup-blue-hover:#151A1A;
+  --radius:10px; --radius-lg:16px;
+
+  --inv-shadow-sm:0 1px 2px rgba(20,24,24,.05);
+  --inv-shadow:0 8px 24px rgba(20,24,24,.06);
+  --inv-panel:linear-gradient(180deg,#FFFFFF 0%,#FBFAF8 100%);
+}
+
+body { background:var(--bg); color:var(--text-primary); }
+/* Poppins na "camada de interface" (títulos, rótulos, números, botões).
+   O corpo de tabelas e textos longos segue na sans do sistema, mais estreita
+   e legível em corpo pequeno. */
+.app-logo, .upload-kicker, .upload-heading, .upload-sub, .apikey-label,
+.slot-label, .deal-kicker, .deal-title, .deal-pill, .tab-btn, .section-title,
+.card-title, .subcard-title, .stat-label, .stat-val, .stat-box-label, .stat-box-val,
+.as-label, .as-val, .field label, .risk-label, .qa-title, .ai-section-title,
+.modal-header, .toolbar-btn, .btn-primary, .btn-back, .btn-dl, .badge, .mini-table th {
+  font-family:'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.app-logo { font-weight:600; letter-spacing:0; }
+.logo-dot { background:var(--inv-charcoal); }
+
+/* ── Superfícies: branco→cinza sutil, hairline quente e sombra ambiente ── */
+.card, .subcard, .stat-card, .stat-box, .asset-stat, .field-box, .party-card,
+.party-line, .party-box, .scenario-card {
+  background:var(--inv-panel); border:1px solid var(--border); border-radius:var(--radius-lg);
+  box-shadow:var(--inv-shadow-sm);
+}
+.deal-header, .tabs-wrap, .apikey-block, .upload-slot, .mini-table-wrap, .modal-box {
+  border-radius:var(--radius-lg); border-color:var(--border);
+}
+.deal-header, .tabs-wrap { background:var(--inv-panel); box-shadow:var(--inv-shadow); }
+.mini-table-wrap { background:var(--surface); box-shadow:var(--inv-shadow-sm); overflow:hidden; }
+.card:hover, .stat-card:hover, .asset-stat:hover, .stat-box:hover, .field-box:hover {
+  box-shadow:0 6px 18px rgba(20,24,24,.07); transition:box-shadow .18s ease;
+}
+
+/* ── Cabeçalhos e navegação ── */
+.app-header, .top-bar { background:var(--surface); border-bottom:1px solid var(--border); box-shadow:none; }
+.deal-kicker { color:var(--text-muted); }
+.deal-title { font-weight:600; letter-spacing:-.015em; color:var(--inv-charcoal); }
+.deal-pill { background:var(--inv-cream); border-color:var(--inv-hairline); color:var(--text-secondary); font-weight:500; }
+.tabs-nav { background:linear-gradient(180deg,#FCFBF9 0%,#F7F6F2 100%); border-bottom-color:var(--border); }
+.tab-btn { font-weight:500; color:var(--text-muted); }
+.tab-btn.active, .tab-btn.ai-tab.active { color:var(--inv-charcoal); border-bottom-color:var(--inv-charcoal); font-weight:600; }
+.section-title { color:var(--text-muted); letter-spacing:.09em; border-bottom-color:var(--border); }
+
+/* ── Botões: pílula, carvão sólido no primário ── */
+.toolbar-btn, .btn-back, .btn-dl, .qa-clear, .ai-regenerate { border-radius:999px; border-color:var(--border-strong); font-weight:500; }
+.toolbar-btn:hover, .btn-back:hover, .btn-dl:hover { background:var(--inv-cream); border-color:#B9B4A8; color:var(--text-primary); }
+.toolbar-btn-primary, .btn-primary, .qa-send { background:var(--inv-charcoal); border-color:var(--inv-charcoal); color:#fff; border-radius:999px; }
+.toolbar-btn-primary:hover, .btn-primary:hover, .qa-send:hover { background:#151A1A; box-shadow:0 6px 16px rgba(20,24,24,.16); }
+.toolbar-btn-primary:active, .btn-primary:active { transform:translateY(1px); }
+
+/* ── Destaques em neutro (sem laranja, sem azul) ── */
+.info-block { background:linear-gradient(180deg,#F8F7F3 0%,#F2EDE3 100%); border-color:var(--inv-hairline); }
+.info-block .risk-label, .info-block .card-title { color:var(--inv-charcoal); }
+.info-block .risk-text, .info-block .val { color:var(--text-primary); }
+#p-sat, #p-sop-geral { color:var(--inv-charcoal); }
+#tab-previa .cards-row .stat-card { background:linear-gradient(180deg,#FFFFFF 0%,#F7F6F2 100%); }
+.passivo-highlight { background:linear-gradient(180deg,#FFFFFF 0%,#F7F6F2 100%); border-color:var(--border); }
+.mat-link, .ver-detail-btn { color:var(--inv-charcoal-700); }
+.mat-link:hover, .ver-detail-btn:hover { color:var(--inv-charcoal); }
+a { color:var(--inv-charcoal-700); }
+a:hover { color:var(--inv-charcoal); }
+
+/* ── Tabelas: cabeçalho creme, zebra quase imperceptível ── */
+.mini-table th { background:var(--inv-cream-deep); color:var(--inv-charcoal-500); border-bottom:1px solid var(--border-strong); letter-spacing:.07em; }
+.mini-table td { border-bottom:1px solid #EFEDE7; }
+.mini-table tbody tr:nth-child(even) td { background:#FBFAF8; }
+.mini-table tr:hover td { background:var(--inv-cream); }
+/* Destaque momentâneo ao rolar até a linha de Garantia linkada por um Lastro. */
+.mini-table tr.row-highlight-flash td { background:var(--warning-bg)!important; transition:background 1.6s ease-out; }
+
+/* ── Formulários ── */
+.filter-control, .table-search, .qa-input, .apikey-input, .edit-access-input, .slot-url {
+  border-radius:999px; border-color:var(--border-strong); background:var(--surface);
+}
+.qa-input, .apikey-input, .edit-access-input { border-radius:var(--radius); }
+.filter-control:focus, .table-search:focus-within, .qa-input:focus, .edit-access-input:focus {
+  outline:none; border-color:var(--inv-charcoal-500); box-shadow:0 0 0 3px rgba(40,48,48,.08);
+}
+.toolbar-btn:focus-visible, .btn-back:focus-visible, .btn-primary:focus-visible,
+.tab-btn:focus-visible, .filter-control:focus-visible, .qa-send:focus-visible {
+  outline:2px solid var(--inv-charcoal); outline-offset:2px;
+}
+
+/* ── Upload ── */
+.upload-intro { background:linear-gradient(135deg,#FFFFFF 0%,#F7F6F2 100%); border-color:var(--inv-hairline); border-radius:20px; box-shadow:var(--inv-shadow); }
+.upload-heading { font-weight:600; color:var(--inv-charcoal); }
+.upload-slot { background:var(--inv-panel); box-shadow:var(--inv-shadow-sm); }
+.upload-slot:hover { border-color:#B9B4A8; box-shadow:var(--inv-shadow); }
+.slot-icon { border-radius:12px; background:var(--inv-cream); border-color:var(--inv-hairline); }
+.btn-primary { min-height:42px; }
+
+/* ── Diversos ── */
+.modal-box { box-shadow:0 18px 48px rgba(20,24,24,.22); }
+.badge, .status-chip { border-radius:999px; font-weight:500; }
+.qa-bubble-user { background:var(--inv-charcoal); }
+.ai-badge { background:var(--inv-cream-deep); color:var(--inv-charcoal); }
+.ai-spinner { border-top-color:var(--inv-charcoal); }
+.tab-panel { padding:1.75rem; }
+
+
+/* ══ v5 — Logo Invista, quadro de requerentes e acentos em azul ══════════════ */
+:root { --inv-blue:#24538C; --inv-blue-deep:#163A63; --inv-blue-soft:#EDF3FB; --inv-blue-line:#C9DAEE; }
+
+/* Wordmark oficial no cabeçalho (embutido, para sobreviver à exportação). */
+.logo-dot {
+  background:var(--inv-charcoal-500);
+}
+.app-logo { gap:10px; color:var(--inv-charcoal); }
+.app-logo span { color:var(--text-muted); }
+
+/* Requerentes: um quadro cinza envolvendo subquadros brancos. */
+.party-list {
+  background:linear-gradient(180deg,#F2F1ED 0%,#EDECE7 100%);
+  border:1px solid var(--border); border-radius:var(--radius-lg);
+  padding:12px; gap:10px; box-shadow:inset 0 1px 2px rgba(20,24,24,.04);
+}
+.party-line {
+  background:#FFFFFF; border:1px solid var(--inv-hairline); border-radius:12px;
+  padding:12px 14px; min-height:70px; text-align:center; text-justify:auto;
+  font-size:12px; font-weight:500; line-height:1.45; color:var(--text-primary);
+  box-shadow:0 1px 2px rgba(20,24,24,.05);
+}
+
+/* Matrículas: comarca e proprietário justificados. */
+#ativos-tbody td:nth-child(2), #ativos-tbody td:nth-child(3) {
+  text-align:justify !important; text-justify:inter-word; hyphens:auto; vertical-align:middle;
+}
+
+/* Acentos em azul institucional: cabeçalho de tabela e botões de popup. */
+.mini-table th, .asset-table th, .matrix-table th {
+  background:var(--inv-blue-soft); color:#2F5074; border-bottom:1px solid var(--inv-blue-line);
+}
+.mini-table-wrap, .asset-table-wrap { border-color:var(--inv-blue-line); }
+.ver-detail-btn { color:var(--inv-blue); }
+.ver-detail-btn:hover { color:var(--inv-blue-deep); }
+.mat-link { color:var(--inv-blue); }
+.mat-link:hover { color:var(--inv-blue-deep); }
+.modal-header { background:var(--inv-blue-soft); color:var(--inv-blue-deep); border-bottom-color:var(--inv-blue-line); border-radius:var(--radius-lg) var(--radius-lg) 0 0; }
+.table-search:focus-within, .filter-control:focus { border-color:var(--inv-blue); box-shadow:0 0 0 3px rgba(36,83,140,.10); }
+
+
+/* ── Ajustes finais ── */
+/* Comarca e proprietário: justificados, mas sem quebrar palavras ao meio. */
+#ativos-tbody td:nth-child(2), #ativos-tbody td:nth-child(3) {
+  hyphens:manual; word-break:normal; overflow-wrap:normal;
+}
+
+
+/* ══ v6 — Wordmark no cabeçalho do deal, acentos azuis pontuais ══════════════ */
+
+/* Cabeçalho global: neutro, apenas um ponto azul discreto. */
+.logo-dot { width:7px; height:7px; border-radius:50%; background:var(--inv-blue); }
+
+/* O wordmark passa a acompanhar o título do deal, com filete de separação. */
+.deal-header { display:flex; align-items:center; gap:0; }
+.deal-header > div { flex:1 1 auto; min-width:0; }
+.deal-header::before {
+  content:''; flex:0 0 auto; align-self:center;
+  width:104px; height:26px; margin-right:22px; padding-right:22px;
+  border-right:1px solid var(--border);
+  background:url("data:image/png;base64,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") no-repeat left center / 104px auto;
+  box-sizing:content-box;
+}
+.deal-kicker { display:flex; align-items:center; gap:9px; }
+.deal-kicker::before { content:''; width:18px; height:1.5px; background:var(--inv-blue); flex:0 0 auto; }
+
+/* Abas: rótulo ativo em azul institucional. */
+.tab-btn.active, .tab-btn.ai-tab.active { color:var(--inv-blue); border-bottom-color:var(--inv-blue); }
+
+/* Quadros das classes do PRJ em azul bem claro. */
+#tab-rj .cards-row .card {
+  background:linear-gradient(180deg,#FFFFFF 0%,#F4F8FD 100%);
+  border-color:#DCE7F3;
+}
+#tab-rj .cards-row .card .card-title { color:var(--inv-blue); }
+
+/* Linhas rótulo/valor: coluna de resposta começa mais à direita e alinhada. */
+.card .kv-row {
+  display:grid; grid-template-columns:minmax(96px,38%) 1fr; align-items:start;
+  column-gap:16px; padding:8px 0;
+}
+.card .kv-row .kv-label { padding-top:1px; }
+.card .kv-row .kv-val { text-align:right; line-height:1.55; }
+.card .kv-row .kv-val-long { text-align:justify; text-justify:inter-word; }
+
+
+/* ══ v7 — Requerentes, campos e acentos ══════════════════════════════════════ */
+
+/* Requerentes: moldura azul-claro, cada parte em cartão branco com nome e
+   documento em ranks distintos. */
+.party-list {
+  background:linear-gradient(180deg,#F5F9FD 0%,#EAF1F9 100%);
+  border-color:#D7E4F1; padding:14px; gap:10px;
+  grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+  box-shadow:inset 0 1px 2px rgba(36,83,140,.05);
+}
+.party-line {
+  display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:5px;
+  min-height:0; padding:12px 14px 12px 15px; text-align:left; text-justify:auto;
+  background:#FFFFFF; border:1px solid #E3EAF2; border-left:3px solid var(--inv-blue);
+  border-radius:10px; box-shadow:0 1px 2px rgba(20,24,24,.05);
+}
+.party-name { font-size:12.5px; font-weight:600; line-height:1.35; color:var(--inv-charcoal); }
+.party-doc { font-size:11px; font-weight:500; color:#5E6B7A; letter-spacing:.01em; font-variant-numeric:tabular-nums; }
+
+/* Campos em caixa: conteúdo centralizado verticalmente. */
+.field-box { display:flex; flex-direction:column; justify-content:center; min-height:70px; }
+
+/* Classes do PRJ: ~20% mais azul. */
+#tab-rj .cards-row .card {
+  background:linear-gradient(180deg,#F4F9FF 0%,#E6F0FA 100%);
+  border-color:#CBDDEF;
+}
+
+/* Créditos em RJ — justificação e botão centralizado. */
+#cr-lastros-container td:nth-child(1) { text-align:justify !important; text-justify:inter-word; hyphens:manual; }
+#cr-garantias-container td:nth-child(3) { text-align:justify !important; text-justify:inter-word; hyphens:manual; }
+#cr-lastros-container td:nth-child(1) .ver-detail-btn,
+#cr-garantias-container .ver-detail-btn { margin-left:auto; margin-right:auto; text-align:center; }
+
+
+/* ══ v8 — Requerentes: rótulo dentro da moldura cinza ════════════════════════ */
+.field:has(#rj-requerentes) {
+  background:linear-gradient(180deg,#F4F4F2 0%,#EDEDEA 100%);
+  border:1px solid var(--border); border-radius:var(--radius-lg);
+  padding:16px 18px 18px; box-shadow:inset 0 1px 2px rgba(20,24,24,.04);
+}
+.field:has(#rj-requerentes) > label { margin-bottom:12px; color:var(--text-muted); }
+#rj-requerentes .party-list {
+  background:none; border:0; border-radius:0; padding:0; box-shadow:none; gap:12px;
+}
+#rj-requerentes .party-line { border-left:1px solid #E3EAF2; padding:12px 15px; }
+
+
+/* ══ v9 — Requerentes e azul das classes do PRJ ══════════════════════════════ */
+
+/* Moldura externa: cinza mais escuro com degradê, rótulo dentro dela. */
+.field:has(#rj-requerentes) {
+  background:linear-gradient(180deg,#EAEAE6 0%,#DFDFDA 100%);
+  border:1px solid #D2D2CB; border-radius:var(--radius-lg);
+  padding:18px 20px 20px; box-shadow:inset 0 1px 3px rgba(20,24,24,.06);
+}
+.field:has(#rj-requerentes) > label { display:block; margin-bottom:14px; color:#5F6663; }
+#rj-requerentes .party-list {
+  background:none; border:0; border-radius:0; padding:0; box-shadow:none; gap:12px;
+}
+/* Cartão branco: nome em preto, documento logo abaixo, 1pt menor e cinza escuro. */
+#rj-requerentes .party-line {
+  display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:4px;
+  background:#FFFFFF; border:1px solid #E2E2DC; border-left:1px solid #E2E2DC;
+  border-radius:10px; padding:13px 15px; box-shadow:0 1px 2px rgba(20,24,24,.06);
+}
+#rj-requerentes .party-name { font-size:12.5px; font-weight:600; line-height:1.35; color:#000000; }
+#rj-requerentes .party-doc { font-size:11.5px; font-weight:500; line-height:1.35; color:#4A4F4F; font-variant-numeric:tabular-nums; }
+
+/* Classes do PRJ no mesmo azul do cabeçalho das tabelas. */
+#tab-rj .cards-row .card {
+  background:var(--inv-blue-soft); border-color:var(--inv-blue-line);
+}
+
+
+/* ══ v10 — Requerentes mais claros e degradê horizontal no cabeçalho ═════════ */
+.field:has(#rj-requerentes) {
+  background:linear-gradient(180deg,#F6F6F4 0%,#EBEBE7 100%);
+  border-color:#E2E2DC;
+}
+/* Cabeçalho do deal: branco à esquerda escurecendo suavemente para a direita. */
+.deal-header { background:linear-gradient(100deg,#FFFFFF 0%,#FCFCFB 42%,#F3F2F0 78%,#E9E8E5 100%); }
+
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="app-logo">
+    <div class="logo-dot"></div>
+    PPA Invista
+    <span>/ Painel de Deals</span>
+  </div>
+</header>
+
+<!-- ══ TELA DE UPLOAD ══════════════════════════════════════════════════════ -->
+<div id="screen-upload">
+  <div class="upload-intro">
+    <div class="upload-kicker">PPA Invista</div>
+    <div class="upload-heading">Painel Deals - Análise Prévia e Recuperação Judicial</div>
+    <div class="upload-sub">Selecione ou arraste os arquivos do caso em análise. O painel ilustrativo será gerado automaticamente.</div>
+  </div>
+
+  <!-- API Key -->
+  <div class="apikey-block">
+    <div class="apikey-label">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      Chave de API Anthropic
+    </div>
+    <input class="apikey-input" type="password" id="api-key-input" placeholder="sk-ant-..." autocomplete="off">
+    <div class="apikey-hint">A chave é usada apenas no seu browser para gerar a análise de IA. Não é enviada a nenhum servidor externo além da API da Anthropic.</div>
+  </div>
+
+  <div class="upload-slots">
+
+    <div class="upload-slot" id="slot-prev">
+      <input type="file" id="input-prev" accept=".docx" onchange="handleFile(this,'prev')" style="display:none">
+      <div class="slot-row" onclick="document.getElementById('input-prev').click()">
+        <div class="slot-left">
+          <div class="slot-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+          </div>
+          <div>
+            <div class="slot-label">Análise Prévia de Viabilidade</div>
+            <div class="slot-hint" id="hint-prev">Clique para selecionar o .docx</div>
+          </div>
+        </div>
+        <span class="slot-badge pending" id="badge-prev">Pendente</span>
+      </div>
+      <input class="slot-url" id="url-prev" type="url" placeholder="Link do SharePoint do documento (opcional)" oninput="updateUrl('prev')">
+    </div>
+
+    <div class="upload-slot" id="slot-rj">
+      <input type="file" id="input-rj" accept=".docx" onchange="handleFile(this,'rj')" style="display:none">
+      <div class="slot-row" onclick="document.getElementById('input-rj').click()">
+        <div class="slot-left">
+          <div class="slot-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+          </div>
+          <div>
+            <div class="slot-label">Checklist de Recuperação Judicial</div>
+            <div class="slot-hint" id="hint-rj">Clique para selecionar o .docx</div>
+          </div>
+        </div>
+        <span class="slot-badge pending" id="badge-rj">Pendente</span>
+      </div>
+      <input class="slot-url" id="url-rj" type="url" placeholder="Link do SharePoint do documento (opcional)" oninput="updateUrl('rj')">
+    </div>
+
+    <div class="upload-slot" id="slot-cred">
+      <input type="file" id="input-cred" accept=".docx" onchange="handleFile(this,'cred')" style="display:none">
+      <div class="slot-row" onclick="document.getElementById('input-cred').click()">
+        <div class="slot-left">
+          <div class="slot-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+          </div>
+          <div>
+            <div class="slot-label">Análise de Créditos em RJ</div>
+            <div class="slot-hint" id="hint-cred">Clique para selecionar o .docx</div>
+          </div>
+        </div>
+        <span class="slot-badge pending" id="badge-cred">Pendente</span>
+      </div>
+      <input class="slot-url" id="url-cred" type="url" placeholder="Link do SharePoint do documento (opcional)" oninput="updateUrl('cred')">
+    </div>
+
+    <div class="upload-slot" id="slot-ativos">
+      <input type="file" id="input-ativos" accept=".xlsx,.xls" onchange="handleXlsx(this)" style="display:none">
+      <div class="slot-row" onclick="document.getElementById('input-ativos').click()">
+        <div class="slot-left">
+          <div class="slot-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
+          </div>
+          <div>
+            <div class="slot-label">Análise de Matrículas — Ativos Imobiliários</div>
+            <div class="slot-hint" id="hint-ativos">Clique para selecionar o .xlsx (opcional)</div>
+          </div>
+        </div>
+        <span class="slot-badge pending" id="badge-ativos">Pendente</span>
+      </div>
+      <input class="slot-url" id="url-ativos" type="url" placeholder="Link do SharePoint da Análise de Matrículas (opcional)" oninput="updateUrl('ativos')">
+      <div id="ativos-url-block" style="display:none;margin-top:10px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Links individuais por matrícula — formato <code style="background:var(--surface-alt);padding:1px 4px;border-radius:3px">MATRÍCULA:URL</code>, um por linha:</div>
+        <textarea id="textarea-ativos-urls" rows="3" placeholder="7.890:https://empresa.sharepoint.com/avaliacao.pdf" style="width:100%;padding:6px 8px;border-radius:var(--radius);border:1px dashed var(--border-strong);font-size:11px;font-family:inherit;color:var(--text-secondary);background:var(--surface);resize:vertical;box-sizing:border-box;" oninput="updateAtivosUrls()"></textarea>
+      </div>
+    </div>
+
+    <div class="upload-slot" id="slot-avaliacoes">
+      <input type="file" id="input-avaliacoes" accept=".pdf" multiple style="display:none" onchange="handleAvaliacoes(this)">
+      <div class="slot-row" onclick="document.getElementById('input-avaliacoes').click()">
+        <div class="slot-left">
+          <div class="slot-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+          </div>
+          <div>
+            <div class="slot-label">Avaliações dos Imóveis (PDFs)</div>
+            <div class="slot-hint" id="hint-avaliacoes">Selecione os PDFs — nomeados "avaliação [nº matrícula]" (opcional)</div>
+          </div>
+        </div>
+        <span class="slot-badge pending" id="badge-avaliacoes">Pendente</span>
+      </div>
+    </div>
+
+    <div class="upload-slot" id="slot-kmz">
+      <input type="file" id="input-kmz" accept=".kmz,.kml,.pdf" multiple style="display:none" onchange="handleKmz(this)">
+      <div class="slot-row" onclick="document.getElementById('input-kmz').click()">
+        <div class="slot-left">
+          <div class="slot-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 10c0 6-9 12-9 12s-9-6-9-12a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          </div>
+          <div>
+            <div class="slot-label">Arquivos KMZ dos Imóveis</div>
+            <div class="slot-hint" id="hint-kmz">Selecione os KMZ — nomeados "KMZ [nº matrícula]" (opcional)</div>
+          </div>
+        </div>
+        <span class="slot-badge pending" id="badge-kmz">Pendente</span>
+      </div>
+    </div>
+
+  </div>
+
+  <button class="btn-primary" id="btn-gerar" disabled onclick="gerarPainel()">
+    Gerar painel
+  </button>
+</div>
+
+<!-- ══ TELA DO PAINEL ══════════════════════════════════════════════════════ -->
+<div id="screen-painel">
+
+  <div class="top-bar">
+    <div class="top-bar-left-group">
+      <button class="btn-back" id="btn-new-upload" onclick="voltarUpload()">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        Novo upload
+      </button>
+      <span class="top-bar-left" id="top-meta"></span>
+    </div>
+    <div class="panel-actions" id="panel-actions">
+      <div id="dl-buttons" class="dl-group"></div>
+      <span class="edit-status" id="edit-status">✎ Modo de edição ativo</span>
+      <button class="toolbar-btn" id="edit-toggle" onclick="toggleEditMode()">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        <span>Editar conteúdo</span>
+      </button>
+      <button class="toolbar-btn toolbar-btn-primary" id="export-button" onclick="downloadPainel()">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Exportar resultado
+      </button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="deal-header">
+      <div>
+        <div class="deal-kicker" id="deal-kicker">Painel de Deals</div>
+        <div class="deal-title" id="deal-title">—</div>
+        <div class="deal-meta" id="deal-meta"><span class="deal-pill">PPA Invista</span></div>
+      </div>
+    </div>
+
+    <div class="tabs-wrap">
+      <nav class="tabs-nav">
+        <button class="tab-btn active" id="tab-btn-previa" onclick="showTab('previa',this)">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          Análise prévia
+        </button>
+        <button class="tab-btn" id="tab-btn-rj" onclick="showTab('rj',this)">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          Checklist RJ
+        </button>
+        <button class="tab-btn" id="tab-btn-creditos" onclick="showTab('creditos',this)">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><path d="M14.8 9A2 2 0 0 0 13 8h-2a2 2 0 0 0 0 4h2a2 2 0 0 1 0 4h-2a2 2 0 0 1-1.8-1M12 7v1m0 8v1"/></svg>
+          Créditos em RJ
+        </button>
+        <button class="tab-btn" id="tab-btn-ativos" onclick="showTab('ativos',this)">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          Ativos imobiliários
+        </button>
+        <button class="tab-btn ai-tab" id="tab-btn-ia" onclick="showTab('ia',this)">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><circle cx="18" cy="6" r="3" fill="currentColor" stroke="none"/></svg>
+          Análise IA
+        </button>
+      </nav>
+
+      <!-- ABA PRÉVIA -->
+      <div id="tab-previa" class="tab-panel active">
+        <div class="section-title">Dados gerais</div>
+        <div class="cards-row-2">
+          <div class="card"><div class="card-title"><svg class="card-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a6 6 0 0 1 12 0v2"/><path d="M17 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.87"/></svg>Exequente(s)</div><div id="p-exequente">—</div></div>
+          <div class="card"><div class="card-title"><svg class="card-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="9" cy="8" r="4"/><path d="M2 21v-2a6 6 0 0 1 12 0v2"/><circle cx="17" cy="8" r="3"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>Executado(s)</div><div id="p-executado">—</div></div>
+        </div>
+        <div class="cards-row">
+          <div class="stat-card"><div class="stat-label">SOP</div><div class="stat-val" id="p-sop-geral">—</div></div>
+          <div class="stat-card"><div class="stat-label">SAT</div><div class="stat-val" id="p-sat">—</div></div>
+        </div>
+        <div class="info-block">
+          <div class="card-title"><svg class="card-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>Resumo do caso</div>
+          <div class="val prose" id="p-resumo">—</div>
+        </div>
+        <div class="risk-block risk-neutral" id="p-risk-block">
+          <div class="risk-label" id="p-risk-label">Riscos jurídicos</div>
+          <div class="risk-text" id="p-riscos">—</div>
+        </div>
+        <div class="section-title">Visão jurídica</div>
+        <div id="p-processos-container"></div>
+        <div class="section-title">Ativos — imóveis</div>
+        <div id="p-imoveis-container"></div>
+        <div class="section-title">Passivo preferencial</div>
+        <div class="subcard-grid" style="margin-bottom:1rem">
+          <div class="stat-box passivo-highlight">
+            <div class="stat-box-label">Fiscal total (E-CAC + Dívida Ativa)</div>
+            <div class="stat-box-val" id="p-fiscal-total">—</div>
+          </div>
+          <div class="stat-box passivo-highlight">
+            <div class="stat-box-label">Trabalhista</div>
+            <div class="stat-box-val" id="p-trabalhista">—</div>
+          </div>
+          <div class="stat-box passivo-highlight">
+            <div class="stat-box-label">Pesquisa prévia realizada</div>
+            <div class="stat-box-val" id="p-pesquisa">—</div>
+          </div>
+          <div class="stat-box passivo-highlight">
+            <div class="stat-box-label">Pesquisa qualificada</div>
+            <div class="stat-box-val" id="p-pesq-qual">—</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ABA RJ -->
+      <div id="tab-rj" class="tab-panel">
+        <div id="rj-empty-warning"></div>
+        <div class="section-title">Dados gerais</div>
+        <div class="field" style="margin-bottom:1rem"><label>Requerentes</label><div class="val" id="rj-requerentes">—</div></div>
+        <div class="grid-4-fixed">
+          <div class="field field-box"><label>Recuperação judicial nº</label><div class="val" id="rj-numero">—</div></div>
+          <div class="field field-box"><label>Vara</label><div class="val" id="rj-vara">—</div></div>
+          <div class="field field-box"><label>Advogados dos requerentes</label><div class="val" id="rj-advs">—</div></div>
+          <div class="field field-box"><label>Adm. judicial</label><div class="val" id="rj-adj">—</div></div>
+          <div class="field field-box"><label>Data do pedido</label><div class="val" id="rj-pedido">—</div></div>
+          <div class="field field-box"><label>Data do deferimento</label><div class="val" id="rj-deferimento">—</div></div>
+          <div class="field field-box"><label>Status</label><div class="val" id="rj-status">—</div></div>
+          <div class="field field-box"><label>Total dos créditos arrolados</label><div class="val" id="rj-qgc-total">—</div></div>
+        </div>
+        <div class="section-title">Assembleia geral de credores (AGC)</div>
+        <div class="card">
+          <div class="kv-row"><span class="kv-label">Situação</span><span class="kv-val" id="rj-agc-status">—</span></div>
+          <div class="kv-row"><span class="kv-label">Datas</span><span class="kv-val" id="rj-agc-datas">—</span></div>
+        </div>
+        <div class="section-title">Quadro geral de credores (QGC)</div>
+        <div class="cards-row">
+          <div class="stat-card"><div class="stat-label">Classe I — Trabalhista</div><div class="stat-val" id="rj-qgc-i">—</div></div>
+          <div class="stat-card"><div class="stat-label">Classe II — Garantia real</div><div class="stat-val" id="rj-qgc-ii">—</div></div>
+          <div class="stat-card"><div class="stat-label">Classe III — Quirografário</div><div class="stat-val" id="rj-qgc-iii">—</div></div>
+          <div class="stat-card"><div class="stat-label">Classe IV — ME/EPP</div><div class="stat-val" id="rj-qgc-iv">—</div></div>
+        </div>
+        <div class="section-title">Plano de recuperação judicial (PRJ)</div>
+        <div class="cards-row" id="rj-prj-cards"></div>
+        <div class="section-title">Checklist de documentos</div>
+        <div class="card" id="rj-checklist"></div>
+      </div>
+
+      <!-- ABA CRÉDITOS -->
+      <div id="tab-creditos" class="tab-panel">
+        <div id="cred-empty-warning"></div>
+        <div class="section-title">Crédito arrolado</div>
+        <div class="field" style="margin-bottom:1rem"><label>Credores</label><div class="val" id="cr-credor">—</div></div>
+        <div class="section-title">Detalhamento do crédito</div>
+        <div class="grid-4" id="cr-detalhamento"></div>
+        <div class="section-title">Partes</div>
+        <div class="grid">
+          <div class="field"><label>Devedor(es)</label><div class="val party-box" id="cr-devedores">—</div></div>
+          <div class="field"><label>Garantidor(es)</label><div class="val party-box" id="cr-garantidores">—</div></div>
+        </div>
+        <div class="section-title">Lastros</div>
+        <div id="cr-lastros-container"></div>
+        <div class="section-title">Garantias</div>
+        <div id="cr-garantias-container"></div>
+        <div class="section-title">Ações judiciais</div>
+        <div id="cr-acoes"></div>
+      </div>
+
+      <!-- ABA ATIVOS IMOBILIÁRIOS -->
+      <div id="tab-ativos" class="tab-panel">
+        <div class="section-title">Resumo da carteira</div>
+        <div class="assets-summary">
+          <div class="asset-stat"><div class="as-label">Total de matrículas</div><div class="as-val" id="as-total">—</div></div>
+          <div class="asset-stat"><div class="as-label">VM total (avaliação)</div><div class="as-val" id="as-vm">—</div></div>
+        </div>
+        <div class="section-title">Matrículas</div>
+        <div class="asset-filters">
+          <div class="table-search">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="ativos-search" placeholder="Buscar matrícula, comarca ou proprietário…" oninput="filtrarAtivos(this.value)">
+          </div>
+          <select class="filter-control" id="filter-prop" onchange="aplicarFiltrosAtivos()"><option value="">Todos os proprietários</option></select>
+          <select class="filter-control" id="filter-com" onchange="aplicarFiltrosAtivos()"><option value="">Todas as localidades</option></select>
+        </div>
+        <div class="mini-table-wrap">
+          <table class="mini-table compact">
+            <colgroup><col style="width:7%"><col style="width:8%"><col style="width:11%"><col style="width:23%"><col style="width:7%"><col style="width:19%"><col style="width:7%"><col style="width:16%"></colgroup>
+            <thead>
+              <tr>
+                <th>Matrícula</th><th>Comarca</th><th>Proprietário</th>
+                <th>Descrição</th><th>KMZ</th><th>Principais garantias vigentes</th><th>Fração ideal</th>
+                <th>VM (R$)</th>
+              </tr>
+            </thead>
+            <tbody id="ativos-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Popup de Ônus Vigentes (Ativos Imobiliários) -->
+      <div id="onus-modal-overlay" class="modal-overlay" style="display:none" onclick="if(event.target===this) closeDetailModal()">
+        <div class="modal-box">
+          <div class="modal-header">
+            <span id="onus-modal-title">Detalhes</span>
+            <button class="modal-close" onclick="closeDetailModal()" aria-label="Fechar">×</button>
+          </div>
+          <div class="modal-body" id="onus-modal-content"></div>
+        </div>
+      </div>
+
+
+
+      <!-- Acesso protegido ao modo de edição -->
+      <div id="edit-access-overlay" class="modal-overlay" style="display:none" onclick="if(event.target===this) closeEditAccessModal()">
+        <div class="modal-box edit-access-box" role="dialog" aria-modal="true" aria-labelledby="edit-access-title">
+          <div class="modal-header">
+            <span id="edit-access-title">Acesso à edição</span>
+            <button class="modal-close" type="button" onclick="closeEditAccessModal()" aria-label="Fechar">×</button>
+          </div>
+          <form class="edit-access-body" onsubmit="submitEditAccess(event)">
+            <p class="edit-access-copy">Para editar o documento, digite abaixo a senha de acesso fornecida pela sua área.</p>
+            <label class="edit-access-label" for="edit-access-password">Senha de acesso</label>
+            <input class="edit-access-input" id="edit-access-password" type="password" autocomplete="current-password" required>
+            <div class="edit-access-error" id="edit-access-error">Senha incorreta. Verifique e tente novamente.</div>
+            <div class="edit-access-actions">
+              <button class="toolbar-btn" type="button" onclick="closeEditAccessModal()">Cancelar</button>
+              <button class="toolbar-btn toolbar-btn-primary" type="submit">Liberar edição</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- ABA ANÁLISE IA -->
+      <div id="tab-ia" class="tab-panel">
+        <div id="ia-content">
+          <div class="ai-empty">A análise de IA será gerada ao processar os documentos.</div>
+        </div>
+
+        <!-- Q&A -->
+        <div class="qa-wrap" id="qa-wrap" style="display:none">
+          <div class="qa-header">
+            <div class="qa-title">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              Perguntas sobre o deal
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="qa-meta" id="qa-turn-count">0 perguntas &middot; ~$0,00</span>
+              <button class="qa-clear" onclick="limparConversa()">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                Limpar conversa
+              </button>
+            </div>
+          </div>
+          <div class="qa-cost-warn" id="qa-cost-warn" style="display:none">
+            <span>&#9888; Voc&#234; j&#225; fez <strong id="qa-warn-count"></strong> perguntas nesta sess&#227;o. O hist&#243;rico acumulado aumenta o custo por pergunta. Considere limpar a conversa.</span>
+            <button class="qa-clear" onclick="limparConversa()" style="white-space:nowrap;flex-shrink:0">Limpar agora</button>
+          </div>
+          <div class="qa-messages" id="qa-messages"></div>
+          <div class="qa-input-row">
+            <textarea class="qa-input" id="qa-input" rows="2" placeholder="Fa&#231;a uma pergunta sobre este deal&#8230;" onkeydown="qaKeydown(event)"></textarea>
+            <button class="qa-send" id="qa-send-btn" onclick="enviarPergunta()">Enviar</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="margin-top:1.5rem;font-size:11px;color:var(--text-muted);text-align:center">
+      Documento confidencial · Uso interno exclusivo do Time PPA — Invista
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Estado ────────────────────────────────────────────────────────────────────
+const state = { prev: null, rj: null, cred: null };
+const fileBlobs = { prev: null, rj: null, cred: null };
+let ativosBlob = null;
+let ativosData = [];
+let ativosUrlMap = {};
+// Avaliação (PDF) e KMZ de cada imóvel: mapas nº-da-matrícula → File,
+// montados a partir dos uploads de "Avaliações" e "KMZ" (arquivos nomeados
+// "avaliação 29.294.pdf" / "KMZ 29.294.kmz") — casados com a matrícula da
+// planilha só pelos dígitos, sem depender de pontuação exata.
+let avaliacaoFileMap = {};
+let kmzFileMap = {};
+// Coordenada (centro) extraída de dentro de cada KMZ — nº da matrícula →
+// {lat, lon}. Um KMZ é um .kml zipado; o .kml é XML puro com as coordenadas
+// em texto ("lon,lat[,alt]"), então extraímos direto, sem precisar de
+// nenhum programa externo (mesmo JSZip já usado pra ler os .docx).
+let kmzCoordsMap = {};
+async function extractKmzCoords(file) {
+  try {
+    const buf = await file.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+    const kmlEntry = Object.values(zip.files).find(f => /\.kml$/i.test(f.name) && !f.dir);
+    if (!kmlEntry) return null;
+    const kmlText = await kmlEntry.async('string');
+    const blocks = [...kmlText.matchAll(/<coordinates>([\s\S]*?)<\/coordinates>/gi)];
+    if (!blocks.length) return null;
+    // Um Point tem 1 tupla só; LineString/Polygon têm várias — usamos o
+    // centro (média) de todos os pontos encontrados, em todas as tags.
+    let sumLat = 0, sumLon = 0, count = 0;
+    blocks.forEach(b => {
+      b[1].trim().split(/\s+/).filter(Boolean).forEach(tuple => {
+        const [lonStr, latStr] = tuple.split(',');
+        const lon = parseFloat(lonStr), lat = parseFloat(latStr);
+        if (!isNaN(lon) && !isNaN(lat)) { sumLon += lon; sumLat += lat; count++; }
+      });
+    });
+    return count ? { lat: sumLat / count, lon: sumLon / count } : null;
+  } catch (e) {
+    return null;
+  }
+}
+function extractMatFromFilename(name) {
+  const base = String(name || '').replace(/\.[^.]+$/, '').trim();
+  const m = base.match(/(\d[\d.]*)\s*$/);
+  return m ? m[1].replace(/\.$/, '').replace(/\./g, '') : null;
+}
+function buildFileMap(input, mapObj, badgeId, hintId) {
+  Object.keys(mapObj).forEach(k => delete mapObj[k]);
+  const files = Array.from(input.files || []);
+  let matched = 0;
+  files.forEach(file => {
+    const mat = extractMatFromFilename(file.name);
+    if (mat) { mapObj[mat] = file; matched++; }
+  });
+  const badge = document.getElementById(badgeId);
+  if (files.length) {
+    badge.textContent = matched + '/' + files.length + ' associado(s)';
+    badge.className = 'slot-badge done';
+    document.getElementById(hintId).textContent = files.length + ' arquivo(s) selecionado(s)';
+    document.getElementById(badgeId).closest('.upload-slot').classList.add('filled');
+  }
+  if (typeof renderAtivos === 'function' && ativosData && ativosData.length) renderAtivos(ativosData);
+}
+function handleAvaliacoes(input) { buildFileMap(input, avaliacaoFileMap, 'badge-avaliacoes', 'hint-avaliacoes'); }
+async function handleKmz(input) {
+  buildFileMap(input, kmzFileMap, 'badge-kmz', 'hint-kmz');
+  Object.keys(kmzCoordsMap).forEach(k => delete kmzCoordsMap[k]);
+  for (const [mat, file] of Object.entries(kmzFileMap)) {
+    const coords = await extractKmzCoords(file);
+    if (coords) kmzCoordsMap[mat] = coords;
+  }
+  if (typeof renderAtivos === 'function' && ativosData && ativosData.length) renderAtivos(ativosData);
+}
+function findMatchedFile(mapObj, mat) {
+  const norm = String(mat || '').replace(/\./g, '').trim();
+  return mapObj[norm] || mapObj[mat] || null;
+}
+// Abre o arquivo (avaliação/KMZ) associado à matrícula numa nova aba, via
+// blob URL — sem precisar de servidor, funciona igual no painel exportado.
+function abrirArquivoMatricula(mapName, mat) {
+  const mapObj = mapName === 'avaliacaoFileMap' ? avaliacaoFileMap : kmzFileMap;
+  const file = findMatchedFile(mapObj, mat);
+  if (!file) return;
+  // No app ao vivo é um File (precisa de createObjectURL); no painel
+  // exportado é um data: URI já pronto (string), embutido na reidratação.
+  const url = (file instanceof File || file instanceof Blob) ? URL.createObjectURL(file) : file;
+  window.open(url, '_blank');
+}
+
+let aiResult = null; // { resumo, riscos: [{nivel, texto}], flags: [str] }
+let qaHistory = [];  // [{role, content}] — histórico da conversa Q&A
+let qaTurns = 0;     // contador de perguntas na sessão
+let editMode = false;
+let activeDetailButton = null;
+
+// ── Upload ────────────────────────────────────────────────────────────────────
+function handleFile(input, key) {
+  const file = input.files[0];
+  if (!file) return;
+  fileBlobs[key] = file;
+  document.getElementById('slot-' + key).classList.add('filled');
+  document.getElementById('hint-' + key).textContent = file.name;
+  const b = document.getElementById('badge-' + key);
+  b.textContent = 'Carregado'; b.className = 'slot-badge done';
+  checkBtn();
+}
+
+function handleXlsx(input) {
+  const file = input.files[0];
+  if (!file) return;
+  ativosBlob = file;
+  document.getElementById('slot-ativos').classList.add('filled');
+  document.getElementById('hint-ativos').textContent = file.name;
+  const b = document.getElementById('badge-ativos');
+  b.textContent = 'Carregado'; b.className = 'slot-badge done';
+  document.getElementById('ativos-url-block').style.display = 'block';
+  checkBtn();
+}
+
+function checkBtn() {
+  const anyDoc = Object.values(fileBlobs).some(Boolean) || !!ativosBlob;
+  document.getElementById('btn-gerar').disabled = !anyDoc;
+}
+
+const docUrls = { prev: '', rj: '', cred: '', ativos: '' };
+function updateUrl(key) {
+  const raw = document.getElementById('url-' + key).value.trim();
+  docUrls[key] = raw.startsWith('//') ? 'https:' + raw : raw;
+}
+function updateAtivosUrls() {
+  const raw = document.getElementById('textarea-ativos-urls').value;
+  ativosUrlMap = {};
+  raw.split('\n').forEach(line => {
+    const idx = line.indexOf(':');
+    if (idx < 1) return;
+    const mat = line.slice(0, idx).trim();
+    const url = line.slice(idx + 1).trim();
+    const fullUrl = url.startsWith('//') ? 'https:' + url : url;
+    if (mat && fullUrl) ativosUrlMap[mat] = fullUrl;
+  });
+}
+
+// ── Extração DOCX ─────────────────────────────────────────────────────────────
+async function readDocx(file) {
+  const buf = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(buf);
+  const xml = await zip.file('word/document.xml').async('string');
+  // Um hyperlink de verdade do Word (<w:hyperlink r:id="rIdN">texto</w:hyperlink>)
+  // não grava a URL no document.xml — só o rId, que aponta pra um alvo dentro
+  // de word/_rels/document.xml.rels. Sem ler esse arquivo, um link cujo texto
+  // visível não é a própria URL (ex.: "clique aqui") fica invisível pro parser.
+  const relsEntry = zip.file('word/_rels/document.xml.rels');
+  const relsXml = relsEntry ? await relsEntry.async('string') : '';
+  return extractFields(xml, relsXml);
+}
+function parseDocumentRels(relsXml) {
+  const map = {};
+  const re = /<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"[^>]*\/?>/g;
+  let m;
+  while ((m = re.exec(relsXml || ''))) {
+    if (/hyperlink/i.test(m[0])) map[m[1]] = m[2].replace(/&amp;/g, '&');
+  }
+  return map;
+}
+// Mapa "rId -> URL" do documento sendo processado no momento por extractFields
+// — reatribuído a cada chamada (readDocx é sempre aguardado sequencialmente,
+// nunca concorrente, então não há risco de um documento pisar no mapa do outro).
+let _docRelMap = {};
+function resolveHyperlinks(xmlFragment) {
+  if (!Object.keys(_docRelMap).length || !xmlFragment.includes('<w:hyperlink')) return xmlFragment;
+  return xmlFragment.replace(/<w:hyperlink\b[^>]*r:id="([^"]+)"[^>]*>([\s\S]*?)<\/w:hyperlink>/g, (m, rid, inner) => {
+    const url = _docRelMap[rid];
+    return url ? inner + `<w:t xml:space="preserve"> (${url})</w:t>` : inner;
+  });
+}
+
+function decodeXmlEntities(str) {
+  return str
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
+    .replace(/&amp;/g, '&');
+}
+function cellText(cell) {
+  cell = resolveHyperlinks(cell);
+  // Cada <w:p> dentro da célula é um parágrafo do Word — sem isso, várias
+  // averbações digitadas em linhas separadas ficam coladas num único bloco.
+  const paras = cell.split(/<w:p[ >]/).slice(1);
+  return paras.map(p => {
+    const withBreaks = p.replace(/<w:br\b[^>]*\/?>/g, '\n');
+    return decodeXmlEntities((withBreaks.match(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g) || [])
+      .map(t => t.replace(/<[^>]+>/g, '')).join(''));
+  }).join('\n').trim();
+}
+function cellFill(cell) {
+  return (cell.match(/w:fill="([^"]+)"/) || [])[1] || '';
+}
+function pushScalar(scope, label, value) {
+  if (!label) return;
+  if (scope[label] === undefined) scope[label] = value;
+  else if (Array.isArray(scope[label])) scope[label].push(value);
+  else scope[label] = [scope[label], value];
+}
+
+// O documento é lido como uma sequência de blocos nomeados: uma linha de
+// tabela com 1 única célula em destaque abre um novo bloco — é isso que
+// demarca "LASTRO Nº 1", "LASTRO Nº 2", "Garantia nº 1", "Impugnação de
+// Crédito" etc. Linhas de 2 colunas (label/valor) e de 3 colunas (grupo/sub/
+// valor, com a 1ª coluna "carregada" nas linhas de continuação, como nas
+// condições da Classe II/III do PRJ) pertencem ao bloco vigente. Rótulos
+// repetidos dentro do mesmo escopo acumulam em lista em vez de se
+// sobrescreverem — nenhum valor é descartado silenciosamente.
+// Extrai texto/negrito/cor/tamanho de um <w:p> solto (fora de tabela) —
+// mesmo mecanismo de cellText, mas para um parágrafo só.
+function paraText(p) {
+  p = resolveHyperlinks(p);
+  return decodeXmlEntities((p.match(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g) || [])
+    .map(t => t.replace(/<[^>]+>/g, '')).join('')).trim();
+}
+function paraStyle(p) {
+  const color = (p.match(/w:color w:val="([^"]+)"/) || [])[1] || '';
+  const sz = parseInt((p.match(/w:sz w:val="(\d+)"/) || [])[1] || '0', 10);
+  const bold = /<w:b\/>|<w:b w:val="(?:true|1)"/.test(p);
+  return { color: color.toUpperCase(), sz, bold };
+}
+
+function extractFields(xml, relsXml) {
+  _docRelMap = parseDocumentRels(relsXml);
+  // Alguns templates (ex.: Checklist RJ) usam título de seção em parágrafo
+  // solto (fora de tabela, negrito+cor E8440A ou negrito+cinza), em vez de
+  // uma linha de tabela com 1 célula em destaque — precisamos caminhar
+  // parágrafos E tabelas em ordem (não só as linhas de tabela) para saber
+  // qual título estava vigente quando uma tabela larga apareceu.
+  // Parágrafos vazios costumam vir "self-closing" (<w:p .../>, sem
+  // </w:p>) — sem casar essa forma antes da forma "com conteúdo", o "*?"
+  // lazy do padrão de baixo acaba varrendo até o PRÓXIMO </w:p> do
+  // documento inteiro, engolindo (e descartando) todas as tabelas no meio
+  // do caminho. Por isso o self-closing precisa vir primeiro na alternância.
+  const tokens = xml.match(/<w:tbl>[\s\S]*?<\/w:tbl>|<w:p\b[^>]*\/>|<w:p\b[\s\S]*?<\/w:p>/g) || [];
+
+  const root = { header: null, fields: {}, groups: {} };
+  const blocks = [];
+  const tables = [];
+  // Algumas tabelas de campo/valor (ex.: os 3 resumos "Classe I/II/III" do
+  // Checklist_RJ_Creditos) não têm o banner de 1 célula que abriria um bloco
+  // isolado — cada uma é só uma tabela solta no nível raiz. Sem isolamento,
+  // campos repetidos (ex.: "Representatividade") de tabelas diferentes se
+  // sobrescreveriam em root.fields. scalarTables guarda um snapshot por
+  // tabela para quem precisar ler o valor "da mesma tabela" (ex.: Representa-
+  // tividade da Classe II, não a da última tabela processada).
+  const scalarTables = [];
+
+  let current = root;
+  let col3Label = null;
+  let wideHeader = null, wideRows = null, wideTitle = null;
+  let lastHeading = null;
+  // Alguns templates (ex.: Checklist RJ) usam cabeçalho explícito de tabela
+  // CAMPO/INFORMAÇÃO — as 2 células do cabeçalho vêm destacadas, e as
+  // linhas de dado abaixo vêm todas em branco (padrão diferente do usual
+  // "só a 1ª célula do próprio campo é destacada"). Uma vez detectado esse
+  // cabeçalho, todo par de 2 células que segue é campo/valor direto.
+  let fieldTableHeader = false;
+
+  function closeWide() {
+    if (wideHeader) tables.push({ title: wideTitle, columns: wideHeader, rows: wideRows });
+    wideHeader = null; wideRows = null; wideTitle = null;
+  }
+
+  function processRow(row, tableFields) {
+    const cells = row.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) || [];
+
+    // Uma linha com 3+ células, TODAS em destaque, é o cabeçalho de uma
+    // tabela larga (ex.: "Nº da Matrícula | Cartório | ..." ou "NOME |
+    // CERTIDÕES | ENDIVIDAMENTO TRABALHISTA") — fecha qualquer tabela larga
+    // em andamento e abre outra. É diferente do padrão "grupo/sub/valor" (só
+    // a 1ª célula em destaque) e do padrão "campo solo" (nenhuma em
+    // destaque), tratados mais abaixo.
+    const allHighlighted = cells.length >= 3 && cells.every(c => cellFill(c).toUpperCase() === 'E8440A');
+    if (allHighlighted) {
+      closeWide();
+      wideHeader = cells.map(c => cellText(c).trim());
+      wideTitle = lastHeading || current.header;
+      wideRows = [];
+      return;
+    }
+    if (wideHeader) {
+      if (cells.length === wideHeader.length) {
+        const obj = {};
+        cells.forEach((c, i) => { obj[wideHeader[i]] = cellText(c).trim(); });
+        wideRows.push(obj);
+        return;
+      }
+      closeWide();
+    }
+
+    if (cells.length === 1) {
+      if (cellFill(cells[0]).toUpperCase() !== 'E8440A') return;
+      const label = cellText(cells[0]).trim();
+      if (!label) return;
+      current = { header: label, fields: {}, groups: {} };
+      blocks.push(current);
+      col3Label = null;
+      fieldTableHeader = false;
+      return;
+    }
+
+    if (cells.length === 2) {
+      const fill0 = cellFill(cells[0]).toUpperCase();
+      const fill1 = cellFill(cells[1]).toUpperCase();
+      if (fill0 === 'E8440A' && fill1 === 'E8440A') {
+        // Cabeçalho "CAMPO/INFORMAÇÃO" — não é dado, só liga o modo.
+        fieldTableHeader = true;
+        return;
+      }
+      if (!fieldTableHeader && fill0 !== 'E8440A') return;
+      pushScalar(current.fields, cellText(cells[0]).trim(), cellText(cells[1]).trim());
+      pushScalar(tableFields, cellText(cells[0]).trim(), cellText(cells[1]).trim());
+      return;
+    }
+
+    if (cells.length === 3) {
+      const fill0 = cellFill(cells[0]).toUpperCase();
+      const c0 = cellText(cells[0]).trim();
+      const sub = cellText(cells[1]).trim();
+      const value = cellText(cells[2]).trim();
+      if (fill0 === 'FFFFFF') {
+        // Linha "solo": a 1ª coluna já É o nome do campo (ex.: "Endividamento
+        // Fiscal — E-cac" | valor | observação) — não é um grupo/sub-campo.
+        if (c0) { pushScalar(current.fields, c0, sub); pushScalar(tableFields, c0, sub); }
+        return;
+      }
+      if (fill0 === 'E8440A') col3Label = c0;
+      if (!col3Label || !sub) return;
+      if (!current.groups[col3Label]) current.groups[col3Label] = {};
+      pushScalar(current.groups[col3Label], sub, value);
+    }
+  }
+
+  tokens.forEach(tok => {
+    if (tok.startsWith('<w:tbl>')) {
+      const rows = tok.match(/<w:tr[ >][\s\S]*?<\/w:tr>/g) || [];
+      const tableFields = {};
+      rows.forEach(row => processRow(row, tableFields));
+      if (Object.keys(tableFields).length) scalarTables.push(tableFields);
+      return;
+    }
+    const text = paraText(tok);
+    if (!text) return;
+    const { color, sz, bold } = paraStyle(tok);
+    // Título principal (numerado, ex. "2. PLANO...") ou sub-título (negrito
+    // cinza, ex. "Condições da Classe II") — mesmo padrão do PRC.
+    const isHeading = bold && (color === 'E8440A' || (color === '555555' && text.length < 60));
+    if (isHeading) lastHeading = text;
+  });
+  closeWide();
+
+  return { root, blocks, tables, scalarTables };
+}
+
+// ── Consultas sobre o documento extraído ────────────────────────────────────
+function getField(doc, label) {
+  if (doc.root.fields[label] !== undefined) return doc.root.fields[label];
+  for (const b of doc.blocks) if (b.fields[label] !== undefined) return b.fields[label];
+  return undefined;
+}
+function pick(doc, ...labels) {
+  for (const l of labels) {
+    const v = getField(doc, l);
+    if (v) return Array.isArray(v) ? v.join(' · ') : v;
+  }
+  // Nenhum dos rótulos esperados bateu com o documento — provavelmente o
+  // template usou uma variação de texto que o código ainda não conhece.
+  // console.debug (não alert/erro) só para facilitar depuração futura.
+  if (typeof console !== 'undefined' && console.debug) console.debug('[Painel] Campo não encontrado:', labels);
+  return undefined;
+}
+// Como pick(), mas casa o rótulo por regex — usado quando o documento anexa
+// um sufixo variável ao rótulo (ex.: "Classe I – Trabalhistas" em vez de
+// apenas "Classe I", ou "Extraconcursal (não sujeito à RJ)").
+function pickMatching(doc, re) {
+  const hits = getFieldsMatching(doc, re);
+  return hits.length ? joinVals(hits[0][1]) : undefined;
+}
+function getFieldsMatching(doc, re) {
+  const out = [];
+  const scan = fields => Object.keys(fields).forEach(k => { if (re.test(k)) out.push([k, fields[k]]); });
+  scan(doc.root.fields);
+  doc.blocks.forEach(b => scan(b.fields));
+  return out;
+}
+function getGroup(doc, title) {
+  if (doc.root.groups[title]) return doc.root.groups[title];
+  for (const b of doc.blocks) if (b.groups[title]) return b.groups[title];
+  // Alguns documentos gravam essas condições como tabela larga (cabeçalho
+  // Deságio/Carência/Parcelas/Juros/Correção) sob um título de parágrafo,
+  // em vez do padrão grupo/sub-campo — a 1ª linha de dados vira o grupo.
+  const t = doc.tables && doc.tables.find(t => t.title === title && t.rows.length);
+  if (t) return t.rows[0];
+  return null;
+}
+// Alguns casos têm crédito em mais de uma classe, cada uma com opções de
+// pagamento diferentes (ex.: "Condições da Classe II", "Condições da Classe
+// III - Opção 01", "- Opção 02" etc.) — em vez de presumir só 2 grupos fixos
+// (Classe II / Classe III), pegamos TODOS os grupos cujo título bate no
+// padrão, na ordem em que aparecem no documento.
+function getGroupsMatching(doc, re) {
+  const out = [];
+  const seen = new Set();
+  const scan = groups => Object.keys(groups).forEach(k => {
+    if (re.test(k) && !seen.has(k)) { seen.add(k); out.push([k, groups[k]]); }
+  });
+  scan(doc.root.groups);
+  doc.blocks.forEach(b => scan(b.groups));
+  return out;
+}
+function getBlocks(doc, re) {
+  return doc.blocks.filter(b => re.test(b.header));
+}
+// O parser só entende tabelas — um documento inteiramente em prosa (sem
+// nenhuma <w:tbl>) gera zero blocos/campos, e a aba fica silenciosamente
+// vazia, indistinguível de "o documento realmente não tem essa informação".
+// Usado para mostrar um aviso em vez disso.
+function looksEmpty(doc) {
+  return !doc.blocks.length && !Object.keys(doc.root.fields).length &&
+    !(doc.tables && doc.tables.length) && !(doc.scalarTables && doc.scalarTables.length);
+}
+function joinVals(v) {
+  return Array.isArray(v) ? v.filter(Boolean).join('; ') : (v || '');
+}
+// "Sem popup se não houver informação real" — mesmo critério em qualquer
+// popup condicional (Ver garantia, Ações relacionadas etc.): vazio, "-",
+// "N/A", "não há"/"não consta"/"não aplicável" não contam como conteúdo.
+function isMeaningfulText(s) {
+  const t = joinVals(s).trim();
+  if (!t) return false;
+  return !/^(n\s*\/\s*a\.?|n[aã]o\s+consta|n[aã]o\s+h[aá]|n[aã]o\s+aplic[aá]vel|nenhum[a]?|-{1,3})$/i.test(t);
+}
+// Extrai números citados como "Garantia nº 2"/"Imóvel nº 5" (com variações de
+// espaçamento/pontuação) num texto — usado pra linkar o Lastro à(s)
+// Garantia(s) que o campo explícito do checklist referenciar.
+function refNumerosCitados(texto) {
+  const out = [];
+  const re = /(?:garantia|im[oó]vel)s?\s*n?[ºo°.]*\s*(\d+)/gi;
+  let m;
+  while ((m = re.exec(texto || ''))) out.push(m[1]);
+  return out;
+}
+// Renderiza um valor (que pode ter múltiplas linhas — ex.: uma averbação por
+// linha num campo de Ônus) como um parágrafo por linha, em vez de um bloco só.
+function multilineHtml(v) {
+  const raw = joinVals(v);
+  if (!raw.trim()) return '';
+  const toParas = text => text.split('\n').map(l => l.trim()).filter(Boolean)
+    .map(l => `<p style="margin-bottom:6px">${cellLinkHtml(l) || escHtml(l)}</p>`).join('');
+  // O marcador de popup é aplicado ANTES de quebrar em parágrafos — um trecho
+  // marcado que abrange mais de uma linha do texto original perderia o [fim]
+  // se a divisão por linha acontecesse primeiro.
+  if (hasPopupMarker(raw)) return popupMarkersToHtml(raw, toParas);
+  return toParas(raw);
+}
+
+// ── Extração XLSX ─────────────────────────────────────────────────────────────
+async function readXlsx(file) {
+  const buf = await file.arrayBuffer();
+  const wb  = XLSX.read(buf, { type: 'array' });
+  const ws  = wb.Sheets[wb.SheetNames[0]];
+  const raw = XLSX.utils.sheet_to_json(ws, { defval: '' });
+  const rows = raw.map(row => {
+    const out = {};
+    Object.keys(row).forEach(k => { out[k.trim()] = String(row[k] ?? '').trim(); });
+    return out;
+  });
+  // A planilha costuma ter linhas de rodapé depois das matrículas (ex.: "TOTAL"
+  // com somas automáticas, "Legenda:" explicando os ícones) — não são imóveis,
+  // então descartamos qualquer linha cuja "Matrícula" não tenha nenhum número.
+  return rows.filter(row => /\d/.test(row['Matrícula'] || ''));
+}
+
+// ── Análise IA via Anthropic API ──────────────────────────────────────────────
+function buildPrompt() {
+  const sections = [];
+
+  if (state.prev) {
+    const f = state.prev;
+    const processos = attachSubBlocks(f, /^Processo/i, [/^Imóvel/i]).map(({ main, subs }) => {
+      const detail = buildProcessoDetailText(main, subs);
+      return `- ${main.header}: Nº ${main.fields['Número do processo'] || '—'}; Executado(s) ${joinVals(main.fields['Executado(s)'])||'—'}; Distribuição ${main.fields['Data de distribuição']||'—'}; SOP ${main.fields['SOP']||'—'}; SAT ${main.fields['SAT']||'—'}; Status ${joinVals(main.fields['Status'])||'—'}` + (detail ? `\n  ${detail.replace(/\n/g, '\n  ')}` : '');
+    }).join('\n') || '—';
+    const imoveis = getBlocks(f, /^Imóvel/i).map(b => `- ${b.header}: Matrícula ${b.fields['Matrícula nº']||'—'}, Comarca ${b.fields['Comarca']||'—'}, Proprietário(s) ${joinVals(b.fields['Proprietário']||b.fields['Proprietários'])||'—'}, Avaliação ${b.fields['Avaliação']||'—'}, Ônus ${joinVals(b.fields['Ônus'])||'—'}`).join('\n') || '—';
+    const trabTotal = sumWideTableColumn(f, 'ENDIVIDAMENTO TRABALHISTA');
+    sections.push(`## ANÁLISE PRÉVIA DE VIABILIDADE
+Caso: ${pick(f, 'Nome do Caso') || '—'}
+Exequente(s): ${pick(f, 'Exequente(s)') || '—'}
+Executado(s): ${pick(f, 'Executado(s)') || '—'}
+SAT: ${pick(f, 'SAT') || '—'}
+SOP: ${pick(f, 'SOP') || '—'}
+Resumo do caso: ${pick(f, 'Resumo do caso') || '—'}
+Riscos jurídicos (campo original): ${pick(f, 'Riscos Jurídicos') || '—'}
+Endividamento fiscal total: ${pick(f, 'Endividamento Fiscal Total') || '—'}
+Endividamento trabalhista (soma): ${trabTotal !== null ? fmtBRL(trabTotal) : (pick(f, 'Passivo Trabalhista', 'Endividamento Trabalhista', 'Trabalhista') || '—')}
+Pesquisa prévia: ${pick(f, 'Pesquisa Prévia Realizada') || '—'}
+
+Processos (${getBlocks(f, /^Processo/i).length} identificados):
+${processos}
+
+Imóveis (${getBlocks(f, /^Imóvel/i).length} identificados):
+${imoveis}`);
+  }
+
+  if (state.rj) {
+    const f = state.rj;
+    const prjGroups = getGroupsMatching(f, /Condições da Classe/i);
+    const prjText = prjGroups.map(([title, g]) => `${title} — Deságio: ${g['Deságio']||'—'}; Carência: ${g['Carência']||'—'}; Parcelas: ${g['Parcelas']||'—'}; Juros: ${g['Juros']||'—'}; Correção: ${g['Correção']||'—'}`).join('\n') || '—';
+    sections.push(`## CHECKLIST DE RECUPERAÇÃO JUDICIAL
+RJ nº: ${pick(f, 'Recuperação Judicial nº', 'Número da RJ') || '—'}
+Vara: ${pick(f, 'Vara') || '—'}
+Requerentes: ${pick(f, 'Requerentes (Nome e CPF/CNPJ)') || '—'}
+Adm. judicial: ${pick(f, 'Administrador Judicial Nomeado') || '—'}
+Status: ${pick(f, 'Status') || '—'}
+Condições do PRJ por classe/opção:
+${prjText}
+QGC Classe I: ${pickMatching(f, /^Classe I\s*[–\-(]/i) || pick(f, 'Classe I') || '—'}
+QGC Classe II: ${pickMatching(f, /^Classe II\s*[–\-(]/i) || pick(f, 'Classe II') || '—'}
+QGC Classe III: ${pickMatching(f, /^Classe III\s*[–\-(]/i) || pick(f, 'Classe III') || '—'}
+QGC Classe IV: ${pickMatching(f, /^Classe IV\s*[–\-(]/i) || pick(f, 'Classe IV') || '—'}
+Total dos créditos arrolados: ${pick(f, 'Total dos créditos arrolados', 'Total de créditos arrolados') || '—'}
+Situação AGC: ${pick(f, 'Situação da AGC') || '—'}`);
+  }
+
+  if (state.cred) {
+    const f = state.cred;
+    const classeII  = getFieldsMatching(f, /^Classe II(\s|\(|$)/).map(([k, v]) => `${k}: ${joinVals(v)}`).join(' | ') || '—';
+    const classeIII = getFieldsMatching(f, /^Classe III(\s|\(|$)/).map(([k, v]) => `${k}: ${joinVals(v)}`).join(' | ') || '—';
+    const lastros = getBlocks(f, /^LASTRO/i).map(b => `- ${b.header}: Cédula ${b.fields['Cédula'] || '—'}; Emitente(s) ${joinVals(b.fields['Emitente(s)'] || b.fields['Emitente'])||'—'}; Avalista(s)/Fiador(es) ${joinVals(b.fields['Avalista(s)/Fiador(es)'] || b.fields['Avalista(s)'] || b.fields['Avalista/Fiador'])||'—'}; Valor (Emissão) ${b.fields['Valor (Emissão)'] || b.fields['Valor Arrolado'] || b.fields['Valor da Operação'] || '—'}; Classe ${b.fields['Classe'] || '—'}`).join('\n') || '—';
+    // Alguns imóveis de garantia vêm rotulados "Imóvel nº N" em vez de
+    // "Garantia nº N" (variação do próprio template) — sem essa alternância,
+    // esse bloco cai silenciosamente nas "Ações judiciais" (ou some).
+    const garantias = getBlocks(f, /^(Garantia|Imóvel)/i).map(b => `- ${b.header}: Matrícula ${b.fields['Matrícula nº'] || '—'}, Comarca ${b.fields['Comarca'] || '—'}, Proprietário(s) ${joinVals(b.fields['Proprietário'] || b.fields['Proprietários'])||'—'}, Avaliação ${b.fields['Avaliação'] || '—'}`).join('\n') || '—';
+    const acoes = f.blocks.filter(b => !/^LASTRO/i.test(b.header) && !/^(Garantia|Imóvel)/i.test(b.header) && Object.keys(b.fields).some(k => /processo/i.test(k)))
+      .map(b => `- ${b.header}: ` + Object.entries(b.fields).map(([k, v]) => `${k}: ${joinVals(v)}`).join('; ')).join('\n') || '—';
+    sections.push(`## ANÁLISE DE CRÉDITOS EM RJ
+Credor: ${pick(f, 'Credor (Nome e CNPJ)') || '—'}
+Advogado(s): ${pick(f, 'Advogado(s)', 'Advogados') || '—'}
+Valores por classe: ${classeII} | ${classeIII}
+Representatividade (%): ${joinVals(getField(f, 'Representatividade (%)')) || '—'}
+Garantia(s) (nível crédito): ${joinVals(getField(f, 'Garantia(s)')) || '—'}
+
+Lastros (${getBlocks(f, /^LASTRO/i).length} identificados):
+${lastros}
+
+Garantias reais (${getBlocks(f, /^(Garantia|Imóvel)/i).length} identificadas):
+${garantias}
+
+Ações judiciais relacionadas ao crédito (tipo real, não assumir "execução"):
+${acoes}`);
+  }
+
+  return `Você é um analista sênior de crédito e recuperação judicial da equipe PPA da Invista. Analise os seguintes documentos de um deal e produza uma análise estruturada em JSON.
+
+${sections.join('\n\n')}
+
+Produza APENAS um objeto JSON válido, sem markdown, sem texto antes ou depois, com exatamente esta estrutura:
+{
+  "resumo": "Parágrafo único de 4-6 linhas com o resumo executivo do deal: natureza da operação, partes, garantia, valor e situação atual.",
+  "riscos": [
+    {"nivel": "alto|medio|baixo", "texto": "descrição do risco"},
+    ...
+  ],
+  "inconsistencias": [
+    "descrição de inconsistência ou gap entre documentos",
+    ...
+  ]
+}
+
+Regras:
+- "riscos": liste 3 a 6 riscos relevantes identificados nos documentos. Nivel: "alto" para riscos que podem inviabilizar o deal, "medio" para riscos gerenciáveis, "baixo" para riscos informativos.
+- "inconsistencias": liste divergências entre os documentos, campos críticos em branco, ou alertas relevantes. Se não houver, retorne array vazio [].
+- Seja objetivo e técnico. Não invente dados que não estejam nos documentos.`;
+}
+
+async function gerarAnaliseIA() {
+  const apiKey = document.getElementById('api-key-input').value.trim();
+  const iaDiv = document.getElementById('ia-content');
+
+  if (!apiKey) {
+    iaDiv.innerHTML = `<div class="ai-error">Chave de API não informada. Volte à tela de upload e preencha o campo da API key para gerar a análise.</div>`;
+    return;
+  }
+
+  iaDiv.innerHTML = `<div class="ai-loading"><div class="ai-spinner"></div><div class="ai-loading-text">Analisando documentos com Claude…</div></div>`;
+
+  try {
+    const prompt = buildPrompt();
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4096,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Erro HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const text = data.content.map(b => b.text || '').join('').trim();
+    const clean = text.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+    aiResult = JSON.parse(clean);
+    renderIA(aiResult);
+    document.getElementById('qa-wrap').style.display = 'block';
+
+  } catch (err) {
+    iaDiv.innerHTML = `<div class="ai-error">Erro ao gerar análise: ${err.message}<br><br><button class="ai-regenerate" onclick="gerarAnaliseIA()">↺ Tentar novamente</button></div>`;
+  }
+}
+
+// ── Q&A ───────────────────────────────────────────────────────────────────────
+function qaKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviarPergunta(); }
+}
+
+function qaSystemPrompt() {
+  return `Você é um analista sênior de crédito e recuperação judicial da equipe PPA da Invista. Responda perguntas sobre o deal abaixo de forma objetiva e técnica. Use os dados dos documentos — não invente informações ausentes.
+
+${buildPrompt().replace(/^Você.*?Produza APENAS.*?\n\{[\s\S]*?\}\n\nRegras:[\s\S]*?$/m, '')}`;
+}
+
+async function enviarPergunta() {
+  const apiKey = document.getElementById('api-key-input').value.trim();
+  const input  = document.getElementById('qa-input');
+  const pergunta = input.value.trim();
+  if (!pergunta || !apiKey) return;
+
+  const sendBtn = document.getElementById('qa-send-btn');
+  sendBtn.disabled = true;
+  input.value = '';
+
+  // Adiciona mensagem do usuário
+  qaHistory.push({ role: 'user', content: pergunta });
+  qaTurns++;
+  renderQaMessages(true);
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1024,
+        system: qaSystemPrompt(),
+        messages: qaHistory
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Erro HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const resposta = data.content.map(b => b.text || '').join('').trim();
+    qaHistory.push({ role: 'assistant', content: resposta });
+    renderQaMessages(false);
+    atualizarQaMeta();
+
+  } catch (err) {
+    qaHistory.push({ role: 'assistant', content: `Erro: ${err.message}` });
+    renderQaMessages(false);
+  } finally {
+    sendBtn.disabled = false;
+    input.focus();
+  }
+}
+
+function renderQaMessages(loading) {
+  const container = document.getElementById('qa-messages');
+  const msgs = qaHistory.map(m => {
+    if (m.role === 'user') {
+      return `<div class="qa-msg qa-msg-user"><div class="qa-bubble qa-bubble-user">${escHtml(m.content)}</div></div>`;
+    } else {
+      return `<div class="qa-msg qa-msg-assistant"><div class="qa-bubble qa-bubble-assistant">${escHtml(m.content)}</div></div>`;
+    }
+  }).join('');
+  const thinking = loading ? `<div class="qa-msg qa-msg-assistant"><div class="qa-bubble qa-bubble-thinking"><div class="ai-spinner" style="width:14px;height:14px;border-width:1.5px"></div> Analisando…</div></div>` : '';
+  container.innerHTML = msgs + thinking;
+  container.scrollTop = container.scrollHeight;
+}
+
+function atualizarQaMeta() {
+  // Estimativa de custo: ~1200 tokens input + 600 output por turno médio, acumulando
+  const inputToks  = 1200 + (qaTurns - 1) * 600;
+  const outputToks = qaTurns * 500;
+  const custo = (inputToks * 3 + outputToks * 15) / 1e6;
+  document.getElementById('qa-turn-count').textContent =
+    `${qaTurns} ${qaTurns === 1 ? 'pergunta' : 'perguntas'} · ~$${custo.toFixed(3)}`;
+  // Aviso a partir de 8 perguntas
+  const warn = document.getElementById('qa-cost-warn');
+  if (qaTurns >= 8) {
+    document.getElementById('qa-warn-count').textContent = qaTurns;
+    warn.style.display = 'flex';
+  } else {
+    warn.style.display = 'none';
+  }
+}
+
+function limparConversa() {
+  if (qaTurns > 0 && !confirm(`Limpar as ${qaTurns} perguntas desta sessão? O histórico será apagado e o custo por nova pergunta voltará ao mínimo.`)) return;
+  qaHistory = [];
+  qaTurns = 0;
+  document.getElementById('qa-messages').innerHTML = '';
+  document.getElementById('qa-turn-count').textContent = '0 perguntas · ~$0,00';
+  document.getElementById('qa-cost-warn').style.display = 'none';
+}
+
+function escHtml(str) {
+  // Insere um espaço de largura zero depois de / e - : só é usado pelo navegador
+  // como ponto de quebra quando a linha realmente precisa quebrar (ex.: códigos
+  // como "24550766/COMPRA/CONTRATAÇÃO" sem nenhum espaço) — nunca corta uma
+  // palavra no meio, e não muda nada quando o texto já cabe numa linha.
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/([\/\-–.,])/g, '$1​');
+}
+function escAttr(str) {
+  return escHtml(str).replace(/"/g,'&quot;');
+}
+
+function renderIA(r) {
+  if (!r) return;
+  const nivelLabel = { alto: 'Alto', medio: 'Médio', baixo: 'Baixo' };
+  const riscosDots = (r.riscos || []).map(ri => `
+    <div class="ai-risk-item">
+      <div class="ai-risk-dot ${ri.nivel}"></div>
+      <div class="ai-risk-text"><strong>${nivelLabel[ri.nivel] || ri.nivel}:</strong> ${ri.texto}</div>
+    </div>`).join('');
+
+  const flags = (r.inconsistencias || []).map(f =>
+    `<div class="ai-flag"><div class="ai-flag-icon">⚑</div><div class="ai-flag-text">${f}</div></div>`
+  ).join('') || '<div style="color:var(--text-muted);font-size:12px">Nenhuma inconsistência identificada.</div>';
+
+  document.getElementById('ia-content').innerHTML = `
+    <div class="ai-header">
+      <span class="ai-badge">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+        Claude
+      </span>
+      <span class="ai-model">claude-sonnet-4-6 · gerado automaticamente</span>
+    </div>
+
+    <div class="ai-section">
+      <div class="ai-section-title">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+        Resumo executivo
+      </div>
+      <div class="card"><p class="ai-prose">${r.resumo || '—'}</p></div>
+    </div>
+
+    <div class="ai-section">
+      <div class="ai-section-title">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Riscos identificados
+      </div>
+      <div class="card">${riscosDots || '<div style="color:var(--text-muted);font-size:12px">Nenhum risco identificado.</div>'}</div>
+    </div>
+
+    <div class="ai-section">
+      <div class="ai-section-title">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Inconsistências e alertas
+      </div>
+      ${flags}
+    </div>
+
+    <div style="text-align:right">
+      <button class="ai-regenerate" onclick="gerarAnaliseIA()">↺ Regenerar análise</button>
+    </div>`;
+}
+
+// ── Renderização ──────────────────────────────────────────────────────────────
+// Campos do tipo "☐ Opção A X Opção B ☐ Opção C" (marcação de caixa do Word) —
+// troca o X pela opção marcada por ☑ e destaca só ela em verde; o resto some
+// da leitura visual sem perder a informação (fica em cinza, não em negrito).
+function renderCheckboxOptions(str) {
+  if (!str) return '—';
+  // O marcador de "opção escolhida" varia por documento: alguns usam a
+  // letra X digitada, outros já trazem o glifo ☑ (caixa marcada) direto —
+  // qualquer um dos dois conta; sem nenhum glifo de caixa, é texto comum.
+  if (!/[☐☑]/.test(str) && !/\bX\b/.test(str)) return escHtmlOrLink(str);
+  const opts = str.match(/[☐☑X][^☐☑X]*/g);
+  if (!opts || !opts.length) return escHtmlOrLink(str);
+  return opts.map(opt => {
+    const text = opt.trim();
+    const isChecked = /^(☑|X\b)/.test(text);
+    const label = escHtml(text.replace(/^(☑|☐|X)\s*/, ''));
+    return isChecked
+      ? `<span style="color:var(--success);font-weight:600">☑ ${label}</span>`
+      : `<span style="color:var(--text-muted)">☐ ${label}</span>`;
+  }).join(' ');
+}
+
+// Quando o valor de um campo é (ou contém) um link, não mostramos o
+// endereço cru — em vez disso um botão "Abrir link ↗" centralizado, embaixo
+// do resto do texto do quadrado, que abre a URL numa aba nova.
+const URL_RE = /(https?:\/\/[^\s<>"')]+|www\.[^\s<>"')]+\.[a-z]{2,}[^\s<>"')]*)/i;
+function linkifyValueHtml(s) {
+  const m = s.match(URL_RE);
+  if (!m) return null;
+  let url = m[0].replace(/[.,;:)]+$/, '');
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  const rest = (s.slice(0, m.index) + s.slice(m.index + m[0].length)).trim();
+  return (rest ? `<div>${escHtml(rest)}</div>` : '')
+    + `<div style="text-align:center;margin-top:${rest ? '8px' : '0'}"><button type="button" class="ver-detail-btn" onclick="window.open('${escAttr(url)}','_blank','noopener')">Abrir link ↗</button></div>`;
+}
+// Versão compacta do botão "Abrir link ↗" pra caber numa célula de tabela ou
+// linha de popup — texto (se sobrar algum) seguido do botão na mesma linha,
+// em vez de empilhados como no quadradinho de campo avulso.
+function cellLinkHtml(s) {
+  if (typeof s !== 'string' || !URL_RE.test(s)) return null;
+  const m = s.match(URL_RE);
+  let url = m[0].replace(/[.,;:)]+$/, '');
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  const rest = (s.slice(0, m.index) + s.slice(m.index + m[0].length)).trim();
+  return (rest ? escHtml(rest) + ' ' : '')
+    + `<button type="button" class="ver-detail-btn" style="display:inline;width:auto;margin:0 0 0 4px" onclick="window.open('${escAttr(url)}','_blank','noopener')">Abrir link ↗</button>`;
+}
+// Convenção de popup manual no texto do documento: quem escreve o dossiê
+// pode marcar qualquer trecho com [abrir pop-up] ... [fim] — na tela esse
+// trecho some da leitura corrida e vira um botão "Ver mais" que abre o
+// conteúdo marcado num popup (mesmo mecanismo do "Ver garantia"/"Ver ônus").
+// Funciona em qualquer campo, não só nos que já têm essa lógica dedicada.
+const POPUP_MARKER_RE = /\[\s*abrir\s*pop[\s-]*up\s*\]([\s\S]*?)\[\s*fim\s*\]/gi;
+function hasPopupMarker(s) {
+  return typeof s === 'string' && /\[\s*abrir\s*pop[\s-]*up\s*\]/i.test(s);
+}
+// renderSegment(texto) formata o texto FORA das marcações (link-detection,
+// parágrafos etc. variam por quem chama) — aqui só cuida de achar os pares
+// de marcador e substituí-los pelo botão, preservando o resto ao redor.
+function popupMarkersToHtml(rawText, renderSegment) {
+  const re = new RegExp(POPUP_MARKER_RE.source, 'gi');
+  let last = 0, out = '', m;
+  while ((m = re.exec(rawText))) {
+    if (m.index > last) out += renderSegment(rawText.slice(last, m.index));
+    const conteudo = m[1].trim();
+    if (conteudo) {
+      out += `<button type="button" class="ver-detail-btn" style="display:inline-block;width:auto;margin:0 4px" data-modal-title="Detalhes" data-modal-text="${escAttr(conteudo)}" onclick="showDetailModal(this)">Ver mais ▾</button>`;
+    }
+    last = re.lastIndex;
+  }
+  if (last < rawText.length) out += renderSegment(rawText.slice(last));
+  return out;
+}
+// Escapa um valor vindo do documento pra exibição — se parecer (ou contiver)
+// um link, mostra "Abrir link ↗" no lugar do endereço cru; se tiver marcação
+// de popup manual ([abrir pop-up]...[fim]), vira "Ver mais ▾". Substitui
+// escHtml(joinVals(...)) em qualquer célula/texto que vem direto do
+// documento (tabelas de Lastro/Garantia/Ativos, popups).
+function escHtmlOrLink(value) {
+  const s = joinVals(value);
+  if (!s) return '';
+  if (hasPopupMarker(s)) return popupMarkersToHtml(s, seg => cellLinkHtml(seg) || escHtml(seg));
+  return cellLinkHtml(s) || escHtml(s);
+}
+function set(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const v = Array.isArray(value) ? value.filter(Boolean).join(' · ') : value;
+  const s = v && v.trim ? (v.trim() || '—') : (v || '—');
+  if (typeof s === 'string' && hasPopupMarker(s)) {
+    el.innerHTML = popupMarkersToHtml(s, seg => escHtml(seg));
+    return;
+  }
+  const linkHtml = typeof s === 'string' && URL_RE.test(s) ? linkifyValueHtml(s) : null;
+  if (linkHtml) {
+    el.innerHTML = linkHtml;
+  } else if (typeof s === 'string' && /[☐☑]/.test(s)) {
+    el.innerHTML = renderCheckboxOptions(s);
+  } else {
+    el.textContent = s;
+  }
+}
+
+
+// ── Formatação de partes e modo de edição ───────────────────────────────────
+function normalizeIdNumber(kind, raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (kind === 'CNPJ' && digits.length === 14) {
+    return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+  }
+  if (kind === 'CPF' && digits.length === 11) {
+    return digits.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
+  }
+  return String(raw || '').trim();
+}
+function titleCasePartyName(name) {
+  const preserved = new Map([
+    ['S.A.','S.A.'], ['S.A','S.A.'], ['SA','S.A.'], ['S/A','S.A.'],
+    ['LTDA','Ltda.'], ['LTDA.','Ltda.'], ['EIRELI','Eireli'], ['ME','ME'], ['EPP','EPP'],
+    ['SPE','SPE'], ['FIDC','FIDC'], ['FIP','FIP'], ['SCP','SCP'], ['S.A.S.','S.A.S.']
+  ]);
+  return String(name || '').trim().replace(/\s+/g, ' ').split(' ').map(word => {
+    const clean = word.toUpperCase();
+    if (preserved.has(clean)) return preserved.get(clean);
+    if (/^[IVXLCDM]+$/i.test(word) && word.length <= 5) return clean;
+    return word.charAt(0).toLocaleUpperCase('pt-BR') + word.slice(1).toLocaleLowerCase('pt-BR');
+  }).join(' ');
+}
+function parsePartyRecords(value) {
+  const raw = joinVals(value).replace(/\r/g, '').replace(/[•]/g, '·').trim();
+  if (!raw) return [];
+  const records = [];
+  const chunks = raw.split(/\n+|\s*;\s*/).map(v => v.trim()).filter(Boolean);
+  chunks.forEach(chunk => {
+    // Aceita sufixos como "CPF/MF:" (não só "CPF nº"/"CPF:") antes do
+    // número, e exige que o id comece em dígito (evita casar só a "/").
+    const re = /(.*?)(?:\s*[·–—-]\s*)?\b(CNPJ|CPF)\b(?:\s*\/\s*[A-Za-zÀ-ú]+)?\s*[:\-]?\s*(\d[\d.\/\-]*)/gi;
+    let match, found = false;
+    while ((match = re.exec(chunk)) !== null) {
+      found = true;
+      const name = match[1].replace(/^[·–—\-\s]+|[·–—\-\s]+$/g, '').trim();
+      if (name) records.push({ name, kind: match[2].toUpperCase(), id: match[3] });
+    }
+    if (!found) {
+      chunk.split(/\s*[·•]\s*/).map(v => v.trim()).filter(Boolean).forEach(name => {
+        records.push({ name: name.replace(/^[·–—\-\s]+|[·–—\-\s]+$/g, '').trim(), kind: '', id: '' });
+      });
+    }
+  });
+  return records.filter(r => r.name);
+}
+function partyHtml(value) {
+  const records = parsePartyRecords(value);
+  if (!records.length) return '—';
+  return `<div class="party-list">${records.map(r => {
+    const id = r.kind ? r.kind + ' ' + normalizeIdNumber(r.kind, r.id) : '';
+    const doc = id ? '<span class="party-doc">' + escHtml(id) + '</span>' : '';
+    return '<span class="party-line"><span class="party-name">' + escHtml(titleCasePartyName(r.name)) + '</span>' + doc + '</span>';
+  }).join('')}</div>`;
+}
+function setParty(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = partyHtml(value);
+}
+// Campos como Exequente(s)/Executado(s) trazem "NOME · \nAdv: fulano; fulano"
+// por parte, com linha em branco separando partes quando há mais de uma —
+// mesmo padrão usado no painel Desalinhados. Cada parte vira um card branco.
+function splitPartesAdv(raw) {
+  // Cada parte pode chegar como item próprio de um array (uma linha de
+  // tabela por devedor) ou embutida numa única string com linhas em
+  // branco separando as partes — tratamos os dois formatos.
+  const entries = Array.isArray(raw) ? raw.filter(Boolean).map(String) : String(raw || '').split(/\n\s*\n/);
+  if (!entries.length) return [];
+  return entries.map(e => e.trim()).filter(Boolean).map(entry => {
+    const idx = entry.search(/Adv\.?:?/i);
+    if (idx < 0) return { nome: entry.replace(/\s+/g, ' ').trim(), advs: [] };
+    const nome = entry.slice(0, idx).replace(/[·\-–]\s*$/, '').replace(/\s+/g, ' ').trim();
+    const advsRaw = entry.slice(idx).replace(/^Adv\.?:?\s*/i, '');
+    const advs = advsRaw.split(';').map(a => a.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    return { nome, advs };
+  });
+}
+function partAdvHtml(p) {
+  return `<div class="party-card"><div class="parte-nome">${escHtml(p.nome)}</div>${p.advs.map(a => `<div class="parte-adv">Adv.: ${escHtml(a)}</div>`).join('')}</div>`;
+}
+function setPartyAdv(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const partes = splitPartesAdv(value);
+  el.innerHTML = partes.length ? partes.map(partAdvHtml).join('') : '—';
+}
+function cardTitleIcon(kind) {
+  const svg = path => `<svg class="card-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">${path}</svg>`;
+  if (kind === 'exequente') return svg('<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a6 6 0 0 1 12 0v2"/><path d="M17 3.13a4 4 0 0 1 0 7.75"/><path d="M21 21v-2a4 4 0 0 0-3-3.87"/>');
+  if (kind === 'executado') return svg('<circle cx="9" cy="8" r="4"/><path d="M2 21v-2a6 6 0 0 1 12 0v2"/><circle cx="17" cy="8" r="3"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>');
+  if (kind === 'resumo') return svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/>');
+  return svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>');
+}
+// Uma única caixa com todas as partes juntas (uma linha por parte), em vez
+// de uma caixinha por parte — usada em Devedor(es)/Garantidor(es).
+function setPartyBox(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const records = parsePartyRecords(value);
+  if (!records.length) { el.innerHTML = '—'; el.classList.remove('party-box'); return; }
+  el.classList.add('party-box');
+  el.innerHTML = records.map(r => {
+    const idPart = r.kind ? ` - ${r.kind} ${normalizeIdNumber(r.kind, r.id)}` : '';
+    return `<div class="party-box-line">${escHtml(titleCasePartyName(r.name) + idPart)}</div>`;
+  }).join('');
+}
+function riskTone(text) {
+  const t = String(text || '').toLocaleLowerCase('pt-BR').replace(/\s+/g, ' ').trim();
+  const markerOnly = /^(?:principais\s+riscos?\s*:?\s*)?(?:risco\s*:?\s*)?(?:n\s*[\/.\-]?\s*i|n\s*[\/.\-]?\s*a|não\s+identificad[oa]s?|não\s+aplicável|não\s+se\s+aplica|sem\s+identificação|[-–—]+)(?:\s*\([^)]*\))?\s*[.!]?$/i;
+  if (!t || t === '—' || t === '-' || markerOnly.test(t)) return 'success';
+  if (/não\s+há|não\s+existe|sem\s+risco|nenhum\s+risco|não\s+identificamos\s+riscos|risco\s+inexistente/.test(t)) return 'success';
+  if (/(?:^|[\s:;,(])(?:n\s*[\/.\-]?\s*i|n\s*[\/.\-]?\s*a|não\s+identificad[oa]s?|não\s+aplicável)(?:$|[\s;,.()\-])/.test(t) && !/moderad|alto|elevad|grave|crític|relevante|substancial|possível|potencial|atenção|pendên/.test(t)) return 'success';
+  if (/alto|elevad|grave|crític|relevante|substancial/.test(t)) return 'danger';
+  if (/moderad|atenção|pendên|possível|potencial|baixo\/moderado|moderado\/baixo/.test(t)) return 'warning';
+  if (/baixo|reduzido|remoto|improvável/.test(t)) return 'success';
+  return 'neutral';
+}
+function applyRiskTone() {
+  const block = document.getElementById('p-risk-block');
+  const textEl = document.getElementById('p-riscos');
+  const label = document.getElementById('p-risk-label');
+  if (!block || !textEl) return;
+  const tone = riskTone(textEl.innerText || textEl.textContent);
+  block.classList.remove('risk-success','risk-warning','risk-danger','risk-neutral');
+  block.classList.add('risk-' + tone);
+  if (label) label.textContent = tone === 'success' ? '✓ Riscos jurídicos' : tone === 'neutral' ? 'Riscos jurídicos' : '⚠ Riscos jurídicos';
+}
+function editableElements(root = document) {
+  const selectors = [
+    '.field .val', '.stat-card .stat-val', '.asset-stat .as-val', '.kv-val',
+    '.ai-prose', '.ai-risk-text', '.ai-flag-text', '.editable-value',
+    '.deal-title', '.deal-meta', '.mini-table tbody td', '.subcard .val'
+  ];
+  return [...root.querySelectorAll(selectors.join(','))].filter(el => {
+    if (el.closest('.qa-wrap')) return false;
+    if (el.matches('.mini-table tbody td') && (el.querySelector('a') || el.querySelector('button'))) return false;
+    return true;
+  });
+}
+function setEditMode(active) {
+  editMode = !!active;
+  editableElements().forEach(el => {
+    el.contentEditable = editMode ? 'true' : 'false';
+    el.classList.toggle('editable-field', editMode);
+  });
+  const btn = document.getElementById('edit-toggle');
+  if (btn) {
+    const span = btn.querySelector('span');
+    if (span) span.textContent = editMode ? 'Concluir edição' : 'Editar conteúdo';
+    btn.classList.toggle('toolbar-btn-primary', editMode);
+    document.body.classList.toggle('edit-mode', editMode);
+  }
+  const modalContent = document.getElementById('onus-modal-content');
+  if (modalContent) {
+    modalContent.contentEditable = editMode ? 'true' : 'false';
+    modalContent.classList.toggle('editable-field', editMode);
+  }
+  applyRiskTone();
+}
+const EDIT_ACCESS_PASSWORD = 'ppainvista2026';
+function openEditAccessModal() {
+  const overlay = document.getElementById('edit-access-overlay');
+  const input = document.getElementById('edit-access-password');
+  const error = document.getElementById('edit-access-error');
+  if (!overlay || !input || !error) return;
+  input.value = '';
+  error.style.display = 'none';
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => input.focus(), 0);
+}
+function closeEditAccessModal() {
+  const overlay = document.getElementById('edit-access-overlay');
+  const input = document.getElementById('edit-access-password');
+  const error = document.getElementById('edit-access-error');
+  if (overlay) overlay.style.display = 'none';
+  if (input) input.value = '';
+  if (error) error.style.display = 'none';
+  document.body.style.overflow = '';
+}
+function submitEditAccess(event) {
+  event.preventDefault();
+  const input = document.getElementById('edit-access-password');
+  const error = document.getElementById('edit-access-error');
+  if (input && input.value === EDIT_ACCESS_PASSWORD) {
+    closeEditAccessModal();
+    setEditMode(true);
+    return;
+  }
+  if (error) error.style.display = 'block';
+  if (input) input.select();
+}
+function toggleEditMode() {
+  if (editMode) setEditMode(false);
+  else openEditAccessModal();
+}
+document.addEventListener('input', e => {
+  if (e.target && (e.target.id === 'p-riscos' || e.target.closest('#p-riscos'))) applyRiskTone();
+});
+
+// Agrupa cada bloco principal (ex.: "Processo n. 01") com os blocos que vêm
+// depois dele no documento e antes do próximo — isso captura sub-blocos como
+// "Embargos à Execução"/"Agravo de Instrumento", que pertencem ao processo
+// anterior mas são, na extração, blocos próprios e independentes.
+function attachSubBlocks(f, mainRe, boundaryRes) {
+  const all = f.blocks;
+  const mainIdxs = [];
+  all.forEach((b, i) => { if (mainRe.test(b.header)) mainIdxs.push(i); });
+  return mainIdxs.map((startIdx, k) => {
+    let endIdx = mainIdxs[k + 1] !== undefined ? mainIdxs[k + 1] : all.length;
+    for (let i = startIdx + 1; i < endIdx; i++) {
+      if (boundaryRes.some(re => re.test(all[i].header))) { endIdx = i; break; }
+    }
+    return { main: all[startIdx], subs: all.slice(startIdx + 1, endIdx) };
+  });
+}
+
+function buildProcessoDetailText(main, subs) {
+  const bf = main.fields;
+  const lines = [];
+  if (bf['Adv.:']) lines.push('Advogado(s): ' + joinVals(bf['Adv.:']));
+  if (bf['Risco de Prescrição Superficial']) lines.push('Risco de prescrição superficial: ' + joinVals(bf['Risco de Prescrição Superficial']));
+  if (bf['Lastro / Instrumento']) { lines.push('LASTRO / INSTRUMENTO'); lines.push(joinVals(bf['Lastro / Instrumento'])); }
+  if (bf['Garantia']) { lines.push('GARANTIA'); lines.push(joinVals(bf['Garantia'])); }
+  subs.forEach(sb => {
+    lines.push(sb.header.toUpperCase());
+    Object.entries(sb.fields).forEach(([k, v]) => lines.push(`${k}: ${joinVals(v)}`));
+  });
+  return lines.join('\n');
+}
+
+function renderPrev(f) {
+  setPartyAdv('p-exequente', getField(f, 'Exequente(s)') ?? getField(f, 'Exequente'));
+  setPartyAdv('p-executado', getField(f, 'Executado(s)'));
+  set('p-sop-geral',    pick(f, 'SOP'));
+  set('p-sat',          pick(f, 'SAT'));
+  set('p-resumo',       pick(f, 'Resumo do caso'));
+  set('p-riscos',       pick(f, 'Riscos Jurídicos'));
+  applyRiskTone();
+
+  const fiscalTotal = pick(f, 'Endividamento Fiscal Total');
+  const trabTotal = sumWideTableColumn(f, 'ENDIVIDAMENTO TRABALHISTA');
+  set('p-fiscal-total', fiscalTotal);
+  set('p-trabalhista',  pick(f, 'Passivo Trabalhista', 'Endividamento Trabalhista', 'Trabalhista') || (trabTotal !== null ? fmtBRL(trabTotal) : undefined));
+  set('p-pesquisa',     pick(f, 'Pesquisa Prévia Realizada'));
+  set('p-pesq-qual',    pick(f, 'Pesquisa Qualificada'));
+
+  // ── Processos (Visão jurídica) ──────────────────────────────────────────
+  const processos = attachSubBlocks(f, /^Processo/i, [/^Imóvel/i]);
+  const procContainer = document.getElementById('p-processos-container');
+  procContainer.innerHTML = processos.length
+    ? `<div class="mini-table-wrap"><table class="mini-table">
+        <colgroup><col style="width:11%"><col style="width:22%"><col style="width:16%"><col style="width:10%"><col style="width:13%"><col style="width:13%"><col style="width:15%"></colgroup>
+        <thead><tr><th>Processo</th><th>Nº do processo</th><th>Executado(s)</th><th>Distribuição</th><th>SOP</th><th>SAT</th><th>Status</th></tr></thead>
+        <tbody>${processos.map(({ main, subs }) => {
+          const bf = main.fields;
+          const detailText = buildProcessoDetailText(main, subs);
+          const verBtn = detailText
+            ? `<button type="button" class="ver-detail-btn" data-modal-title="${escAttr(main.header)}" data-modal-text="${escAttr(detailText)}" onclick="showDetailModal(this)">Ver detalhes ▾</button>`
+            : '';
+          return `<tr>
+            <td class="td-mono">${escHtml(main.header)}${verBtn}</td>
+            <td>${escHtml(joinVals(bf['Número do processo']) || '—')}</td>
+            <td>${escHtml(joinVals(bf['Executado(s)']) || '—')}</td>
+            <td>${escHtml(joinVals(bf['Data de distribuição']) || '—')}</td>
+            <td>${escHtml(joinVals(bf['SOP']) || '—')}</td>
+            <td>${escHtml(joinVals(bf['SAT']) || '—')}</td>
+            <td>${escHtml(joinVals(bf['Status']) || '—')}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`
+    : '<p style="color:var(--text-muted);font-size:12px">Nenhum processo identificado.</p>';
+
+  // ── Imóveis ──────────────────────────────────────────────────────────────
+  const imoveis = getBlocks(f, /^Imóvel/i);
+  const imovelContainer = document.getElementById('p-imoveis-container');
+  imovelContainer.innerHTML = imoveis.length
+    ? `<div class="mini-table-wrap"><table class="mini-table">
+        <colgroup><col style="width:12%"><col style="width:12%"><col style="width:15%"><col style="width:22%"><col style="width:24%"><col style="width:15%"></colgroup>
+        <thead><tr><th>Imóvel</th><th>Matrícula nº</th><th>Comarca</th><th>Proprietário(s)</th><th>Descrição</th><th>Avaliação</th></tr></thead>
+        <tbody>${imoveis.map(b => {
+          const bf = b.fields;
+          const onus = joinVals(bf['Ônus']);
+          const verOnusBtn = onus
+            ? `<button type="button" class="ver-detail-btn" data-modal-title="${escAttr('Ônus vigentes — ' + b.header)}" data-modal-text="${escAttr(onus)}" onclick="showDetailModal(this)">Ver ônus ▾</button>`
+            : '';
+          return `<tr>
+            <td class="td-mono">${escHtml(b.header)}</td>
+            <td>${escHtml(joinVals(bf['Matrícula nº']) || '—')}</td>
+            <td>${escHtml(joinVals(bf['Comarca']) || '—')}</td>
+            <td>${escHtml(joinVals(bf['Proprietário'] || bf['Proprietários']) || '—')}</td>
+            <td class="td-desc"><span class="editable-value">${escHtml(joinVals(bf['Descrição']) || '—')}</span>${verOnusBtn}</td>
+            <td>${escHtml(joinVals(bf['Avaliação']) || '—')}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`
+    : '<p style="color:var(--text-muted);font-size:12px">Nenhum imóvel identificado.</p>';
+
+  setDealHeader(pick(f, 'Nome do Caso') || pick(f, 'Exequente(s)'), pick(f, 'Advogadas Responsáveis', 'Advogada Responsável'), pick(f, 'Data da Análise'));
+}
+// Cabeçalho do painel: label pequeno fixo ("Painel de Deals") + título
+// (preenchido manualmente quando não houver "Nome do Caso" no documento)
+// + pills (PPA Invista, advogada do caso, data da análise).
+function setDealHeader(nome, advogada, data) {
+  const titleEl = document.getElementById('deal-title');
+  // Só sobrescreve o título se vier um nome real — outro documento
+  // (ex.: Análise Prévia) pode já ter preenchido; sem nome, o título fica
+  // como está (preenchido manualmente quando nenhum documento o traz).
+  if (nome) {
+    titleEl.textContent = nome;
+    document.getElementById('top-meta').textContent = nome;
+  } else if (!titleEl.textContent) {
+    titleEl.textContent = '—';
+  }
+  const pills = ['PPA Invista', advogada, data].filter(Boolean);
+  document.getElementById('deal-meta').innerHTML = pills.map(p => `<span class="deal-pill">${escHtml(p)}</span>`).join('');
+}
+
+function renderRJ(f) {
+  document.getElementById('rj-empty-warning').innerHTML = looksEmpty(f)
+    ? '<div class="risk-block risk-warning"><div class="risk-label">Atenção</div><div class="risk-text">Não foi possível identificar dados estruturados neste documento — verifique se ele segue o formato de tabelas esperado (um documento em texto corrido, sem tabelas, não é lido por este painel).</div></div>'
+    : '';
+  setDealHeader(pick(f, 'Nome do Caso'), pick(f, 'Advogadas Responsáveis', 'Advogada Responsável'), pick(f, 'Data da Análise'));
+  set('rj-numero',      pick(f, 'Recuperação Judicial nº', 'Número da RJ'));
+  set('rj-vara',        pick(f, 'Vara'));
+  setParty('rj-requerentes', pick(f, 'Requerentes (Nome e CPF/CNPJ)'));
+  set('rj-advs',        pick(f, 'Advogados dos Requerentes'));
+  set('rj-adj',         pick(f, 'Administrador Judicial Nomeado'));
+  set('rj-pedido',      pick(f, 'Data do Pedido'));
+  set('rj-deferimento', pick(f, 'Data do Deferimento'));
+  set('rj-status',      pick(f, 'Status'));
+
+  const prjGroups = getGroupsMatching(f, /Condições da Classe/i);
+  document.getElementById('rj-prj-cards').innerHTML = prjGroups.length
+    ? prjGroups.map(([title, g]) => `
+        <div class="card">
+          <div class="card-title">${escHtml(title.replace(/^Condições da\s+/i, '').trim())}</div>
+          <div class="kv-row"><span class="kv-label">Deságio</span><span class="kv-val">${escHtml(g['Deságio'] || '—')}</span></div>
+          <div class="kv-row"><span class="kv-label">Carência</span><span class="kv-val kv-val-long">${escHtml(g['Carência'] || '—')}</span></div>
+          <div class="kv-row"><span class="kv-label">Parcelas</span><span class="kv-val">${escHtml(g['Parcelas'] || '—')}</span></div>
+          <div class="kv-row"><span class="kv-label">Juros</span><span class="kv-val">${escHtml(g['Juros'] || '—')}</span></div>
+          <div class="kv-row"><span class="kv-label">Correção</span><span class="kv-val">${escHtml(g['Correção'] || '—')}</span></div>
+        </div>`).join('')
+    : '<p style="color:var(--text-muted);font-size:12px">Nenhuma condição de PRJ identificada.</p>';
+
+  // O QGC (total da classe, o que esta aba quer) costuma anexar o nome da
+  // classe ao rótulo (ex.: "Classe I – Trabalhistas", "Classe II – Garantia
+  // Real"). Documentos como o Checklist_RJ_Creditos também têm um "Classe I"/
+  // "Classe II"/"Classe III" SEM sufixo, mas esse é o valor daquele credor
+  // específico, não o total da classe — por isso a versão com sufixo (–, -
+  // ou parênteses logo após o número) tem prioridade; só cai para o rótulo
+  // solto quando o documento não tiver a variante com sufixo.
+  set('rj-qgc-i',   pickMatching(f, /^Classe I\s*[–\-(]/i)   || pick(f, 'Classe I'));
+  set('rj-qgc-ii',  pickMatching(f, /^Classe II\s*[–\-(]/i)  || pick(f, 'Classe II'));
+  set('rj-qgc-iii', pickMatching(f, /^Classe III\s*[–\-(]/i) || pick(f, 'Classe III'));
+  set('rj-qgc-iv',  pickMatching(f, /^Classe IV\s*[–\-(]/i)  || pick(f, 'Classe IV'));
+  set('rj-qgc-total', pick(f, 'Total dos créditos arrolados', 'Total de créditos arrolados'));
+  set('rj-agc-status', pick(f, 'Situação da AGC'));
+  const conv1 = pick(f, '1ª Convocação', '1a Convocação');
+  const conv2 = pick(f, '2ª Convocação', '2a Convocação');
+  const datas = [conv1 && `1ª: ${conv1}`, conv2 && `2ª: ${conv2}`].filter(Boolean).join(' · ');
+  set('rj-agc-datas', datas || pick(f, 'Datas'));
+
+  const checkItems = [
+    'Petição Inicial da RJ', 'Quadro de Ativos dos Requerentes',
+    'Relatório de Perícia Prévia', 'Laudo de imóveis essenciais',
+    'Último RMA', 'QGC do AJ', 'PRJ e Aditivos',
+    'Atas, laudo de credenciamento e de votação da AGC'
+  ];
+  const checkItemAliases = { 'Laudo de imóveis essenciais': 'Laudo de Imóveis Essenciais' };
+  document.getElementById('rj-checklist').innerHTML = checkItems.map(item => {
+    const val = joinVals(getField(f, item) ?? getField(f, checkItemAliases[item])) || '';
+    return `<div class="checklist-row"><span class="checklist-label">${escHtml(item)}</span><span class="kv-val">${renderCheckboxOptions(val)}</span></div>`;
+  }).join('');
+}
+
+function renderCred(f) {
+  document.getElementById('cred-empty-warning').innerHTML = looksEmpty(f)
+    ? '<div class="risk-block risk-warning"><div class="risk-label">Atenção</div><div class="risk-text">Não foi possível identificar dados estruturados neste documento — verifique se ele segue o formato de tabelas esperado (um documento em texto corrido, sem tabelas, não é lido por este painel).</div></div>'
+    : '';
+  // Alguns templates (ex.: Checklist_RJ_Creditos) descrevem cada classe numa
+  // tabela própria (sem banner de bloco isolando-a), cada uma repetindo os
+  // campos "Credor", "Advogado(s)" e "Representatividade" — se lêssemos de
+  // f.fields direto (achatado), essas 3 tabelas se acumulariam num único
+  // campo (o Credor apareceria 2-3x repetido, e não daria pra saber qual
+  // Representatividade é de qual classe). scalarTables (um snapshot por
+  // tabela do documento) evita isso: buscamos a tabela que contém aquele
+  // "Classe N" e lemos Credor/Advogado(s)/Representatividade dali.
+  function classeFromScalarTables(re) {
+    const t = (f.scalarTables || []).find(t => Object.keys(t).some(k => re.test(k)));
+    if (!t) return { valor: undefined, rep: undefined, credor: undefined, advs: undefined };
+    const classeKey = Object.keys(t).find(k => re.test(k));
+    return {
+      valor: joinVals(t[classeKey]),
+      rep: joinVals(t['Representatividade (%)'] || t['Representatividade']),
+      credor: joinVals(t['Credor (Nome e CNPJ)']),
+      advs: joinVals(t['Advogado(s)'] || t['Advogados'])
+    };
+  }
+
+  // Credor e Advogado(s) do Credor no mesmo quadrinho — mesmo padrão do
+  // Desalinhados pra Exequente(s) (nome em negrito + "Adv.:" por linha).
+  // Lido da 1ª tabela de classe com crédito (não do campo achatado, que
+  // juntaria o mesmo credor repetido 2-3x, uma vez por classe).
+  const credorInfo = [/^Classe I(\s|\(|$)/i, /^Classe II(\s|\(|$)/i, /^Classe III(\s|\(|$)/i]
+    .map(classeFromScalarTables).find(c => c.credor) || {};
+  const nomeCredor = credorInfo.credor || pick(f, 'Credor (Nome e CNPJ)');
+  const credorEl = document.getElementById('cr-credor');
+  if (!nomeCredor) {
+    credorEl.textContent = '—';
+  } else {
+    const advs = (credorInfo.advs || joinVals(pick(f, 'Advogado(s)', 'Advogados'))).split(/;\s*/).map(a => a.trim()).filter(Boolean);
+    credorEl.innerHTML = `<div class="party-card">
+      <div class="parte-nome">${escHtml(nomeCredor)}</div>
+      ${advs.map(a => `<div class="parte-adv">Adv.: ${escHtml(a)}</div>`).join('')}
+    </div>`;
+  }
+  const classePairs = [
+    { classe: 'Classe I',   ...classeFromScalarTables(/^Classe I(\s|\(|$)/i) },
+    { classe: 'Classe II',  ...classeFromScalarTables(/^Classe II(\s|\(|$)/i) },
+    { classe: 'Classe III', ...classeFromScalarTables(/^Classe III(\s|\(|$)/i) }
+  ].map(p => ({
+    ...p,
+    // Fallback para o padrão antigo (rótulo composto exato), caso o
+    // documento não tenha gerado uma scalarTable própria para essa classe.
+    valor: p.valor || pick(f, p.classe),
+    rep: p.rep || pick(f, `Representatividade (%) — ${p.classe}`, `Representatividade (%) - ${p.classe}`)
+  })).filter(p => p.valor);
+  const detalhamentoEl = document.getElementById('cr-detalhamento');
+  let detalhamentoHtml = classePairs.map(p => `
+      <div class="subcard"><div class="subcard-title">${escHtml(p.classe)}</div><div class="val">${escHtml(p.valor)}</div></div>
+      <div class="subcard"><div class="subcard-title">Representatividade</div><div class="val">${escHtml(p.rep || '—')}</div></div>`
+    ).join('');
+  // Extraconcursal não tem representatividade própria — só a caixinha do
+  // valor, do mesmo tamanho/estilo das demais, na mesma linha.
+  const extraconcursal = pick(f, 'Extraconcursal') || pickMatching(f, /^Extraconcursal(\s|\(|$)/i);
+  if (extraconcursal) {
+    detalhamentoHtml += `<div class="subcard"><div class="subcard-title">Extraconcursal</div><div class="val">${escHtml(extraconcursal)}</div></div>`;
+  }
+  detalhamentoEl.innerHTML = detalhamentoHtml
+    || '<p style="color:var(--text-muted);font-size:12px">Nenhuma classe com crédito identificada.</p>';
+
+  const lastroBlocks   = getBlocks(f, /^LASTRO/i);
+  // Alguns imóveis de garantia vêm rotulados "Imóvel nº N" em vez de
+  // "Garantia nº N" (variação do próprio template).
+  const garantiaBlocks = getBlocks(f, /^(Garantia|Imóvel)/i);
+  // Mapa "número citado" (ex.: 2, de "Garantia nº 2") -> âncora da linha
+  // correspondente na tabela de Garantias, pra linkar o Lastro até ela.
+  const garNumero = (header, indexFallback) => (/(\d+)\s*$/.exec(header || '') || [])[1] || String(indexFallback + 1);
+  const garLookup = {};
+  garantiaBlocks.forEach((b, i) => {
+    const n = garNumero(b.header, i);
+    garLookup[n] = { anchor: `cr-garantia-${n}`, header: b.header };
+  });
+
+  const devedores = new Set(), garantidores = new Set();
+  lastroBlocks.forEach(b => {
+    const em = joinVals(b.fields['Emitente(s)'] || b.fields['Emitente']);
+    const av = joinVals(b.fields['Avalista(s)/Fiador(es)'] || b.fields['Avalista(s)'] || b.fields['Avalista/Fiador']);
+    if (em) devedores.add(em);
+    if (av) garantidores.add(av);
+  });
+  setPartyBox('cr-devedores', [...devedores].join('; '));
+  setPartyBox('cr-garantidores', [...garantidores].join('; '));
+
+  document.getElementById('cr-lastros-container').innerHTML = lastroBlocks.length
+    ? `<div class="mini-table-wrap"><table class="mini-table">
+        <colgroup><col style="width:15%"><col style="width:16%"><col style="width:15%"><col style="width:16%"><col style="width:11%"><col style="width:14%"><col style="width:13%"></colgroup>
+        <thead><tr><th>Lastro</th><th>Instrumento</th><th>Emitente(s)</th><th>Avalista(s)/Fiador(es)</th><th>Emissão</th><th>Valor (Emissão)</th><th>Valor Atualizado</th></tr></thead>
+        <tbody>${lastroBlocks.map(b => {
+          const bf = b.fields;
+          // Garantia vinculada: prioriza o campo explícito do checklist (pode
+          // trazer "Garantia nº 2, Garantia nº 4" — vira link pra linha real
+          // na tabela de Garantias); sem esse campo, cai no texto livre de
+          // sempre (sem link, só descritivo) — nunca inventamos o vínculo.
+          const garVinc = joinVals(bf['Garantia(s) vinculada(s)']);
+          const garLivre = joinVals(bf['Garantia']);
+          const percentual = joinVals(bf['Percentual/Limite garantido']);
+          const numsCitados = isMeaningfulText(garVinc) ? refNumerosCitados(garVinc) : [];
+          const linksHtml = numsCitados.map(n => garLookup[n]
+            ? `<div style="margin-bottom:4px"><a href="#${garLookup[n].anchor}" onclick="scrollToGarantia('${garLookup[n].anchor}');return false;">${escHtml(garLookup[n].header)} ↗</a></div>`
+            : `<div style="margin-bottom:4px">${escHtml('Garantia nº ' + n)} (não localizada na tabela)</div>`
+          ).join('');
+          const garantiaHtmlParts = [];
+          if (linksHtml) garantiaHtmlParts.push(linksHtml);
+          else if (isMeaningfulText(garVinc)) garantiaHtmlParts.push(`<p style="margin-bottom:6px">${escHtmlOrLink(garVinc)}</p>`);
+          else if (isMeaningfulText(garLivre)) garantiaHtmlParts.push(multilineHtml(garLivre));
+          if (isMeaningfulText(percentual)) garantiaHtmlParts.push(`<p style="margin-top:8px;color:var(--text-muted);font-size:11px">Percentual/Limite garantido: ${escHtmlOrLink(percentual)}</p>`);
+          const garantiaModalHtml = garantiaHtmlParts.join('');
+          const verGarantiaBtn = garantiaModalHtml
+            ? `<button type="button" class="ver-detail-btn" data-modal-title="${escAttr('Garantia — ' + b.header)}" data-modal-html="${escAttr(garantiaModalHtml)}" onclick="showDetailModal(this)">Ver garantia ▾</button>`
+            : '';
+          const acoesRelacionadas = joinVals(bf['Ações relacionadas']);
+          const verAcoesBtn = isMeaningfulText(acoesRelacionadas)
+            ? `<button type="button" class="ver-detail-btn" data-modal-title="${escAttr('Ações relacionadas — ' + b.header)}" data-modal-text="${escAttr(acoesRelacionadas)}" onclick="showDetailModal(this)">Ações relacionadas ▾</button>`
+            : '';
+          return `<tr>
+            <td class="td-mono">${escHtml(b.header)}${verGarantiaBtn}</td>
+            <td>${escHtmlOrLink(bf['Cédula'] || bf['Instrumento']) || '—'}${verAcoesBtn}</td>
+            <td>${escHtmlOrLink(bf['Emitente(s)'] || bf['Emitente']) || '—'}</td>
+            <td>${escHtmlOrLink(bf['Avalista(s)/Fiador(es)'] || bf['Avalista(s)'] || bf['Avalista/Fiador']) || '—'}</td>
+            <td>${escHtml(joinVals(bf['Emissão']) || '—')}</td>
+            <td>${escHtml(joinVals(bf['Valor (Emissão)'] || bf['Valor Arrolado'] || bf['Valor da Operação']) || '—')}</td>
+            <td>${escHtml(joinVals(bf['Valor Atualizado']) || '—')}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`
+    : '<p style="color:var(--text-muted);font-size:12px">Nenhum lastro identificado.</p>';
+
+  document.getElementById('cr-garantias-container').innerHTML = garantiaBlocks.length
+    ? `<div class="mini-table-wrap"><table class="mini-table">
+        <colgroup><col style="width:10%"><col style="width:11%"><col style="width:15%"><col style="width:19%"><col style="width:15%"><col style="width:15%"><col style="width:15%"></colgroup>
+        <thead><tr><th>Matrícula nº</th><th>Comarca</th><th>Proprietário(s)</th><th>Descrição</th><th>Avaliação</th><th>Lastros</th><th>Valor Garantido</th></tr></thead>
+        <tbody>${garantiaBlocks.map((b, i) => {
+          const bf = b.fields;
+          const mat = joinVals(bf['Matrícula nº']);
+          const onus = joinVals(bf['Ônus']);
+          const verOnusBtn = onus
+            ? `<button type="button" class="ver-detail-btn" data-modal-title="${escAttr('Ônus vigentes — Matrícula ' + mat)}" data-modal-text="${escAttr(onus)}" onclick="showDetailModal(this)">Ver ônus ▾</button>`
+            : '';
+          const anchorId = garLookup[garNumero(b.header, i)].anchor;
+          return `<tr id="${anchorId}">
+            <td>${escHtml(mat || '—')}</td>
+            <td>${escHtmlOrLink(bf['Comarca']) || '—'}</td>
+            <td>${escHtmlOrLink(bf['Proprietário'] || bf['Proprietários']) || '—'}</td>
+            <td class="td-desc"><span class="editable-value">${escHtmlOrLink(bf['Descrição']) || '—'}</span>${verOnusBtn}</td>
+            <td>${escHtml(joinVals(bf['Avaliação']) || '—')}</td>
+            <td>${escHtml(joinVals(bf['Lastros']) || '—')}</td>
+            <td>${escHtml(joinVals(bf['Valor Garantido']) || '—')}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`
+    : '<p style="color:var(--text-muted);font-size:12px">Nenhuma garantia identificada.</p>';
+
+  const acaoBlocks = f.blocks.filter(b =>
+    !/^LASTRO/i.test(b.header) && !/^(Garantia|Imóvel)/i.test(b.header) &&
+    Object.keys(b.fields).some(k => /processo/i.test(k))
+  );
+  document.getElementById('cr-acoes').innerHTML = acaoBlocks.length
+    ? acaoBlocks.map(b => `
+      <div class="card" style="margin-bottom:.75rem">
+        <div class="card-title">${escHtml(b.header)}</div>
+        ${Object.entries(b.fields).map(([k, v]) => {
+          let text = joinVals(v);
+          // Polo Ativo/Passivo vêm em CAIXA ALTA do documento — mesma
+          // capitalização de nome de parte usada em Credor/Devedor/Garantidor.
+          if (/^Polo (Ativo|Passivo)/i.test(k.trim())) text = titleCasePartyName(text);
+          // Todos os campos destes cartões ficam justificados — em valores
+          // curtos (nº do processo, checkbox) não muda nada visualmente
+          // (justify só afeta texto que quebra em mais de uma linha).
+          return `<div class="kv-row"><span class="kv-label">${escHtml(k)}</span><span class="kv-val kv-val-long">${renderCheckboxOptions(text)}</span></div>`;
+        }).join('')}
+      </div>`).join('')
+    : '<p style="color:var(--text-muted);font-size:12px">Nenhuma ação judicial identificada.</p>';
+}
+
+function fmtBRL(val) {
+  if (!val || val === '' || val === '0') return '—';
+  const n = parseFloat(String(val).replace(/[^\d.,\-]/g,'').replace(',','.'));
+  if (isNaN(n)) return val;
+  return new Intl.NumberFormat('pt-BR', { style:'currency', currency:'BRL', maximumFractionDigits: 0 }).format(n);
+}
+function fmtNum(val) {
+  if (!val || val === '' || val === '0') return null;
+  return parseFloat(String(val).replace(/[^\d.,\-]/g,'').replace(',','.')) || null;
+}
+// Números digitados em texto (Word), no formato brasileiro completo — ponto
+// separa milhar, vírgula separa decimal (ex.: "117.215,66"). Diferente de
+// fmtNum, que assume números "crus" do Excel (sem separador de milhar).
+function parseBRLNumber(str) {
+  if (!str) return null;
+  const cleaned = String(str).trim().replace(/[^\d.,\-]/g, '');
+  if (!cleaned) return null;
+  const n = cleaned.includes(',')
+    ? parseFloat(cleaned.replace(/\./g, '').replace(',', '.'))
+    : parseFloat(cleaned);
+  return isNaN(n) ? null : n;
+}
+// Soma uma coluna de qualquer tabela larga extraída do Word cujo nome bata
+// com colName — usado quando não há um campo de "total" já pronto no
+// documento (ex.: endividamento trabalhista, listado por pessoa).
+function sumWideTableColumn(doc, colName) {
+  let total = 0, found = false;
+  doc.tables.forEach(t => {
+    if (!t.columns.includes(colName)) return;
+    t.rows.forEach(r => {
+      const n = parseBRLNumber(r[colName]);
+      if (n !== null) { total += n; found = true; }
+    });
+  });
+  return found ? total : null;
+}
+// "Fração ideal" no Excel é uma fração 0–1 com formato de percentual (ex.: célula
+// mostra "100%" mas o valor bruto lido é 1). Números >1 já vêm como percentual puro.
+function fmtPercent(val) {
+  if (val === undefined || val === null || val === '') return '—';
+  const s = String(val).trim();
+  if (!s) return '—';
+  if (s.includes('%')) return s;
+  const n = parseFloat(s.replace(',', '.'));
+  if (isNaN(n)) return s;
+  const pct = n <= 1 ? n * 100 : n;
+  const rounded = Math.round(pct * 100) / 100;
+  return `${String(rounded).replace('.', ',')}%`;
+}
+
+const COL_MAT='Matrícula', COL_COM='Comarca', COL_PROP='Proprietário Atual';
+const COL_DESC='Descrição do Imóvel', COL_ONUS='Ônus Vigentes', COL_GARANTIAS='Principais Garantias Vigentes', COL_FRAC='Fração Ideal';
+const COL_VM='Valor da Avaliação Definitiva (VM)';
+let ativosFilterText = '';
+let ativosFilters = { prop: '', com: '' };
+
+function buildAtivosRowsHtml(rows) {
+  return rows.map(row => {
+    const mat=row[COL_MAT]||'—', com=row[COL_COM]||'—', prop=row[COL_PROP]||'—';
+    const desc=row[COL_DESC]||'—', onus=row[COL_ONUS]||'', garantias=row[COL_GARANTIAS]||'—', frac=row[COL_FRAC]||'—';
+    const vmN=fmtNum(row[COL_VM]);
+    const spUrl = ativosUrlMap[mat] || ativosUrlMap[mat.replace(/\./g,'')] || '';
+    const matCell = spUrl
+      ? `<a class="mat-link" href="${spUrl}" target="_blank" rel="noopener noreferrer">${escHtml(mat)} ↗</a>`
+      : `<span class="td-mono">${escHtml(mat)}</span>`;
+    // O texto completo do ônus fica no próprio botão (data-modal-text), não numa
+    // variável JS solta — assim o popup também funciona no painel exportado (.html).
+    const verOnusBtn = onus
+      ? `<button type="button" class="ver-detail-btn" data-modal-title="${escAttr('Ônus vigentes — Matrícula ' + mat)}" data-modal-text="${escAttr(onus)}" onclick="showDetailModal(this)">Ver ônus ▾</button>`
+      : '';
+    // Avaliação (PDF) e KMZ são arquivos enviados no upload, casados pelo nº
+    // da matrícula (ex.: "avaliação 29.294.pdf" / "KMZ 29.294.kmz").
+    const avalFile = findMatchedFile(avaliacaoFileMap, mat);
+    const verAvalBtn = avalFile
+      ? `<button type="button" class="ver-detail-btn" onclick="abrirArquivoMatricula('avaliacaoFileMap','${escAttr(mat)}')">Ver avaliação ▾</button>`
+      : '';
+    const kmzFile = findMatchedFile(kmzFileMap, mat);
+    let kmzCell = '<span style="color:var(--text-muted)">—</span>';
+    if (kmzFile) {
+      const kmzCoords = findMatchedFile(kmzCoordsMap, mat);
+      const baixarBtn = `<button type="button" class="ver-detail-btn" onclick="abrirArquivoMatricula('kmzFileMap','${escAttr(mat)}')">Baixar KMZ ▾</button>`;
+      const mapsBtn = kmzCoords
+        ? `<a class="ver-detail-btn" style="text-decoration:none" href="https://www.google.com/maps/place/${kmzCoords.lat},${kmzCoords.lon}" target="_blank" rel="noopener noreferrer">Ver no Maps ▾</a>`
+        : '';
+      kmzCell = baixarBtn + mapsBtn;
+    }
+    return `<tr><td class="td-mono">${matCell}</td><td>${escHtmlOrLink(com)}</td><td>${escHtmlOrLink(prop) || '—'}</td>
+      <td class="td-desc">${escHtmlOrLink(desc)}</td>
+      <td style="text-align:center">${kmzCell}</td>
+      <td>${escHtmlOrLink(garantias)}${verOnusBtn}</td>
+      <td>${fmtPercent(frac)}</td>
+      <td class="td-num">${vmN?fmtBRL(vmN):'—'}${verAvalBtn}</td></tr>`;
+  }).join('');
+}
+
+// Busca (texto livre) + os 2 filtros de dropdown, aplicados sobre o
+// conjunto completo (ativosData) — nunca sobre um resultado já filtrado.
+function renderAtivosTbody() {
+  const tbody = document.getElementById('ativos-tbody');
+  const q = ativosFilterText.trim().toLowerCase();
+  const filtered = ativosData.filter(row => {
+    const mat = row[COL_MAT]||'', com = row[COL_COM]||'', prop = row[COL_PROP]||'';
+    const textOk = !q || `${mat} ${com} ${prop}`.toLowerCase().includes(q);
+    return textOk && (!ativosFilters.prop || prop === ativosFilters.prop) && (!ativosFilters.com || com === ativosFilters.com);
+  });
+  tbody.innerHTML = buildAtivosRowsHtml(filtered) ||
+    '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:2rem">Nenhuma matrícula encontrada para esses filtros.</td></tr>';
+}
+function filtrarAtivos(q) { ativosFilterText = q; renderAtivosTbody(); }
+function aplicarFiltrosAtivos() {
+  ativosFilters = {
+    prop: document.getElementById('filter-prop').value,
+    com: document.getElementById('filter-com').value
+  };
+  renderAtivosTbody();
+}
+function fillSelect(id, values, placeholder) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = `<option value="">${placeholder}</option>` +
+    [...new Set(values.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR')).map(v => `<option value="${escAttr(v)}">${escHtml(v)}</option>`).join('');
+}
+
+function renderAtivos(rows) {
+  if (!rows || rows.length === 0) {
+    document.getElementById('ativos-tbody').innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:2rem">Nenhuma matrícula encontrada.</td></tr>';
+    document.getElementById('as-total').textContent = 0;
+    document.getElementById('as-vm').textContent = '—';
+    return;
+  }
+  let totVM = 0;
+  rows.forEach(row => { const vmN = fmtNum(row[COL_VM]); if (vmN) totVM += vmN; });
+  document.getElementById('as-total').textContent = rows.length;
+  document.getElementById('as-vm').textContent    = totVM ? fmtBRL(totVM) : '—';
+
+  fillSelect('filter-prop', rows.map(r => r[COL_PROP]), 'Todos os proprietários');
+  fillSelect('filter-com', rows.map(r => r[COL_COM]), 'Todas as localidades');
+  renderAtivosTbody();
+}
+
+function showDetailModal(btn) {
+  activeDetailButton = btn;
+  const title = btn.dataset.modalTitle || 'Detalhes';
+  const html = btn.dataset.modalHtml || '';
+  const text = btn.dataset.modalText || '';
+  document.getElementById('onus-modal-title').textContent = title;
+  // data-modal-html carrega conteúdo pré-montado (ex.: links pra Garantia
+  // vinculada) — quando presente, tem prioridade sobre o texto plano.
+  document.getElementById('onus-modal-content').innerHTML = html || multilineHtml(text) || '<p style="color:var(--text-muted)">Sem detalhes.</p>';
+  document.getElementById('onus-modal-overlay').style.display = 'flex';
+  const content = document.getElementById('onus-modal-content');
+  content.contentEditable = editMode ? 'true' : 'false';
+  content.classList.toggle('editable-field', editMode);
+}
+function closeDetailModal() {
+  const content = document.getElementById('onus-modal-content');
+  if (editMode && activeDetailButton && content) activeDetailButton.dataset.modalText = content.innerText.trim();
+  document.getElementById('onus-modal-overlay').style.display = 'none';
+  activeDetailButton = null;
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeDetailModal(); closeEditAccessModal(); } });
+
+// Rola até a linha da Garantia vinculada a um Lastro (link no popup "Ver
+// garantia") e pisca um destaque momentâneo pra deixar claro qual linha é.
+function scrollToGarantia(anchorId) {
+  const row = document.getElementById(anchorId);
+  if (!row) return;
+  closeDetailModal();
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  row.classList.add('row-highlight-flash');
+  setTimeout(() => row.classList.remove('row-highlight-flash'), 1800);
+}
+
+
+function buildDocumentButtons() {
+  const config = [
+    ['prev', 'Prévia', !!fileBlobs.prev],
+    ['rj', 'Checklist RJ', !!fileBlobs.rj],
+    ['cred', 'Créditos em RJ', !!fileBlobs.cred],
+    ['ativos', 'Análise de Matrículas', !!ativosBlob]
+  ];
+  const container = document.getElementById('dl-buttons');
+  if (!container) return;
+  container.innerHTML = '';
+  config.forEach(([key, label, loaded]) => {
+    if (!loaded) return;
+    const url = docUrls[key] || '';
+    const el = document.createElement(url ? 'a' : 'span');
+    el.className = 'toolbar-btn' + (url ? '' : ' is-disabled');
+    if (url) { el.href = url; el.target = '_blank'; el.rel = 'noopener noreferrer'; }
+    el.title = url ? `Abrir ${label}` : 'Link do SharePoint não informado no upload';
+    el.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>${label}`;
+    container.appendChild(el);
+  });
+}
+
+// ── Exportação do resultado ─────────────────────────────────────────────────
+// Converte um File em data: URI (base64) — ao contrário de blob:, um data:
+// URI vira texto puro e sobrevive dentro do próprio HTML exportado.
+function fileToDataUri(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Exportação: clona o documento INTEIRO (não só a tela de resultado) —
+// assim todo o app real (abas, filtro, edição) vai junto, em vez de uma
+// segunda cópia reduzida do código que sempre fica desatualizada. Além
+// disso, embute os dados já processados (matrículas, docs extraídos,
+// arquivos de avaliação/KMZ em base64) num pequeno script de "reidratação"
+// no fim do body — sem isso, o HTML abre bonito mas as ações que dependem
+// dos dados originais (filtro, abrir avaliação/KMZ) ficam mortas, porque
+// essas variáveis nascem vazias a cada novo carregamento da página.
+async function downloadPainel() {
+  const wasEditing = editMode;
+  if (wasEditing) setEditMode(false);
+  const titulo = (document.getElementById('deal-title')?.innerText || 'painel').trim();
+
+  const avaliacaoDataUris = {};
+  const kmzDataUris = {};
+  await Promise.all(Object.entries(avaliacaoFileMap).map(async ([mat, file]) => {
+    avaliacaoDataUris[mat] = (file instanceof File || file instanceof Blob) ? await fileToDataUri(file) : file;
+  }));
+  await Promise.all(Object.entries(kmzFileMap).map(async ([mat, file]) => {
+    kmzDataUris[mat] = (file instanceof File || file instanceof Blob) ? await fileToDataUri(file) : file;
+  }));
+  const bootstrapData = {
+    ativosData, ativosUrlMap, kmzCoordsMap, avaliacaoDataUris, kmzDataUris,
+    statePrev: state.prev, stateRj: state.rj, stateCred: state.cred
+  };
+
+  const clone = document.documentElement.cloneNode(true);
+  clone.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
+  clone.querySelectorAll('.editable-field').forEach(el => el.classList.remove('editable-field'));
+  clone.querySelector('body')?.classList.remove('edit-mode');
+  const editAccess = clone.querySelector('#edit-access-overlay'); if (editAccess) editAccess.style.display = 'none';
+  const editBtn = clone.querySelector('#edit-toggle span');
+  if (editBtn) editBtn.textContent = 'Editar conteúdo';
+  clone.querySelectorAll('.ai-regenerate, .qa-wrap').forEach(el => el.remove());
+  const back = clone.querySelector('#btn-new-upload');
+  if (back) back.remove();
+
+  const bootstrapScript = document.createElement('script');
+  bootstrapScript.textContent = `
+    window.__PAINEL_EXPORTADO__ = true;
+    (function() {
+      const d = ${JSON.stringify(bootstrapData)};
+      ativosData = d.ativosData || [];
+      ativosUrlMap = d.ativosUrlMap || {};
+      kmzCoordsMap = d.kmzCoordsMap || {};
+      Object.assign(avaliacaoFileMap, d.avaliacaoDataUris || {});
+      Object.assign(kmzFileMap, d.kmzDataUris || {});
+      if (d.statePrev) state.prev = d.statePrev;
+      if (d.stateRj) state.rj = d.stateRj;
+      if (d.stateCred) state.cred = d.stateCred;
+    })();
+  `;
+  clone.querySelector('body').appendChild(bootstrapScript);
+
+  const html = '<!DOCTYPE html>\n' + clone.outerHTML;
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `painel_${titulo.replace(/[^a-zA-Z0-9À-ÿ]/g,'_')}_${new Date().toISOString().slice(0,10)}.html`;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  if (wasEditing) setEditMode(true);
+}
+
+// ── Gerar painel ──────────────────────────────────────────────────────────────
+async function gerarPainel() {
+  const btn = document.getElementById('btn-gerar');
+  btn.textContent = 'Processando…';
+  btn.disabled = true;
+
+  try {
+    if (fileBlobs.prev) state.prev = await readDocx(fileBlobs.prev);
+    if (fileBlobs.rj)   state.rj   = await readDocx(fileBlobs.rj);
+    if (fileBlobs.cred) state.cred = await readDocx(fileBlobs.cred);
+    if (ativosBlob) {
+      updateAtivosUrls();
+      ativosData = await readXlsx(ativosBlob);
+      ativosFilterText = '';
+      ativosFilters = { prop: '', com: '' };
+      const searchEl = document.getElementById('ativos-search');
+      if (searchEl) searchEl.value = '';
+    }
+
+    if (state.prev) renderPrev(state.prev);
+    if (state.rj)   renderRJ(state.rj);
+    if (state.cred) renderCred(state.cred);
+    if (ativosData.length) renderAtivos(ativosData);
+    // Botões dos documentos-fonte, usando os links de SharePoint informados no upload.
+    updateUrl('prev'); updateUrl('rj'); updateUrl('cred'); if (document.getElementById('url-ativos')) updateUrl('ativos');
+    buildDocumentButtons();
+
+    // Visibilidade das abas
+    document.getElementById('tab-btn-previa').style.display   = state.prev        ? '' : 'none';
+    document.getElementById('tab-btn-rj').style.display       = state.rj          ? '' : 'none';
+    document.getElementById('tab-btn-creditos').style.display = state.cred        ? '' : 'none';
+    document.getElementById('tab-btn-ativos').style.display   = ativosData.length ? '' : 'none';
+    document.getElementById('tab-btn-ia').style.display       = (state.prev || state.rj || state.cred) ? '' : 'none';
+
+    const first = state.prev ? 'previa' : state.rj ? 'rj' : state.cred ? 'creditos' : 'ativos';
+    showTab(first, document.getElementById('tab-btn-' + first));
+
+    document.getElementById('screen-upload').style.display = 'none';
+    document.getElementById('screen-painel').style.display = 'block';
+    setEditMode(false);
+    applyRiskTone();
+
+    // Dispara análise IA em background
+    if (state.prev || state.rj || state.cred) {
+      gerarAnaliseIA();
+    }
+
+  } catch (err) {
+    alert('Erro ao processar os arquivos: ' + err.message);
+  } finally {
+    btn.textContent = 'Gerar painel';
+    btn.disabled = false;
+  }
+}
+
+function voltarUpload() {
+  document.getElementById('screen-painel').style.display = 'none';
+  document.getElementById('screen-upload').style.display = 'block';
+}
+
+function showTab(name, el) {
+  document.querySelectorAll('.tab-btn').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  el.classList.add('active');
+}
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</body>
+</html>

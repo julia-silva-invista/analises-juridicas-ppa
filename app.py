@@ -6,9 +6,8 @@ Robô consolidado: Análise de Processos · Recuperação Judicial · Matrícula
 import os
 import json
 import inspect
-import requests
 import tempfile
-from datetime import datetime
+from pathlib import Path
 
 import gradio as gr
 
@@ -35,55 +34,20 @@ os.makedirs("tmp_pdfs", exist_ok=True)
 _GRADIO_TEMP_DIR = os.environ.setdefault("GRADIO_TEMP_DIR", os.path.join(tempfile.gettempdir(), "gradio"))
 os.makedirs(_GRADIO_TEMP_DIR, exist_ok=True)
 
-FEEDBACK_TO       = "juliadeoliveirabernardo@gmail.com"
-FEEDBACK_FROM     = "juliadeoliveirabernardo@gmail.com"
-SENDGRID_API_KEY  = os.getenv("SENDGRID_API_KEY", "")
+_ASSETS_DIR = Path(__file__).parent / "assets"
 
 
-def _enviar_email_feedback(nome: str, email: str, mensagem: str, data: str) -> tuple:
-    if not SENDGRID_API_KEY:
-        return False, "SENDGRID_API_KEY não configurada"
-    try:
-        corpo = (
-            f"<b>Nome:</b> {nome}<br>"
-            f"<b>E-mail:</b> {email or '(não informado)'}<br>"
-            f"<b>Data:</b> {data}<br><br>"
-            f"<b>Mensagem:</b><br>{mensagem.replace(chr(10), '<br>')}"
-        )
-        payload = {
-            "personalizations": [{"to": [{"email": FEEDBACK_TO}]}],
-            "from": {"email": FEEDBACK_FROM, "name": "Robô Jurídico"},
-            "subject": f"[Feedback] {nome} — {data}",
-            "content": [{"type": "text/html", "value": corpo}],
-        }
-        resp = requests.post(
-            "https://api.sendgrid.com/v3/mail/send",
-            headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
-            json=payload,
-            timeout=15,
-        )
-        if resp.status_code in (200, 202):
-            return True, ""
-        return False, f"Status {resp.status_code}: {resp.text}"
-    except Exception as e:
-        return False, str(e)
-
-
-def salvar_feedback(nome: str, email: str, mensagem: str) -> str:
-    if not mensagem.strip():
-        return "Por favor, escreva sua mensagem antes de enviar."
-    nome_exibido = nome.strip() if nome.strip() else "Anônimo"
-    email_exibido = email.strip() if email.strip() else ""
-    data = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    enviado, erro = _enviar_email_feedback(nome_exibido, email_exibido, mensagem.strip(), data)
-
-    if enviado:
-        return "Feedback enviado com sucesso!"
-    elif not SENDGRID_API_KEY:
-        return "Feedback recebido (e-mail não configurado)."
-    else:
-        return f"Não foi possível enviar o e-mail: {erro}"
+def _ler_painel_html(nome_arquivo: str) -> str:
+    """Lê o HTML de um painel (Alinhado/Desalinhado) já publicado como Space estático e
+    devolve embrulhado num iframe via srcdoc — mantém o CSS/JS do painel isolado do resto
+    do robô (evita colisão com as regras !important de design.py)."""
+    conteudo = (_ASSETS_DIR / nome_arquivo).read_text(encoding="utf-8")
+    srcdoc = conteudo.replace("&", "&amp;").replace('"', "&quot;")
+    return (
+        f'<iframe srcdoc="{srcdoc}" '
+        'style="width:100%; height:1400px; border:none; border-radius:12px;" '
+        'scrolling="yes"></iframe>'
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -108,6 +72,68 @@ _FORCE_LIGHT_JS = """
         }
     });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
+    // Pilula de status no cabecalho (Operacional/Instabilidade conforme a aba ativa).
+    const applyStatus = () => {
+        const selected = document.querySelector('button[role="tab"][aria-selected="true"]');
+        const label = (selected?.textContent || "").trim().toLowerCase();
+        const unstable = label.includes("datajud");
+        const card = document.querySelector(".inv-status-card");
+        const value = document.querySelector(".inv-status-value");
+        if (!card || !value) return;
+        card.dataset.status = unstable ? "instability" : "operational";
+        value.textContent = unstable ? "Instabilidade" : "Operacional";
+    };
+    applyStatus();
+    document.addEventListener("click", (event) => {
+        if (event.target.closest('button[role="tab"]')) setTimeout(applyStatus, 80);
+    });
+    new MutationObserver(applyStatus).observe(document.body, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["aria-selected"],
+    });
+
+    // Carrossel de abas — setinhas discretas quando as abas nao cabem na largura da tela.
+    const setupTabCarousel = () => {
+        const tabNav = document.querySelector(".tab-nav [role='tablist']");
+        if (!tabNav || tabNav.dataset.carouselReady) return;
+        tabNav.dataset.carouselReady = "1";
+
+        const wrapper = tabNav.parentElement;
+        if (wrapper && getComputedStyle(wrapper).position === "static") {
+            wrapper.style.position = "relative";
+        }
+
+        const prevBtn = document.createElement("button");
+        prevBtn.type = "button";
+        prevBtn.className = "tab-nav-arrow tab-nav-arrow--prev";
+        prevBtn.setAttribute("aria-label", "Ver abas anteriores");
+        prevBtn.textContent = "‹";
+
+        const nextBtn = document.createElement("button");
+        nextBtn.type = "button";
+        nextBtn.className = "tab-nav-arrow tab-nav-arrow--next";
+        nextBtn.setAttribute("aria-label", "Ver mais abas");
+        nextBtn.textContent = "›";
+
+        wrapper.appendChild(prevBtn);
+        wrapper.appendChild(nextBtn);
+
+        const updateArrows = () => {
+            const maxScroll = tabNav.scrollWidth - tabNav.clientWidth;
+            prevBtn.classList.toggle("is-visible", tabNav.scrollLeft > 4);
+            nextBtn.classList.toggle("is-visible", tabNav.scrollLeft < maxScroll - 4);
+        };
+
+        prevBtn.addEventListener("click", () => tabNav.scrollBy({ left: -180, behavior: "smooth" }));
+        nextBtn.addEventListener("click", () => tabNav.scrollBy({ left: 180, behavior: "smooth" }));
+        tabNav.addEventListener("scroll", updateArrows);
+        window.addEventListener("resize", updateArrows);
+        updateArrows();
+    };
+    setupTabCarousel();
+    new MutationObserver(setupTabCarousel).observe(document.body, { childList: true, subtree: true });
 }
 """
 
@@ -212,14 +238,12 @@ with gr.Blocks(
                         label="Processo de RJ",
                         file_types=[".pdf", ".PDF"],
                         file_count="multiple",
-                        elem_classes=["equal-input-box", "upload-equal-panel"],
                     )
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
                     rj_pdf_relacionados = gr.File(
                         label="Processos relacionados (opcional)",
                         file_types=[".pdf", ".PDF", ".docx"],
                         file_count="multiple",
-                        elem_classes=["equal-input-box", "upload-equal-panel"],
                     )
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
                     gr.Markdown(
@@ -486,41 +510,12 @@ with gr.Blocks(
                     coleta_dossie_out = gr.File(label="Dossiê atualizado (passivo)", interactive=False)
 
         # ── Tab 6: Sugestões e Feedbacks ─────────────────────────────────────
-        with gr.Tab("Feedbacks"):
-            gr.HTML("""
-            <div class="feedback-intro">
-              <h2>Sugestões e Feedbacks</h2>
-              <p>Colabore com a evolução da plataforma e nos ajude a identificar pontos de melhoria, corrigir erros e desenvolver novas funcionalidades.</p>
-              <p>Use este espaço para:</p>
-              <ul>
-                <li>Reportar erros ou inconsistências nas análises</li>
-                <li>Sugerir novas funcionalidades ou tipos de análise</li>
-                <li>Tirar dúvidas sobre o funcionamento</li>
-                <li>Qualquer outro feedback que queira compartilhar</li>
-              </ul>
-            </div>
-            """)
-
-            with gr.Row():
-                with gr.Column(scale=1):
-                    fb_nome = gr.Textbox(
-                        label="Nome (opcional)",
-                        placeholder="Seu nome...",
-                        lines=1,
-                    )
-                with gr.Column(scale=1):
-                    fb_email = gr.Textbox(
-                        label="E-mail (opcional)",
-                        placeholder="seu.email@exemplo.com",
-                        lines=1,
-                    )
-            fb_mensagem = gr.Textbox(
-                label="Mensagem",
-                placeholder="Descreva o erro, sugestão ou dúvida...",
-                lines=8,
-            )
-            fb_enviar_btn = gr.Button("Enviar", variant="primary")
-            fb_status = gr.Textbox(label="", interactive=False, lines=1, show_label=False)
+        with gr.Tab("HTMLs"):
+            with gr.Tabs():
+                with gr.Tab("Alinhado"):
+                    gr.HTML(_ler_painel_html("painel_alinhado.html"))
+                with gr.Tab("Desalinhado"):
+                    gr.HTML(_ler_painel_html("painel_desalinhado.html"))
 
     gr.HTML(FOOTER_HTML)
 
@@ -634,9 +629,6 @@ with gr.Blocks(
         inputs=[coleta_excel_in],
         outputs=[coleta_log, coleta_status, coleta_excel_out],
     )
-
-    # Feedbacks
-    fb_enviar_btn.click(fn=salvar_feedback, inputs=[fb_nome, fb_email, fb_mensagem], outputs=[fb_status])
 
 
 demo.queue(max_size=20)
