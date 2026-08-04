@@ -58,6 +58,54 @@ def _get_gemini_clients() -> list:
     return [genai.Client(api_key=k, http_options=http_opts) for k in chaves]
 
 
+def _erro_gemini_permite_failover(exc: Exception) -> bool:
+    """Indica erros que podem mudar de uma chave/projeto Gemini para outro.
+
+    Não inclui erros de schema, JSON ou programação: nesses casos trocar a chave
+    apenas esconderia o defeito real. As chaves nunca são incluídas na mensagem.
+    """
+    msg = str(exc).lower()
+    return any(token in msg for token in (
+        "401", "unauthenticated", "access_token_type_unsupported",
+        "403", "permission_denied", "api_key_invalid", "api key not valid",
+        "429", "resource_exhausted", "quota", "rate limit",
+        "404", "not_found", "model is no longer available",
+    ))
+
+
+def _executar_com_failover_gemini(
+    clients: list,
+    fn,
+    *,
+    indice_inicial: int = 0,
+    ao_falhar=None,
+):
+    """Executa ``fn(client, indice)`` e roda para a próxima credencial elegível.
+
+    Cada cliente é tentado no máximo uma vez por esta camada. O número de
+    tentativas internas de ``_retry`` permanece sob controle de quem chama.
+    """
+    if not clients:
+        raise RuntimeError("Nenhum cliente Gemini configurado.")
+
+    ultimo_erro = None
+    total = len(clients)
+    for deslocamento in range(total):
+        indice = (indice_inicial + deslocamento) % total
+        try:
+            return fn(clients[indice], indice)
+        except Exception as exc:
+            ultimo_erro = exc
+            ultimo = deslocamento == total - 1
+            if ultimo or not _erro_gemini_permite_failover(exc):
+                raise
+            proximo = (indice + 1) % total
+            if ao_falhar is not None:
+                ao_falhar(indice, proximo, exc)
+
+    raise ultimo_erro or RuntimeError("Falha em todas as credenciais Gemini.")
+
+
 def _get_clients_rj():
     """Mantido por compatibilidade — usa só as 2 primeiras chaves (client1, client2)."""
     clients = _get_gemini_clients()

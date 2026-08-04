@@ -22,7 +22,7 @@ from docx.text.paragraph import Paragraph as _DocxParagraph
 
 from google.genai import types
 
-from utils import _retry
+from utils import _erro_gemini_permite_failover, _retry
 
 # ── Paleta Invista (extraída do template v3.0) ────────────────────────────
 _LARANJA   = "E8440A"   # headers de tabela, títulos
@@ -758,7 +758,9 @@ def _extrair_dados(texto_completo: str, relatorio: str, client, model: str) -> d
         raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.IGNORECASE)
         raw = re.sub(r"\n?```$", "", raw.strip())
         return json.loads(raw)
-    except Exception:
+    except Exception as exc:
+        if _erro_gemini_permite_failover(exc):
+            raise
         return {}
 
 
@@ -856,7 +858,9 @@ def _completar_com_relatorio(dados: dict, relatorio: str, client, model: str) ->
         if isinstance(completo, dict) and len(completo.get("creditos") or []) >= len(dados.get("creditos") or []):
             return _mesclar_mais_completo(dados, completo)
         return dados
-    except Exception:
+    except Exception as exc:
+        if _erro_gemini_permite_failover(exc):
+            raise
         return dados
 
 

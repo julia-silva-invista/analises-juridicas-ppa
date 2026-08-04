@@ -48,6 +48,7 @@ except ImportError:
 if "utils" not in sys.modules:
     utils_mod = pytypes.ModuleType("utils")
     utils_mod._retry = lambda fn, tentativas=3, espera_base=10: fn()
+    utils_mod._erro_gemini_permite_failover = lambda exc: False
     sys.modules["utils"] = utils_mod
 
 import checklist_rj as cr  # noqa: E402

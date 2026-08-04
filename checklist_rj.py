@@ -23,7 +23,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from google.genai import types
 
-from utils import _retry
+from utils import _erro_gemini_permite_failover, _retry
 
 # Reuso dos helpers de formatação do dossiê PPA (mesma paleta/fonte Invista)
 from dossie_ppa import (
@@ -156,7 +156,9 @@ def _extrair(prompt_base, fonte, client, model):
         raw = re.sub(r"\n?```$", "", raw.strip())
         dados = json.loads(raw)
         return dados if isinstance(dados, dict) else {}
-    except Exception:
+    except Exception as exc:
+        if _erro_gemini_permite_failover(exc):
+            raise
         return {}
 
 
