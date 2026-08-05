@@ -24,7 +24,8 @@ from utils import (
 )
 from analysis_runtime import (
     ANALYSIS_MANAGER, cleanup_chunk, file_sha256, iter_pdf_chunks, load_chunk_cache,
-    pdf_preparation_slot, queue_message, record_status, save_chunk_cache,
+    input_token_limit_exceeded, pdf_preparation_slot, queue_message, record_status,
+    save_chunk_cache, split_pdf_chunk_for_token_limit,
 )
 from dossie_ppa import gerar_dossie_word
 from legal_prompts import (
@@ -265,6 +266,62 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
     return idx, resultado, f"File API · {modo} · {model_extracao}"
 
 
+def _proc_extrair_chunk_adaptativo(args) -> tuple:
+    """Extrai um trecho e o subdivide somente se o contexto do Gemini estourar."""
+    idx, chunk_path, offset, total_pg, n_total, client, nome_origem, paginas_digitalizadas = args
+
+    def _extrair(path: str, start: int) -> tuple:
+        with fitz.open(path) as doc:
+            page_count = len(doc)
+        end = start + page_count
+        paginas_scan = [p for p in paginas_digitalizadas if start < p <= end]
+        model_extracao = GEMINI_MODEL_OCR if paginas_scan else GEMINI_MODEL_EXTRACAO
+        call_args = (
+            idx, path, start, total_pg, n_total, client, model_extracao,
+            nome_origem, paginas_scan,
+        )
+
+        def _subdividir() -> tuple:
+            children = split_pdf_chunk_for_token_limit(
+                path, start, total_pg, source_path=nome_origem,
+            )
+            textos, notas, faixas = [], [], []
+            try:
+                for child in children:
+                    _ri, texto, nota = _extrair(child.path, child.start)
+                    textos.append(texto)
+                    notas.append(nota)
+                    faixas.append(f"{child.page_start}-{child.page_end}")
+            finally:
+                for child in children:
+                    cleanup_chunk(child)
+            detalhe = f"divisão adaptativa por tokens ({', '.join(faixas)})"
+            if notas:
+                detalhe += " | " + " | ".join(dict.fromkeys(filter(None, notas)))
+            return idx, "\n\n".join(textos), detalhe
+
+        try:
+            return _retry(
+                lambda: _proc_extrair_chunk_fileapi(call_args),
+                tentativas=2, espera_base=15,
+            )
+        except Exception as exc:
+            if input_token_limit_exceeded(exc):
+                return _subdividir()
+            message = str(exc)
+            if any(code in message for code in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
+                try:
+                    ri, text, note = _proc_extrair_chunk(call_args)
+                    return ri, text, (note + " | " if note else "") + "fallback inline"
+                except Exception as inline_exc:
+                    if input_token_limit_exceeded(inline_exc):
+                        return _subdividir()
+                    raise
+            raise
+
+    return _extrair(chunk_path, offset)
+
+
 def _proc_obter_cache(client, model_cons: str) -> Optional[str]:
     global _proc_cache_nome
     with _proc_cache_lock:
@@ -456,23 +513,10 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
                 trocas = []
 
                 def _extrair_com(client, _indice):
-                    try:
-                        return _retry(
-                            lambda: _proc_extrair_chunk_fileapi(
-                                (i, chunk_path, offset, total, len(todos_chunks), client,
-                                 model_extracao, Path(original).name, paginas_scan)
-                            ),
-                            tentativas=2, espera_base=15,
-                        )
-                    except Exception as exc:
-                        msg = str(exc)
-                        if any(code in msg for code in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                            ri, text, note = _proc_extrair_chunk(
-                                (i, chunk_path, offset, total, len(todos_chunks), client,
-                                 model_extracao, Path(original).name, paginas_scan)
-                            )
-                            return ri, text, (note + " | " if note else "") + "fallback inline"
-                        raise
+                    return _proc_extrair_chunk_adaptativo(
+                        (i, chunk_path, offset, total, len(todos_chunks), client,
+                         Path(original).name, paginas_scan)
+                    )
 
                 result = _executar_com_failover_gemini(
                     clients,
@@ -755,23 +799,10 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
                 trocas = []
 
                 def _extrair_com(client, _indice):
-                    try:
-                        return _retry(
-                            lambda: _proc_extrair_chunk_fileapi(
-                                (idx, cp, offset, total_pg, n, client, model_extracao,
-                                 Path(original).name, paginas_scan)
-                            ),
-                            tentativas=2, espera_base=15,
-                        )
-                    except Exception as e:
-                        msg_e = str(e)
-                        if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                            ri, res, nota = _proc_extrair_chunk(
-                                (idx, cp, offset, total_pg, n, client, model_extracao,
-                                 Path(original).name, paginas_scan)
-                            )
-                            return ri, res, (nota + " | " if nota else "") + "fallback inline"
-                        raise
+                    return _proc_extrair_chunk_adaptativo(
+                        (idx, cp, offset, total_pg, n, client,
+                         Path(original).name, paginas_scan)
+                    )
 
                 result = _executar_com_failover_gemini(
                     clients,

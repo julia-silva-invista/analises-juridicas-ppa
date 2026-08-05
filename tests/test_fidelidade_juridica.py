@@ -121,6 +121,60 @@ def test_fluxos_bloqueiam_relatorio_quando_um_chunk_falha():
     assert "paginas_omitidas" in inspect.getsource(rj._rj_extrair_chunk)
 
 
+def test_fluxos_redividem_recursivamente_apenas_quando_tokens_estouram():
+    path = Path(tempfile.mktemp(prefix="token_split_", suffix=".pdf"))
+    doc = fitz.open()
+    for indice in range(4):
+        page = doc.new_page()
+        page.insert_text((72, 72), f"PAGINA {indice + 1}")
+    doc.save(path)
+    doc.close()
+
+    try:
+        for modulo, nome_adaptativo, nome_fileapi, nome_inline in (
+            (processos, "_proc_extrair_chunk_adaptativo", "_proc_extrair_chunk_fileapi", "_proc_extrair_chunk"),
+            (rj, "_rj_extrair_chunk_adaptativo", "_rj_extrair_chunk_fileapi", "_rj_extrair_chunk"),
+        ):
+            adaptativo = getattr(modulo, nome_adaptativo)
+            original_fileapi = getattr(modulo, nome_fileapi)
+            original_inline = getattr(modulo, nome_inline)
+            caminhos_vistos = []
+
+            def fake_fileapi(args):
+                idx, chunk_path, offset, *_rest = args
+                caminhos_vistos.append(Path(chunk_path))
+                with fitz.open(chunk_path) as chunk_doc:
+                    quantidade = len(chunk_doc)
+                if quantidade > 1:
+                    raise RuntimeError(
+                        "400 INVALID_ARGUMENT: The input token count exceeds the maximum number of tokens allowed 1048576"
+                    )
+                return idx, f"pagina absoluta {offset + 1}", "fileapi fake"
+
+            def inline_nao_deve_rodar(_args):
+                raise AssertionError("excesso de tokens não deve tentar novamente o chunk inteiro inline")
+
+            setattr(modulo, nome_fileapi, fake_fileapi)
+            setattr(modulo, nome_inline, inline_nao_deve_rodar)
+            try:
+                _idx, texto, nota = adaptativo(
+                    (0, str(path), 400, 1000, 1, object(), "P1.PDF", [])
+                )
+            finally:
+                setattr(modulo, nome_fileapi, original_fileapi)
+                setattr(modulo, nome_inline, original_inline)
+
+            assert [f"pagina absoluta {p}" in texto for p in range(401, 405)] == [True] * 4
+            assert [texto.index(f"pagina absoluta {p}") for p in range(401, 405)] == sorted(
+                texto.index(f"pagina absoluta {p}") for p in range(401, 405)
+            )
+            assert "divisão adaptativa por tokens" in nota
+            temporarios = {p for p in caminhos_vistos if p != path}
+            assert temporarios and all(not p.exists() for p in temporarios)
+    finally:
+        path.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     test_regras_da_usuaria_foram_preservadas_no_prompt_comum()
     test_contexto_vincula_pagina_local_a_absoluta_sem_promover_parte()
@@ -129,4 +183,5 @@ if __name__ == "__main__":
     test_fluxos_escolhem_modelo_forte_para_paginas_digitalizadas()
     test_rj_nao_descarta_o_final_da_fonte_longa()
     test_fluxos_bloqueiam_relatorio_quando_um_chunk_falha()
-    print("7 testes de fidelidade jurídica: OK")
+    test_fluxos_redividem_recursivamente_apenas_quando_tokens_estouram()
+    print("8 testes de fidelidade jurídica: OK")

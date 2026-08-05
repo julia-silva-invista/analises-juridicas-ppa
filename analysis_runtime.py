@@ -303,6 +303,8 @@ class PdfChunk:
             )
         if self.preparation_mode == "resources_cleaned":
             return f"{self.size_mb:.1f}MB · recursos compartilhados removidos sem perda"
+        if self.preparation_mode == "token_split":
+            return f"{self.size_mb:.1f}MB · subdividido por limite de tokens"
         return f"{self.size_mb:.1f}MB · original preservado"
 
 
@@ -442,6 +444,78 @@ def cleanup_chunk(chunk: PdfChunk) -> None:
             os.remove(chunk.path)
         except OSError:
             pass
+
+
+def input_token_limit_exceeded(exc: Exception) -> bool:
+    """Reconhece apenas a recusa por contexto de entrada grande demais."""
+    message = str(exc).lower()
+    return (
+        "token" in message
+        and ("exceed" in message or "too many" in message)
+        and (
+            "input token" in message
+            or "maximum number of tokens" in message
+            or "context length" in message
+        )
+    )
+
+
+def split_pdf_chunk_for_token_limit(
+    chunk_path: str,
+    absolute_start: int,
+    total_pages: int,
+    source_path: Optional[str] = None,
+) -> list[PdfChunk]:
+    """Divide um chunk ao meio depois de uma recusa por excesso de tokens.
+
+    As faixas devolvidas continuam usando índices absolutos do PDF original. A
+    divisão também respeita o limite físico normal e todos os arquivos gerados
+    são marcados como temporários para limpeza pelo chamador.
+    """
+    import fitz
+
+    with fitz.open(chunk_path) as doc:
+        page_count = len(doc)
+    if page_count <= 1:
+        raise RuntimeError(
+            f"A página {absolute_start + 1} excede sozinha o limite de tokens do Gemini."
+        )
+
+    max_pages = max(1, (page_count + 1) // 2)
+    relative_chunks: list[PdfChunk] = []
+    try:
+        with pdf_preparation_slot():
+            relative_chunks = list(
+                iter_pdf_chunks(chunk_path, max_pages=max_pages, max_mb=PDF_CHUNK_MAX_MB)
+            )
+        if len(relative_chunks) < 2:
+            raise RuntimeError(
+                f"Não foi possível subdividir o trecho de {page_count} páginas após "
+                "o excesso de tokens."
+            )
+
+        mapped = []
+        for child in relative_chunks:
+            mode = child.preparation_mode
+            if mode in {"original", "resources_cleaned"}:
+                mode = "token_split"
+            mapped.append(PdfChunk(
+                path=child.path,
+                source_path=source_path or chunk_path,
+                start=absolute_start + child.start,
+                end=absolute_start + child.end,
+                total_pages=total_pages,
+                temporary=child.path != chunk_path,
+                preparation_mode=mode,
+                size_mb=child.size_mb,
+                raster_dpi=child.raster_dpi,
+            ))
+        return mapped
+    except Exception:
+        for child in relative_chunks:
+            if child.path != chunk_path:
+                cleanup_chunk(child)
+        raise
 
 
 def file_sha256(path: str) -> str:

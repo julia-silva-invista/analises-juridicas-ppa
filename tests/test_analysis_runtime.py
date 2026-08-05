@@ -260,6 +260,40 @@ def test_temporarios_sao_removidos_quando_pagina_nao_cabe():
             runtime.tempfile.NamedTemporaryFile = original_named_temporary_file
 
 
+def test_detecta_apenas_excesso_de_tokens_de_entrada():
+    assert runtime.input_token_limit_exceeded(
+        RuntimeError("400 INVALID_ARGUMENT: The input token count exceeds the maximum number of tokens allowed 1048576")
+    )
+    assert not runtime.input_token_limit_exceeded(
+        RuntimeError("400 INVALID_ARGUMENT: Request contains an invalid argument")
+    )
+
+
+def test_subdivisao_por_tokens_preserva_faixas_e_limpa_temporarios():
+    with _temporary_files() as make:
+        source = make("_cinco_paginas.pdf")
+        doc = fitz.open()
+        for indice in range(5):
+            page = doc.new_page()
+            page.insert_text((72, 72), f"PAGINA {indice + 1}")
+        doc.save(source)
+        doc.close()
+
+        chunks = runtime.split_pdf_chunk_for_token_limit(
+            str(source), absolute_start=400, total_pages=1000, source_path="P1.PDF"
+        )
+        temporarios = [Path(chunk.path) for chunk in chunks]
+        try:
+            assert [(chunk.start, chunk.end) for chunk in chunks] == [(400, 403), (403, 405)]
+            assert all(chunk.total_pages == 1000 for chunk in chunks)
+            assert all(chunk.preparation_mode == "token_split" for chunk in chunks)
+            assert all(chunk.temporary for chunk in chunks)
+        finally:
+            for chunk in chunks:
+                runtime.cleanup_chunk(chunk)
+        assert all(not path.exists() for path in temporarios)
+
+
 def test_versao_do_pipeline_invalida_job_id_de_rj():
     with _temporary_files() as make:
         source = make("_rj.pdf")
@@ -288,5 +322,7 @@ if __name__ == "__main__":
     test_recursos_globais_sao_removidos_sem_perder_paginas_ou_texto()
     test_pagina_realmente_grande_e_rasterizada_ate_caber()
     test_temporarios_sao_removidos_quando_pagina_nao_cabe()
+    test_detecta_apenas_excesso_de_tokens_de_entrada()
+    test_subdivisao_por_tokens_preserva_faixas_e_limpa_temporarios()
     test_versao_do_pipeline_invalida_job_id_de_rj()
-    print("10 testes de coordenação/PDF/cache: OK")
+    print("12 testes de coordenação/PDF/cache: OK")
