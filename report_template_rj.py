@@ -8,6 +8,9 @@ Versão alinhada ao template de análise de processos do escritório:
 - sem remover pontos de análise do robô de RJ.
 """
 
+from legal_prompts import REGRAS_CONSOLIDACAO_PROCESSUAL
+
+
 TEMPLATE_CONFIGURED_RJ: bool = True
 
 SYSTEM_PROMPT_RJ = (
@@ -1014,4 +1017,9 @@ REPORT_TEMPLATE_RJ = (
     + "As instruções abaixo foram incorporadas integralmente do robô de análise de processos. Use-as sempre que a análise de RJ incluir execuções, incidentes, recursos, ações autônomas ou processos relacionados. Adapte apenas a numeração para ficar subordinada ao crédito/RJ correspondente (ex.: B.1., B.2., A.1.), sem reduzir o nível de detalhe.\n\n"
     + REPORT_TEMPLATE_PROCESSOS_RELACIONADOS
 ).strip()
+
+# Mantém todas as regras do template e acrescenta, ao final, o protocolo comum
+# de fidelidade, referências absolutas, índices/aditamentos e cronologia.
+SYSTEM_PROMPT_RJ = SYSTEM_PROMPT_RJ + "\n\n" + REGRAS_CONSOLIDACAO_PROCESSUAL
+REPORT_TEMPLATE_RJ = REPORT_TEMPLATE_RJ + "\n\n" + REGRAS_CONSOLIDACAO_PROCESSUAL
 

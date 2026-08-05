@@ -77,6 +77,14 @@ class FakeClient:
         return resp
 
 
+def _texto_primeira_parte(kwargs):
+    """Lê o prompt tanto dos tipos reais do SDK quanto dos stubs em dicionário."""
+    content = kwargs["contents"][0]
+    parts = content["parts"] if isinstance(content, dict) else content.parts
+    part = parts[0]
+    return part["text"] if isinstance(part, dict) else part.text
+
+
 # Padrões que NUNCA deveriam aparecer no documento final — indicam vazamento
 # de instrução de formato (do prompt ou do molde oficial) para o texto visível.
 _PADROES_VAZAMENTO = [
@@ -554,7 +562,7 @@ def testar_completude_dossie():
     if preservado.get("creditos", [{}])[0].get("ind_cm") != completo:
         falhas.append("mesclagem permitiu que uma versão curta apagasse a completa")
 
-    prompt = client.ultima_chamada_kwargs["contents"][0]["parts"][0]["text"]
+    prompt = _texto_primeira_parte(client.ultima_chamada_kwargs)
     if "sem resumir ou parafrasear" not in prompt:
         falhas.append("prompt de completude não proíbe resumir/parafrasear")
     return falhas
@@ -630,7 +638,7 @@ def testar_extrair_fonte_gigante():
         return [f"_extrair[fonte_gigante] levantou exceção: {e!r}"]
     if resultado != {"rj_numero": "OK"}:
         falhas.append(f"_extrair[fonte_gigante] resultado inesperado: {resultado!r}")
-    enviado = client.ultima_chamada_kwargs["contents"][0]["parts"][0]["text"]
+    enviado = _texto_primeira_parte(client.ultima_chamada_kwargs)
     esperado_len = len(prompt_base) + 900_000
     if len(enviado) != esperado_len:
         falhas.append(

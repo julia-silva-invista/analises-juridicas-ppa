@@ -135,7 +135,7 @@ def test_cache_e_independente_por_arquivo_faixa_e_modelo():
     assert base != runtime._chunk_cache_path("a" * 64, 400, 800, "modelo-a", "rj")
     assert base != runtime._chunk_cache_path("a" * 64, 0, 400, "modelo-b", "rj")
     assert base != runtime._chunk_cache_path("b" * 64, 0, 400, "modelo-a", "rj")
-    assert "chunks_v2" in str(base)
+    assert "chunks_v3" in str(base)
 
 
 def _criar_pdf_pequeno(path: Path, texto: str = "PAGINA ORIGINAL") -> None:

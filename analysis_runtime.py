@@ -27,7 +27,7 @@ from typing import Iterator, Optional
 MAX_ACTIVE_ANALYSES = int(os.getenv("MAX_ACTIVE_ANALYSES", "4"))
 TOTAL_EXTRACTION_WORKERS = int(os.getenv("TOTAL_EXTRACTION_WORKERS", "6"))
 PDF_CHUNK_MAX_MB = float(os.getenv("PDF_CHUNK_MAX_MB", "45"))
-ANALYSIS_PIPELINE_VERSION = "pdf-resources-v2"
+ANALYSIS_PIPELINE_VERSION = "legal-traceability-v3"
 _PDF_PREPARATION_SEMAPHORE = threading.Semaphore(
     max(1, int(os.getenv("PDF_PREPARATION_CONCURRENCY", "2")))
 )
@@ -45,7 +45,7 @@ def _base_dir() -> Path:
 
 BASE_DIR = _base_dir()
 _STATUS_DIR = BASE_DIR / "status"
-_CHUNK_CACHE_DIR = BASE_DIR / "chunks_v2"
+_CHUNK_CACHE_DIR = BASE_DIR / "chunks_v3"
 _RETENTION_DAYS = int(os.getenv("ANALYSIS_CACHE_RETENTION_DAYS", "7"))
 _cleanup_lock = threading.Lock()
 _last_cleanup = 0.0

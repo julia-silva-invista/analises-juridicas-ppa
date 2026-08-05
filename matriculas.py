@@ -23,12 +23,21 @@ from openpyxl.utils import get_column_letter
 from utils import (
     _get_gemini_clients,
     _erro_gemini_permite_failover,
+    _paginas_digitalizadas_pdf,
     _retry,
     _responder_pergunta_generica,
     GEMINI_MODEL_EXTRACAO,
+    GEMINI_MODEL_OCR,
     GEMINI_MODEL_RELATORIO,
     GEMINI_MODEL_QA,
 )
+from legal_prompts import REGRA_REFERENCIA_MATRICULA
+
+
+try:
+    MATRICULAS_MAX_WORKERS = max(1, int(os.getenv("MATRICULAS_MAX_WORKERS", "3")))
+except ValueError:
+    MATRICULAS_MAX_WORKERS = 3
 
 
 def _mat_get_clients():
@@ -94,7 +103,8 @@ PROMPT_EXTRACAO_MATRICULA = (
     "o cancelou/baixou/levantou. Nenhum ônus pode ficar sem uma dessas duas classificações.\n"
     "5. Preserve literalmente moedas históricas e não converta valores. Se o ônus em moeda antiga não foi "
     "cancelado, classifique-o como vigente e sinalize que o valor não é calculável automaticamente.\n"
-    "6. Não use Markdown, negrito ou pares de asteriscos. Nunca invente informação ilegível ou ausente."
+    "6. Não use Markdown, negrito ou pares de asteriscos. Nunca invente informação ilegível ou ausente.\n\n"
+    + REGRA_REFERENCIA_MATRICULA
 )
 
 
@@ -233,7 +243,8 @@ PROMPT_MATRICULA = (
     "   (ex: valores acima de R$ 500.000.000 para credito rural dos anos 80-90), trate como moeda antiga.\n\n"
     "23. FORMATACAO FINAL: nunca use Markdown, negrito ou pares de asteriscos. Sempre que CPF ou CNPJ "
     "aparecer em qualquer campo textual, mantenha o documento entre parenteses, por exemplo: Nome "
-    "da Pessoa (CPF 123.456.789-00) ou Empresa S/A (CNPJ 12.345.678/0001-90).\n"
+    "da Pessoa (CPF 123.456.789-00) ou Empresa S/A (CNPJ 12.345.678/0001-90).\n\n"
+    + REGRA_REFERENCIA_MATRICULA
 )
 
 
@@ -602,6 +613,16 @@ def _mat_consolidar_extracao(extracao: str, clients: list) -> dict:
 
 
 def _mat_analisar_pdf(caminho_pdf: str, client_extracao, clients_consolidacao: list) -> dict:
+    paginas_digitalizadas = _paginas_digitalizadas_pdf(caminho_pdf)
+    model_extracao = GEMINI_MODEL_OCR if paginas_digitalizadas else GEMINI_MODEL_EXTRACAO
+    contexto_paginas = (
+        "\n\nCONTEXTO TÉCNICO DA FONTE — NÃO COPIAR COMO REFERÊNCIA:\n"
+        f"- arquivo original: {Path(caminho_pdf).name}\n"
+        "- este arquivo foi enviado integralmente; a página local 1 é a página absoluta 1 do PDF\n"
+        "- páginas digitalizadas detectadas: "
+        + (", ".join(str(p) for p in paginas_digitalizadas) if paginas_digitalizadas else "nenhuma")
+        + "\nUse a numeração apenas para vincular cada R./AV. à página absoluta correta."
+    )
     tmp_ascii_path = None
     try:
         caminho_pdf.encode("ascii")
@@ -633,14 +654,13 @@ def _mat_analisar_pdf(caminho_pdf: str, client_extracao, clients_consolidacao: l
 
         cfg_extracao = types.GenerateContentConfig(
             temperature=0,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
             max_output_tokens=65536,
         )
 
         def _extrair():
             response = client_extracao.models.generate_content(
-                model=GEMINI_MODEL_EXTRACAO,
-                contents=[PROMPT_EXTRACAO_MATRICULA, arquivo],
+                model=model_extracao,
+                contents=[PROMPT_EXTRACAO_MATRICULA + contexto_paginas, arquivo],
                 config=cfg_extracao,
             )
             if not response.text or not response.text.strip():
@@ -862,9 +882,11 @@ def mat_gerar_excel(arquivos,
         pdfs.append(destino)
 
     n = len(pdfs)
+    workers = min(n, len(clients), MATRICULAS_MAX_WORKERS)
     log = [
-        f"Analisando {n} matricula(s) em paralelo (4 workers)...",
-        f"   Leitura: {GEMINI_MODEL_EXTRACAO} | Consolidacao: {GEMINI_MODEL_RELATORIO} | "
+        f"Analisando {n} matricula(s) em paralelo ({workers} worker(s))...",
+        f"   Leitura pesquisável: {GEMINI_MODEL_EXTRACAO} | Leitura digitalizada: {GEMINI_MODEL_OCR} | "
+        f"Consolidacao: {GEMINI_MODEL_RELATORIO} | "
         f"{len(clients)} chave(s) com failover",
     ]
     if usar_alertas:
@@ -885,7 +907,7 @@ def mat_gerar_excel(arquivos,
     # se houver falha de autenticação, cota ou disponibilidade do modelo.
     args_list = [(i, pdf, clients) for i, pdf in enumerate(pdfs)]
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {ex.submit(_mat_worker, args): args[0] for args in args_list}
         concluidos = 0
         for future in concurrent.futures.as_completed(futures):

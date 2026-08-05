@@ -15,6 +15,7 @@ Os robôs de Processo, Recuperação Judicial e Matrículas separam os modelos p
 
 ```text
 GEMINI_MODEL_EXTRACAO=gemini-3.5-flash-lite
+GEMINI_MODEL_OCR=gemini-3.6-flash
 GEMINI_MODEL_RELATORIO=gemini-3.6-flash
 GEMINI_MODEL_ESTRUTURADO=gemini-3.5-flash-lite
 GEMINI_MODEL_QA=gemini-3.6-flash
@@ -24,9 +25,17 @@ Esses valores já são os defaults do código. No Hugging Face, podem ser sobres
 `Settings > Variables and secrets > Variables`. As chaves `GEMINI_API_KEY_1`,
 `GEMINI_API_KEY_2`, etc. devem continuar cadastradas como secrets.
 
-Em Matrículas, `GEMINI_MODEL_EXTRACAO` faz a leitura factual integral do PDF e
-`GEMINI_MODEL_RELATORIO` executa a consolidação jurídica estruturada (cadeia dominial,
-proporções, situação da matrícula e classificação dos ônus).
+Em páginas com camada textual confiável, `GEMINI_MODEL_EXTRACAO` faz a leitura factual em
+alto volume. Se o detector local encontrar qualquer página digitalizada no trecho,
+`GEMINI_MODEL_OCR` assume automaticamente a leitura visual desse trecho; seu default é o
+mesmo modelo forte da consolidação. `GEMINI_MODEL_RELATORIO` executa a consolidação jurídica.
+
+Processo e RJ carregam em cada extração o nome do arquivo e a página absoluta do PDF original.
+Os marcadores internos de parte/chunk não podem aparecer no relatório. Toda referência final
+deve combinar o identificador real do tribunal com a página absoluta; o sufixo `do pdf ...`
+só é usado quando a análise contém mais de um PDF. Fontes de RJ acima do limite de contexto
+são cobertas em lotes intermediários, sem descartar o final do processo. Se qualquer chunk
+falhar, o relatório parcial é bloqueado em vez de ser apresentado como completo.
 
 ## Limites de processamento
 

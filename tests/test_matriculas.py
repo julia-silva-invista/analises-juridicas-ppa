@@ -16,7 +16,6 @@ google_mod = pytypes.ModuleType("google")
 genai_mod = pytypes.ModuleType("google.genai")
 genai_types_mod = pytypes.ModuleType("google.genai.types")
 genai_types_mod.GenerateContentConfig = lambda **kwargs: kwargs
-genai_types_mod.ThinkingConfig = lambda **kwargs: kwargs
 genai_mod.types = genai_types_mod
 google_mod.genai = genai_mod
 sys.modules.setdefault("google", google_mod)
@@ -26,9 +25,11 @@ sys.modules.setdefault("google.genai.types", genai_types_mod)
 utils_stub = pytypes.ModuleType("utils")
 utils_stub._get_gemini_clients = lambda: []
 utils_stub._erro_gemini_permite_failover = lambda exc: False
+utils_stub._paginas_digitalizadas_pdf = lambda path: []
 utils_stub._retry = lambda fn, **kwargs: fn()
 utils_stub._responder_pergunta_generica = lambda *args, **kwargs: ""
 utils_stub.GEMINI_MODEL_EXTRACAO = "gemini-extracao-teste"
+utils_stub.GEMINI_MODEL_OCR = "gemini-ocr-teste"
 utils_stub.GEMINI_MODEL_RELATORIO = "gemini-relatorio-teste"
 utils_stub.GEMINI_MODEL_QA = "gemini-qa-teste"
 sys.modules["utils"] = utils_stub
@@ -40,9 +41,18 @@ def testar_modelos_por_etapa():
     fonte_extracao = inspect.getsource(mat._mat_analisar_pdf)
     fonte_consolidacao = inspect.getsource(mat._mat_consolidar_extracao)
     assert "GEMINI_MODEL_EXTRACAO" in fonte_extracao
+    assert "GEMINI_MODEL_OCR" in fonte_extracao
+    assert "paginas_digitalizadas" in fonte_extracao
+    assert "thinking_budget" not in fonte_extracao
     assert "GEMINI_MODEL_RELATORIO" in fonte_consolidacao
     assert "GEMINI_MODEL_QA" in inspect.getsource(mat.mat_responder)
     assert mat.COLUNAS_RENAME_MAT["fracao_ideal"] == "Fração Ideal"
+
+
+def testar_limite_de_workers():
+    fonte = inspect.getsource(mat.mat_gerar_excel)
+    assert 'min(n, len(clients), MATRICULAS_MAX_WORKERS)' in fonte
+    assert mat.MATRICULAS_MAX_WORKERS == 3
 
 
 def testar_regras_do_prompt():
@@ -54,6 +64,9 @@ def testar_regras_do_prompt():
     assert "deu origem" in prompt
     assert "fracao_ideal" in prompt
     assert "moeda historica" in prompt
+    assert "página absoluta" in prompt
+    assert "(R.5 | fl. 8)" in prompt
+    assert "PARTE, chunk, texto bruto" in prompt
     assert "**" not in prompt
 
 
@@ -110,7 +123,8 @@ def testar_moeda_historica_nao_calculada():
 
 if __name__ == "__main__":
     testar_modelos_por_etapa()
+    testar_limite_de_workers()
     testar_regras_do_prompt()
     testar_formatacao_deterministica()
     testar_moeda_historica_nao_calculada()
-    print("4 testes de Matrículas: OK")
+    print("5 testes de Matrículas: OK")

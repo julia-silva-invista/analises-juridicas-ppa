@@ -22,8 +22,9 @@ from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
 from utils import (
     _retry, _gerar_docx, _responder_pergunta_generica, _get_gemini_clients,
     _executar_com_failover_gemini,
-    _barra_progresso, _filtrar_arquivos_existentes,
-    GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO, GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
+    _barra_progresso, _filtrar_arquivos_existentes, _paginas_digitalizadas_pdf,
+    GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_OCR, GEMINI_MODEL_RELATORIO,
+    GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
 )
 from analysis_runtime import (
     ANALYSIS_MANAGER, cleanup_chunk, file_sha256, iter_pdf_chunks,
@@ -32,6 +33,15 @@ from analysis_runtime import (
 )
 from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos, _montar_fonte_rj
 import rj_cache
+from legal_prompts import (
+    REGRA_EXTRACAO_POR_PAGINA,
+    REGRA_FIDELIDADE_PROCESSUAL,
+    REGRA_INDICES_E_ADITAMENTOS,
+    REGRA_CRONOLOGIA_PROCESSUAL,
+    REGRAS_CONSOLIDACAO_PROCESSUAL,
+    contexto_fonte_pdf,
+    normalizar_referencias_relatorio,
+)
 
 CHUNK_MAX_PAGES_RJ    = 400
 AVG_MIN_POR_CHUNK_RJ  = 3
@@ -39,6 +49,7 @@ MIN_CONSOLIDACAO_RJ   = 8
 LIMITE_TRUNCAMENTO_CHECKLIST = 900_000   # mesmo limite usado em checklist_rj._extrair
 LIMITE_TRUNCAMENTO_CREDORES  = 150_000   # mesmo limite usado em _extrair_credores_json
 LIMITE_CONSOLIDACAO_RJ       = 3_000_000  # teto de seguranca p/ nao estourar contexto do modelo
+LIMITE_LOTE_FIDELIDADE_RJ    = 900_000
 
 
 def _aviso_truncamento(tamanho: int, limite: int) -> str:
@@ -84,7 +95,14 @@ PROMPT_RJ = (
     "- Execucoes relacionadas (numero, partes, valor, status, andamentos)\n"
     "- Divergencias, impugnacoes e habilitacoes de credito\n"
     "- Andamentos processuais com datas (TODOS)\n"
-    "Nao omita nada. Nao invente. Se nao encontrar, diga explicitamente.\n"
+    "Nao omita nada. Nao invente. Se nao encontrar, diga explicitamente.\n\n"
+    + REGRA_FIDELIDADE_PROCESSUAL
+    + "\n"
+    + REGRA_EXTRACAO_POR_PAGINA
+    + "\n"
+    + REGRA_INDICES_E_ADITAMENTOS
+    + "\n"
+    + REGRA_CRONOLOGIA_PROCESSUAL
 )
 
 
@@ -102,7 +120,10 @@ def _rj_dividir_pdf(path: str) -> list:
 
 
 def _rj_extrair_chunk(args) -> tuple:
-    idx, chunk_path, offset, total_pg, n_total, client = args
+    idx, chunk_path, offset, total_pg, n_total, client, *extras = args
+    model_extracao = extras[0] if len(extras) > 0 else GEMINI_MODEL_EXTRACAO
+    nome_origem = extras[1] if len(extras) > 1 else Path(chunk_path).name
+    paginas_digitalizadas = extras[2] if len(extras) > 2 else []
     pg_ini = offset + 1
     try:
         with fitz.open(chunk_path) as _chunk_doc:
@@ -112,6 +133,7 @@ def _rj_extrair_chunk(args) -> tuple:
 
     textos_pag = []
     imagens_pag = []
+    paginas_omitidas = []
     total_img_bytes = 0
     MAX_IMG_BYTES = 19 * 1024 * 1024
 
@@ -129,15 +151,24 @@ def _rj_extrair_chunk(args) -> tuple:
                     img = pix.tobytes("jpeg", jpg_quality=50)
                     total_img_bytes += len(img)
                     imagens_pag.append((pg, img))
+                else:
+                    paginas_omitidas.append(pg)
         doc.close()
     except Exception:
         pass
 
     n_scan = len(imagens_pag)
+    if paginas_omitidas:
+        raise RuntimeError(
+            "Fallback visual excedeu o limite seguro e não enviaria todas as páginas "
+            f"digitalizadas ({paginas_omitidas[0]}-{paginas_omitidas[-1]}). "
+            "A análise foi interrompida para não gerar relatório incompleto."
+        )
 
     cabecalho = (
         f"[PARTE {idx+1}/{n_total} — paginas {pg_ini}-{pg_fim}]\n"
         "Nao omita nenhum dado mesmo que pareca repetitivo.\n"
+        + contexto_fonte_pdf(nome_origem, pg_ini, pg_fim, paginas_digitalizadas)
     )
     prompt_txt = cabecalho + PROMPT_RJ
     if textos_pag:
@@ -152,17 +183,26 @@ def _rj_extrair_chunk(args) -> tuple:
 
     def _call():
         contents = [types.Content(role="user", parts=all_parts)]
-        resp = client.models.generate_content(model=GEMINI_MODEL_EXTRACAO, contents=contents)
+        resp = client.models.generate_content(
+            model=model_extracao,
+            contents=contents,
+            config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
+        )
         return resp.text
 
     resultado = _retry(_call)
-    nota = f"{n_scan} pag. escaneadas via imagem" if n_scan else ""
+    if not resultado or not resultado.strip():
+        raise RuntimeError(f"Extração vazia nas páginas {pg_ini}-{pg_fim} de {nome_origem}.")
+    nota = f"{n_scan} pag. escaneadas via imagem · {model_extracao}" if n_scan else model_extracao
     return idx, resultado, nota
 
 
 def _rj_extrair_chunk_fileapi(args) -> tuple:
     """Faz upload do chunk preservado para o File API e extrai o PDF nativamente."""
-    idx, chunk_path, offset, total_pg, n_total, client = args
+    idx, chunk_path, offset, total_pg, n_total, client, *extras = args
+    model_extracao = extras[0] if len(extras) > 0 else GEMINI_MODEL_EXTRACAO
+    nome_origem = extras[1] if len(extras) > 1 else Path(chunk_path).name
+    paginas_digitalizadas = extras[2] if len(extras) > 2 else []
     pg_ini = offset + 1
     try:
         with fitz.open(chunk_path) as _chunk_doc:
@@ -208,6 +248,8 @@ def _rj_extrair_chunk_fileapi(args) -> tuple:
         prompt = (
             f"[PARTE {idx+1}/{n_total} — paginas {pg_ini}-{pg_fim}]\n"
             "Nao omita nenhum dado mesmo que pareca repetitivo.\n\n"
+            + contexto_fonte_pdf(nome_origem, pg_ini, pg_fim, paginas_digitalizadas)
+            + "\n"
             + PROMPT_RJ
         )
         mime = getattr(arq, "mime_type", None) or "application/pdf"
@@ -217,14 +259,21 @@ def _rj_extrair_chunk_fileapi(args) -> tuple:
         ])]
 
         def _call():
-            return client.models.generate_content(model=GEMINI_MODEL_EXTRACAO, contents=contents).text
+            return client.models.generate_content(
+                model=model_extracao,
+                contents=contents,
+                config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
+            ).text
 
         resultado = _retry(_call, tentativas=2, espera_base=5)
+        if not resultado or not resultado.strip():
+            raise RuntimeError(f"Extração vazia nas páginas {pg_ini}-{pg_fim} de {nome_origem}.")
     finally:
         try: client.files.delete(name=arq.name)
         except Exception: pass
 
-    return idx, resultado, "File API"
+    modo = "OCR visual forte" if paginas_digitalizadas else "texto pesquisável"
+    return idx, resultado, f"File API · {modo} · {model_extracao}"
 
 
 def _rj_obter_cache(client, model_cons: str) -> Optional[str]:
@@ -272,6 +321,61 @@ def _rj_merge_textos(extracoes: list, nomes_arquivos: list = None) -> str:
     return "\n\n".join(partes)
 
 
+def _rj_dividir_fonte_em_lotes(texto: str, limite: int = LIMITE_LOTE_FIDELIDADE_RJ) -> list[str]:
+    """Agrupa partes completas sem cortar uma extração no meio."""
+    if len(texto or "") <= limite:
+        return [texto] if texto else []
+    partes = re.split(r"(?=^={40,}\nPARTE\s+\d+)", texto, flags=re.MULTILINE)
+    partes = [p for p in partes if p and p.strip()]
+    lotes, atual = [], ""
+    for parte in partes:
+        if atual and len(atual) + len(parte) + 2 > limite:
+            lotes.append(atual)
+            atual = parte
+        else:
+            atual = (atual + "\n\n" + parte) if atual else parte
+    if atual:
+        lotes.append(atual)
+    return lotes
+
+
+def _rj_preservar_fonte_longa(clients: list, texto: str, model_cons: str,
+                              log: list = None, rotulo: str = "RJ") -> str:
+    """Substitui truncamento por inventários completos de todos os lotes.
+
+    Cada lote vira um inventário de evidências, não um relatório final. Assim o
+    consolidator recebe começo, meio e fim da fonte em vez de só um prefixo.
+    """
+    if len(texto or "") <= LIMITE_CONSOLIDACAO_RJ:
+        return texto
+    lotes = _rj_dividir_fonte_em_lotes(texto)
+    inventarios = []
+    for indice, lote in enumerate(lotes, 1):
+        prompt = (
+            REGRAS_CONSOLIDACAO_PROCESSUAL
+            + "\n\nVocê está na etapa intermediária de cobertura documental. Produza um INVENTÁRIO "
+              "FACTUAL COMPLETO, não o relatório final, de todas as evidências do lote abaixo. "
+              "Preserve cada data, valor, índice, cláusula, aditamento, parte, andamento e referência "
+              "exatamente como consta. Não elimine fatos por parecerem repetidos ou pouco relevantes; "
+              "a deduplicação ocorrerá depois. Mantenha os blocos FONTE_PDF/PDF_PAGE/"
+              "IDENTIFICADOR_TRIBUNAL.\n\n"
+            + f"LOTE {indice}/{len(lotes)} — {rotulo}:\n{lote}"
+        )
+
+        def _gerar(client, _indice):
+            return _retry(lambda: client.models.generate_content(
+                model=model_cons,
+                contents=[prompt],
+                config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
+            ).text)
+
+        inventario = _executar_com_failover_gemini(clients, _gerar)
+        inventarios.append(f"INVENTÁRIO DOCUMENTAL {indice}/{len(lotes)}\n{inventario}")
+        if log is not None:
+            log.append(f"   Cobertura intermediária {indice}/{len(lotes)} concluída ({rotulo}).")
+    return "\n\n".join(inventarios)
+
+
 TEMPLATE_RESUMIDO_RJ = """\
 MODO RESUMO PROCESSUAL — siga rigorosamente este formato curto:
 
@@ -304,6 +408,7 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
         n_partes = texto_merged.count("PARTE ") if texto_merged else 0
         prompt_full = (
             SYSTEM_PROMPT_RJ + "\n\n"
+            + REGRAS_CONSOLIDACAO_PROCESSUAL + "\n\n"
             + "Você está em MODO RESUMO. Ignore qualquer template detalhado e siga ESTRITAMENTE o formato abaixo.\n\n"
             + TEMPLATE_RESUMIDO_RJ
             + instrucoes_extras
@@ -317,7 +422,9 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
         )
         def _fn():
             return client.models.generate_content(
-                model=model_cons, contents=[prompt_full]
+                model=model_cons,
+                contents=[prompt_full],
+                config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
             ).text
         return _retry(_fn)
 
@@ -329,7 +436,8 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
         "Se forem processos distintos, gere secoes separadas para cada um.\n\n"
     ) if n_partes_cons > 1 else ""
     prompt = (
-        "Com base nas informacoes extraidas abaixo (de multiplas partes do processo), "
+        REGRAS_CONSOLIDACAO_PROCESSUAL
+        + "\n\nCom base nas informacoes extraidas abaixo (de multiplas partes do processo), "
         "gere APENAS a Secao A do relatorio de Recuperacao Judicial, "
         "seguindo RIGOROSAMENTE o template fornecido.\n\n"
         + _aviso_multiplos_rj
@@ -344,7 +452,9 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
     )
     if cache_name:
         contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
-        config = types.GenerateContentConfig(cached_content=cache_name)
+        config = types.GenerateContentConfig(
+            cached_content=cache_name, temperature=0, max_output_tokens=65536
+        )
         def _fn():
             return client.models.generate_content(
                 model=model_cons, contents=contents, config=config
@@ -359,7 +469,9 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
                 conteudo = SYSTEM_PROMPT_RJ + "\n\n" + REPORT_TEMPLATE_RJ + "\n\n" + prompt
                 def _fn_fallback():
                     return client.models.generate_content(
-                        model=model_cons, contents=[conteudo]
+                        model=model_cons,
+                        contents=[conteudo],
+                        config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
                     ).text
                 return _retry(_fn_fallback)
             raise
@@ -367,7 +479,9 @@ def _rj_consolidar_secao_a(client, texto_merged: str, instrucoes: str, cache_nam
         conteudo = SYSTEM_PROMPT_RJ + "\n\n" + REPORT_TEMPLATE_RJ + "\n\n" + prompt
         def _fn():
             return client.models.generate_content(
-                model=model_cons, contents=[conteudo]
+                model=model_cons,
+                contents=[conteudo],
+                config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
             ).text
         return _retry(_fn)
 
@@ -435,8 +549,10 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
 
         todos_chunks_rel = []
         hashes_arquivos_rel = {}
+        scans_por_arquivo_rel = {}
         for path in pdf_paths:
             hashes_arquivos_rel[path] = file_sha256(path)
+            scans_por_arquivo_rel[path] = _paginas_digitalizadas_pdf(path)
             for chunk in _rj_dividir_pdf(path):
                 todos_chunks_rel.append((
                     chunk.path, chunk.start, chunk.total_pages, path,
@@ -455,6 +571,7 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
         )
 
         resultados: dict = {}
+        erros_extracao: list[str] = []
 
         def _worker_rel(i):
             cp, offset, total_pg, original, preparation_note = todos_chunks_rel[i]
@@ -464,9 +581,11 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
             except Exception:
                 chunk_end = min(offset + CHUNK_MAX_PAGES_RJ, total_pg)
             source_hash = hashes_arquivos_rel[original]
+            paginas_scan = [p for p in scans_por_arquivo_rel[original] if offset < p <= chunk_end]
+            model_extracao = GEMINI_MODEL_OCR if paginas_scan else GEMINI_MODEL_EXTRACAO
             cache_namespace = "rj_rel_standalone" if standalone else "rj_relacionados"
             cached = load_chunk_cache(
-                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, cache_namespace
+                source_hash, offset, chunk_end, model_extracao, cache_namespace
             )
             if cached is not None:
                 return i, cached, "cache por arquivo/páginas"
@@ -483,13 +602,19 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
                 def _extrair_com(client, _indice):
                     try:
                         return _retry(
-                            lambda: _rj_extrair_chunk_fileapi((i, cp, offset, total_pg, n_rel, client)),
+                            lambda: _rj_extrair_chunk_fileapi(
+                                (i, cp, offset, total_pg, n_rel, client, model_extracao,
+                                 Path(original).name, paginas_scan)
+                            ),
                             tentativas=2, espera_base=15,
                         )
                     except Exception as e:
                         msg_e = str(e)
                         if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                            ri, res, nota = _rj_extrair_chunk((i, cp, offset, total_pg, n_rel, client))
+                            ri, res, nota = _rj_extrair_chunk(
+                                (i, cp, offset, total_pg, n_rel, client, model_extracao,
+                                 Path(original).name, paginas_scan)
+                            )
                             return ri, res, (nota + " | " if nota else "") + "fallback inline"
                         raise
 
@@ -506,7 +631,7 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
                     " | ".join(filter(None, [result[2], preparation_note, *trocas])),
                 )
             save_chunk_cache(
-                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, cache_namespace, result[1]
+                source_hash, offset, chunk_end, model_extracao, cache_namespace, result[1]
             )
             return result
 
@@ -534,7 +659,15 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
                         + f" | {concluidos}/{n_rel} prontos"
                     )
                 except Exception as e:
-                    avisos.append(f"Aviso: nao foi possivel extrair um trecho de '{nome_arq}' ({e}) — pode faltar informacao desse processo.")
+                    cp_erro, offset_erro, total_erro, _original_erro, _ = todos_chunks_rel[i_f]
+                    try:
+                        with fitz.open(cp_erro) as doc_erro:
+                            fim_erro = offset_erro + len(doc_erro)
+                    except Exception:
+                        fim_erro = min(offset_erro + CHUNK_MAX_PAGES_RJ, total_erro)
+                    erros_extracao.append(
+                        f"{nome_arq}, páginas {offset_erro + 1}-{fim_erro}: {e}"
+                    )
                     yield "progress", f"   {nome_arq} — trecho {i_f+1}/{n_rel}: erro ({e}) | {concluidos}/{n_rel} concluidos"
                 finally:
                     # Libera o chunk do disco assim que termina, em vez de so no final de
@@ -548,6 +681,12 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
             if cp != orig:
                 try: os.remove(cp)
                 except: pass
+
+        if erros_extracao:
+            raise RuntimeError(
+                "Extração incompleta dos processos relacionados; nenhum relatório parcial foi gerado. "
+                + " | ".join(erros_extracao)
+            )
 
         texto_relacionados = ""
         for i, (_cp, _offset, _total_pg, orig_path, _preparation_note) in enumerate(todos_chunks_rel):
@@ -564,13 +703,17 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
         texto_relacionados_prompt = texto_relacionados
         if len(texto_relacionados_prompt) > LIMITE_CONSOLIDACAO_RJ:
             yield "progress", (
-                f"   ⚠️ Texto dos relacionados tem {len(texto_relacionados_prompt):,} caracteres — truncando "
-                f"para os primeiros {LIMITE_CONSOLIDACAO_RJ:,} antes de consolidar (evita erro por estourar "
-                "o contexto do modelo). O texto bruto completo continua disponivel pros checklists."
+                f"   Fonte dos relacionados tem {len(texto_relacionados_prompt):,} caracteres — "
+                "gerando inventários intermediários de todos os lotes, sem descartar o final."
             )
-            texto_relacionados_prompt = texto_relacionados_prompt[:LIMITE_CONSOLIDACAO_RJ]
+            texto_relacionados_prompt = _rj_preservar_fonte_longa(
+                clients, texto_relacionados_prompt, model_cons,
+                log=avisos, rotulo="processos relacionados",
+            )
 
         instrucao_anti_omissao = (
+            REGRAS_CONSOLIDACAO_PROCESSUAL
+            + "\n\n"
             "INSTRUCAO OBRIGATORIA DE LEITURA:\n"
             "1. Leia cada processo/parte individualmente, do comeco ao fim, sem pular nenhum.\n"
             "2. Nao omita nenhuma execucao, valor, garantia, parte ou andamento relevante de qualquer processo.\n"
@@ -610,7 +753,9 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
         def _consolidar_com(client, indice):
             if cache_name and indice == 0:
                 contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
-                config = types.GenerateContentConfig(cached_content=cache_name)
+                config = types.GenerateContentConfig(
+                    cached_content=cache_name, temperature=0, max_output_tokens=65536
+                )
                 try:
                     return _retry(lambda: client.models.generate_content(
                         model=model_cons, contents=contents, config=config
@@ -624,7 +769,9 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
                         raise
             conteudo = SYSTEM_PROMPT_RJ + "\n\n" + REPORT_TEMPLATE_RJ + "\n\n" + prompt
             return _retry(lambda: client.models.generate_content(
-                model=model_cons, contents=[conteudo]
+                model=model_cons,
+                contents=[conteudo],
+                config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
             ).text)
 
         secao = _executar_com_failover_gemini(
@@ -635,6 +782,7 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
                 f"usada a credencial {proximo + 1}."
             ),
         )
+        secao = normalizar_referencias_relatorio(secao, len(nomes_arquivos) > 1)
 
         if job_id:
             try:
@@ -644,8 +792,8 @@ def _rj_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str, 
                 pass
 
         yield "done", (secao, texto_relacionados, avisos)
-    except Exception as e:
-        yield "done", (f"Erro ao processar relacionados: {e}", "", avisos)
+    except Exception:
+        raise
 
 
 def _erro_completo_relatorio(exc: Exception) -> str:
@@ -714,7 +862,8 @@ def _rj_analisar_somente_relacionados_impl(pdf_relacionados, instrucoes: str, ru
         pass
     try:
         job_id = rj_cache.calcular_job_id(
-            [], pdf_paths_rel, instrucoes, False, GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO
+            [], pdf_paths_rel, instrucoes, False, GEMINI_MODEL_EXTRACAO,
+            GEMINI_MODEL_RELATORIO, GEMINI_MODEL_OCR
         )
     except Exception:
         job_id = None
@@ -840,7 +989,8 @@ def _rj_analisar_com_relatorio_existente_impl(docx_paths: list, pdf_relacionados
         pass
     try:
         job_id = rj_cache.calcular_job_id(
-            docx_paths, pdf_paths_rel, instrucoes, False, GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO
+            docx_paths, pdf_paths_rel, instrucoes, False, GEMINI_MODEL_EXTRACAO,
+            GEMINI_MODEL_RELATORIO, GEMINI_MODEL_OCR
         )
     except Exception:
         job_id = None
@@ -952,7 +1102,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
     try:
         job_id = rj_cache.calcular_job_id(
             pdf_paths, pdf_paths_rel_all, instrucoes, versao_resumida,
-            GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO,
+            GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO, GEMINI_MODEL_OCR,
         )
     except Exception:
         job_id = None
@@ -978,6 +1128,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
 
     todos_chunks = []
     hashes_arquivos = {}
+    scans_por_arquivo = {}
     for path in pdf_paths:
         nome = Path(path).name
         mb_orig = Path(path).stat().st_size / 1_048_576
@@ -985,19 +1136,13 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
         record_status(runtime_job, "dividindo_pdf", arquivo=nome, tamanho_mb=round(mb_orig, 1))
         chunks = _rj_dividir_pdf(path)
         total_pg = chunks[0].total_pages if chunks else 0
-        doc_tmp = fitz.open(path)
-        esc = []
-        for i, p in enumerate(doc_tmp):
-            txt = p.get_text().strip()
-            if not txt or len(txt) < 50:
-                esc.append(i)
-                continue
-            alfa = sum(c.isalpha() for c in txt)
-            if alfa / len(txt) < 0.4 or len(txt.split()) < 30:
-                esc.append(i)
-        doc_tmp.close()
+        esc = _paginas_digitalizadas_pdf(path)
+        scans_por_arquivo[path] = esc
         pct = int(len(esc) / total_pg * 100) if total_pg else 0
-        info_scan = f"{len(esc)} pag. escaneadas ({pct}%)" if esc else "todas pesquisaveis"
+        info_scan = (
+            f"{len(esc)} pag. digitalizadas ({pct}%) — extração visual com {GEMINI_MODEL_OCR}"
+            if esc else f"todas pesquisáveis — extração com {GEMINI_MODEL_EXTRACAO}"
+        )
         log.append(f"   · {nome}: {total_pg} pag. — {info_scan}")
         if len(chunks) > 1:
             log.append(f"     Dividido em {len(chunks)} partes de até {CHUNK_MAX_PAGES_RJ} pag. e 45 MB")
@@ -1032,6 +1177,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
         yield "\n".join(log), "", "", ""
 
         parciais: dict = {}
+        erros_chunks: list[str] = []
 
         def _worker_rj(idx):
             cp, offset, total_pg, original, preparation_note = todos_chunks[idx]
@@ -1041,8 +1187,10 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
             except Exception:
                 chunk_end = min(offset + CHUNK_MAX_PAGES_RJ, total_pg)
             source_hash = hashes_arquivos[original]
+            paginas_scan = [p for p in scans_por_arquivo[original] if offset < p <= chunk_end]
+            model_extracao = GEMINI_MODEL_OCR if paginas_scan else GEMINI_MODEL_EXTRACAO
             cached = load_chunk_cache(
-                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, "rj_principal"
+                source_hash, offset, chunk_end, model_extracao, "rj_principal"
             )
             if cached is not None:
                 return idx, cached, "cache por arquivo/páginas"
@@ -1059,13 +1207,19 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
                 def _extrair_com(client, _indice):
                     try:
                         return _retry(
-                            lambda: _rj_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, client)),
+                            lambda: _rj_extrair_chunk_fileapi(
+                                (idx, cp, offset, total_pg, n, client, model_extracao,
+                                 Path(original).name, paginas_scan)
+                            ),
                             tentativas=2, espera_base=15,
                         )
                     except Exception as e:
                         msg_e = str(e)
                         if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                            ri, res, nota = _rj_extrair_chunk((idx, cp, offset, total_pg, n, client))
+                            ri, res, nota = _rj_extrair_chunk(
+                                (idx, cp, offset, total_pg, n, client, model_extracao,
+                                 Path(original).name, paginas_scan)
+                            )
                             return ri, res, (nota + " | " if nota else "") + "fallback inline"
                         raise
 
@@ -1082,7 +1236,7 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
                     " | ".join(filter(None, [result[2], preparation_note, *trocas])),
                 )
             save_chunk_cache(
-                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, "rj_principal", result[1]
+                source_hash, offset, chunk_end, model_extracao, "rj_principal", result[1]
             )
             return result
 
@@ -1118,6 +1272,15 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
                 except Exception as e:
                     i_f = futures[future]
                     log.append(f"   Erro no chunk {i_f+1}: {e}")
+                    cp_erro, offset_erro, total_erro, original_erro, _ = todos_chunks[i_f]
+                    try:
+                        with fitz.open(cp_erro) as doc_erro:
+                            fim_erro = offset_erro + len(doc_erro)
+                    except Exception:
+                        fim_erro = min(offset_erro + CHUNK_MAX_PAGES_RJ, total_erro)
+                    erros_chunks.append(
+                        f"{Path(original_erro).name}, páginas {offset_erro + 1}-{fim_erro}: {e}"
+                    )
                 finally:
                     # Libera o arquivo do chunk do disco assim que ele termina (sucesso ou
                     # erro) — sem isso, todos os chunks de um PDF grande ficavam ocupando
@@ -1134,6 +1297,12 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
         t_extr_s = int(time.time() - t_extr)
         log.append(f"   Extracao total: {t_extr_s//60}min{t_extr_s%60:02d}s")
         yield "\n".join(log), "", "", ""
+
+        if erros_chunks:
+            raise RuntimeError(
+                "A extração não cobriu todos os trechos; o relatório parcial foi bloqueado. "
+                + " | ".join(erros_chunks)
+            )
 
         record_status(runtime_job, "consolidando", chunks_total=n, chunks_concluidos=len(parciais))
         # Merge
@@ -1166,14 +1335,18 @@ def _rj_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str = "", versao_
             texto_para_secao_a = texto_merged
             if len(texto_para_secao_a) > LIMITE_CONSOLIDACAO_RJ:
                 log.append(
-                    f"   ⚠️ Texto extraido tem {len(texto_para_secao_a):,} caracteres — truncando para os "
-                    f"primeiros {LIMITE_CONSOLIDACAO_RJ:,} antes de gerar a Secao A (evita erro por "
-                    "estourar o contexto do modelo)."
+                    f"   Fonte extraída tem {len(texto_para_secao_a):,} caracteres — gerando "
+                    "inventários intermediários de todos os lotes, sem descartar o final."
                 )
-                texto_para_secao_a = texto_para_secao_a[:LIMITE_CONSOLIDACAO_RJ]
+                texto_para_secao_a = _rj_preservar_fonte_longa(
+                    clients, texto_para_secao_a, model_cons, log=log, rotulo="RJ principal"
+                )
             secao_a = _rj_consolidar_secao_a_com_failover(
                 clients, texto_para_secao_a, instrucoes, cache,
                 model_cons, versao_resumida, log,
+            )
+            secao_a = normalizar_referencias_relatorio(
+                secao_a, len(set(nomes_por_chunk)) > 1
             )
             if log and log[-1].startswith("   Credencial Gemini"):
                 log.append("   Secao A gerada.")

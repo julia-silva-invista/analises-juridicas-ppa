@@ -18,14 +18,24 @@ from report_template_processos import REPORT_TEMPLATE_INSTRUCTIONS, SYSTEM_PROMP
 from utils import (
     _retry, _gerar_docx, _responder_pergunta_generica, _get_gemini_clients,
     _executar_com_failover_gemini,
-    _barra_progresso, _filtrar_arquivos_existentes,
-    GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_RELATORIO, GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
+    _barra_progresso, _filtrar_arquivos_existentes, _paginas_digitalizadas_pdf,
+    GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_OCR, GEMINI_MODEL_RELATORIO,
+    GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
 )
 from analysis_runtime import (
     ANALYSIS_MANAGER, cleanup_chunk, file_sha256, iter_pdf_chunks, load_chunk_cache,
     pdf_preparation_slot, queue_message, record_status, save_chunk_cache,
 )
 from dossie_ppa import gerar_dossie_word
+from legal_prompts import (
+    REGRA_EXTRACAO_POR_PAGINA,
+    REGRA_FIDELIDADE_PROCESSUAL,
+    REGRA_INDICES_E_ADITAMENTOS,
+    REGRA_CRONOLOGIA_PROCESSUAL,
+    REGRAS_CONSOLIDACAO_PROCESSUAL,
+    contexto_fonte_pdf,
+    normalizar_referencias_relatorio,
+)
 
 CHUNK_MAX_PAGES_PROC    = 400
 # ══════════════════════════════════════════════════════════════════════════════
@@ -74,7 +84,14 @@ PROMPT_EXTR_PROC = (
     "- Penhoras no rosto dos autos: se houver requerimento de OUTROS credores (distintos do exequente)\n"
     "  pedindo reserva de valores/bens nesta execucao, registre separadamente com nome, CPF/CNPJ,\n"
     "  valor, origem do credito e status (deferido/indeferido/pendente).\n\n"
-    "NAO formate como relatorio final ainda. Apenas extraia tudo com fidelidade."
+    "NAO formate como relatorio final ainda. Apenas extraia tudo com fidelidade.\n\n"
+    + REGRA_FIDELIDADE_PROCESSUAL
+    + "\n"
+    + REGRA_EXTRACAO_POR_PAGINA
+    + "\n"
+    + REGRA_INDICES_E_ADITAMENTOS
+    + "\n"
+    + REGRA_CRONOLOGIA_PROCESSUAL
 )
 
 
@@ -92,7 +109,10 @@ def _proc_dividir_pdf(pdf_path: str) -> list:
 
 
 def _proc_extrair_chunk(args) -> tuple:
-    idx, chunk_path, offset, total_pg, n_total, client = args
+    idx, chunk_path, offset, total_pg, n_total, client, *extras = args
+    model_extracao = extras[0] if len(extras) > 0 else GEMINI_MODEL_EXTRACAO
+    nome_origem = extras[1] if len(extras) > 1 else Path(chunk_path).name
+    paginas_digitalizadas = extras[2] if len(extras) > 2 else []
     pg_ini = offset + 1
     try:
         with fitz.open(chunk_path) as _chunk_doc:
@@ -102,6 +122,7 @@ def _proc_extrair_chunk(args) -> tuple:
 
     textos_pag = []
     imagens_pag = []
+    paginas_omitidas = []
     total_img_bytes = 0
     MAX_IMG_BYTES = 19 * 1024 * 1024
 
@@ -119,15 +140,24 @@ def _proc_extrair_chunk(args) -> tuple:
                     img = pix.tobytes("jpeg", jpg_quality=50)
                     total_img_bytes += len(img)
                     imagens_pag.append((pg, img))
+                else:
+                    paginas_omitidas.append(pg)
         doc.close()
     except Exception:
         pass
 
     n_scan = len(imagens_pag)
+    if paginas_omitidas:
+        raise RuntimeError(
+            "Fallback visual excedeu o limite seguro e não enviaria todas as páginas "
+            f"digitalizadas ({paginas_omitidas[0]}-{paginas_omitidas[-1]}). "
+            "A análise foi interrompida para não gerar relatório incompleto."
+        )
 
     cabecalho = (
         f"[PARTE {idx+1}/{n_total} — paginas {pg_ini}-{pg_fim}]\n"
         "Nao omita nenhum dado mesmo que pareca repetitivo.\n"
+        + contexto_fonte_pdf(nome_origem, pg_ini, pg_fim, paginas_digitalizadas)
     )
     prompt_txt = cabecalho + PROMPT_EXTR_PROC
     if textos_pag:
@@ -142,17 +172,26 @@ def _proc_extrair_chunk(args) -> tuple:
 
     def _call():
         contents = [types.Content(role="user", parts=all_parts)]
-        resp = client.models.generate_content(model=GEMINI_MODEL_EXTRACAO, contents=contents)
+        resp = client.models.generate_content(
+            model=model_extracao,
+            contents=contents,
+            config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
+        )
         return resp.text
 
     resultado = _retry(_call)
-    nota = f"{n_scan} pag. escaneadas via imagem" if n_scan else ""
+    if not resultado or not resultado.strip():
+        raise RuntimeError(f"Extração vazia nas páginas {pg_ini}-{pg_fim} de {nome_origem}.")
+    nota = f"{n_scan} pag. escaneadas via imagem · {model_extracao}" if n_scan else model_extracao
     return idx, resultado, nota
 
 
 def _proc_extrair_chunk_fileapi(args) -> tuple:
     """Faz upload do chunk preservado para o File API e extrai o PDF nativamente."""
-    idx, chunk_path, offset, total_pg, n_total, client = args
+    idx, chunk_path, offset, total_pg, n_total, client, *extras = args
+    model_extracao = extras[0] if len(extras) > 0 else GEMINI_MODEL_EXTRACAO
+    nome_origem = extras[1] if len(extras) > 1 else Path(chunk_path).name
+    paginas_digitalizadas = extras[2] if len(extras) > 2 else []
     pg_ini = offset + 1
     try:
         with fitz.open(chunk_path) as _chunk_doc:
@@ -198,6 +237,8 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
         prompt = (
             f"[PARTE {idx+1}/{n_total} — paginas {pg_ini}-{pg_fim}]\n"
             "Nao omita nenhum dado mesmo que pareca repetitivo.\n\n"
+            + contexto_fonte_pdf(nome_origem, pg_ini, pg_fim, paginas_digitalizadas)
+            + "\n"
             + PROMPT_EXTR_PROC
         )
         mime = getattr(arq, "mime_type", None) or "application/pdf"
@@ -207,14 +248,21 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
         ])]
 
         def _call():
-            return client.models.generate_content(model=GEMINI_MODEL_EXTRACAO, contents=contents).text
+            return client.models.generate_content(
+                model=model_extracao,
+                contents=contents,
+                config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
+            ).text
 
         resultado = _retry(_call, tentativas=2, espera_base=5)
+        if not resultado or not resultado.strip():
+            raise RuntimeError(f"Extração vazia nas páginas {pg_ini}-{pg_fim} de {nome_origem}.")
     finally:
         try: client.files.delete(name=arq.name)
         except Exception: pass
 
-    return idx, resultado, "File API"
+    modo = "OCR visual forte" if paginas_digitalizadas else "texto pesquisável"
+    return idx, resultado, f"File API · {modo} · {model_extracao}"
 
 
 def _proc_obter_cache(client, model_cons: str) -> Optional[str]:
@@ -260,6 +308,7 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
         instrucoes_extras = f"\n\nINSTRUCOES ADICIONAIS: {instrucoes.strip()}" if instrucoes.strip() else ""
         prompt_full = (
             SYSTEM_PROMPT_PROC + "\n\n"
+            + REGRAS_CONSOLIDACAO_PROCESSUAL + "\n\n"
             + "Você está em MODO RESUMO. Ignore qualquer template detalhado e siga ESTRITAMENTE o formato abaixo.\n\n"
             + TEMPLATE_RESUMIDO_PROC
             + instrucoes_extras
@@ -273,7 +322,9 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
         )
         def _fn():
             return client.models.generate_content(
-                model=model_cons, contents=[prompt_full]
+                model=model_cons,
+                contents=[prompt_full],
+                config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
             ).text
         return _retry(_fn)
 
@@ -284,7 +335,8 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
         "Se forem processos distintos, gere secoes separadas para cada um.\n\n"
     ) if len(parciais) > 1 else ""
     prompt = (
-        "A seguir estao as extracoes brutas de cada parte do processo. "
+        REGRAS_CONSOLIDACAO_PROCESSUAL
+        + "\n\nA seguir estao as extracoes factuais rastreadas de cada parte do processo. "
         "Com base nelas, produza o relatorio juridico final seguindo rigorosamente "
         "o modelo de formatacao.\n\n"
         + _aviso_multiplos
@@ -294,7 +346,9 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
 
     if cache_name:
         contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
-        config = types.GenerateContentConfig(cached_content=cache_name)
+        config = types.GenerateContentConfig(
+            cached_content=cache_name, temperature=0, max_output_tokens=65536
+        )
         def _fn():
             return client.models.generate_content(
                 model=model_cons, contents=contents, config=config
@@ -310,7 +364,9 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
                 prompt_full = SYSTEM_PROMPT_PROC + "\n\n" + REPORT_TEMPLATE_INSTRUCTIONS + "\n\n" + prompt
                 def _fn_fallback():
                     return client.models.generate_content(
-                        model=model_cons, contents=[prompt_full]
+                        model=model_cons,
+                        contents=[prompt_full],
+                        config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
                     ).text
                 return _retry(_fn_fallback)
             raise
@@ -318,7 +374,9 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
         prompt_full = SYSTEM_PROMPT_PROC + "\n\n" + REPORT_TEMPLATE_INSTRUCTIONS + "\n\n" + prompt
         def _fn():
             return client.models.generate_content(
-                model=model_cons, contents=[prompt_full]
+                model=model_cons,
+                contents=[prompt_full],
+                config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
             ).text
         return _retry(_fn)
 
@@ -361,8 +419,10 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
     try:
         todos_chunks = []
         hashes_arquivos = {}
+        scans_por_arquivo = {}
         for path in pdf_paths:
             hashes_arquivos[path] = file_sha256(path)
+            scans_por_arquivo[path] = _paginas_digitalizadas_pdf(path)
             for chunk in _proc_dividir_pdf(path):
                 todos_chunks.append((
                     chunk.path, chunk.start, chunk.total_pages, path,
@@ -370,6 +430,7 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
                 ))
 
         resultados = {}
+        erros_chunks = []
 
         def _worker_rel(i):
             chunk_path, offset, total, original, preparation_note = todos_chunks[i]
@@ -379,8 +440,10 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
             except Exception:
                 chunk_end = min(offset + CHUNK_MAX_PAGES_PROC, total)
             source_hash = hashes_arquivos[original]
+            paginas_scan = [p for p in scans_por_arquivo[original] if offset < p <= chunk_end]
+            model_extracao = GEMINI_MODEL_OCR if paginas_scan else GEMINI_MODEL_EXTRACAO
             cached = load_chunk_cache(
-                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, "processo_relacionados"
+                source_hash, offset, chunk_end, model_extracao, "processo_relacionados"
             )
             if cached is not None:
                 return i, cached, "cache por arquivo/páginas"
@@ -396,7 +459,8 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
                     try:
                         return _retry(
                             lambda: _proc_extrair_chunk_fileapi(
-                                (i, chunk_path, offset, total, len(todos_chunks), client)
+                                (i, chunk_path, offset, total, len(todos_chunks), client,
+                                 model_extracao, Path(original).name, paginas_scan)
                             ),
                             tentativas=2, espera_base=15,
                         )
@@ -404,7 +468,8 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
                         msg = str(exc)
                         if any(code in msg for code in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
                             ri, text, note = _proc_extrair_chunk(
-                                (i, chunk_path, offset, total, len(todos_chunks), client)
+                                (i, chunk_path, offset, total, len(todos_chunks), client,
+                                 model_extracao, Path(original).name, paginas_scan)
                             )
                             return ri, text, (note + " | " if note else "") + "fallback inline"
                         raise
@@ -422,7 +487,7 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
                     " | ".join(filter(None, [result[2], preparation_note, *trocas])),
                 )
             save_chunk_cache(
-                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO,
+                source_hash, offset, chunk_end, model_extracao,
                 "processo_relacionados", result[1],
             )
             return result
@@ -434,13 +499,28 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
                 try:
                     _idx, text, _note = future.result()
                     resultados[i] = text
-                except Exception:
+                except Exception as exc:
                     resultados[i] = ""
+                    cp_erro, offset_erro, total_erro, original_erro, _ = todos_chunks[i]
+                    try:
+                        with fitz.open(cp_erro) as doc_erro:
+                            fim_erro = offset_erro + len(doc_erro)
+                    except Exception:
+                        fim_erro = min(offset_erro + CHUNK_MAX_PAGES_PROC, total_erro)
+                    erros_chunks.append(
+                        f"{Path(original_erro).name}, páginas {offset_erro + 1}-{fim_erro}: {exc}"
+                    )
                 finally:
                     chunk_path, _offset, _total, original, _preparation_note = todos_chunks[i]
                     if chunk_path != original:
                         try: os.remove(chunk_path)
                         except OSError: pass
+
+        if erros_chunks:
+            raise RuntimeError(
+                "Extração incompleta dos processos relacionados; nenhum relatório parcial foi gerado. "
+                + " | ".join(erros_chunks)
+            )
 
         texto_relacionados = ""
         for i, (_chunk_path, _offset, _total, original, _preparation_note) in enumerate(todos_chunks):
@@ -451,7 +531,8 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
             return ""
 
         prompt = (
-            "Com base nos processos relacionados abaixo, "
+            REGRAS_CONSOLIDACAO_PROCESSUAL
+            + "\n\nCom base nos processos relacionados abaixo, "
             "gere as secoes de processos relacionados (B.1, B.2, etc.) "
             "seguindo rigorosamente o template.\n\n"
             "REGRAS:\n"
@@ -466,7 +547,9 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
         def _consolidar_com(client, indice):
             if cache_name and indice == 0:
                 contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
-                config = types.GenerateContentConfig(cached_content=cache_name)
+                config = types.GenerateContentConfig(
+                    cached_content=cache_name, temperature=0, max_output_tokens=65536
+                )
                 try:
                     return _retry(lambda: client.models.generate_content(
                         model=model_cons, contents=contents, config=config
@@ -480,12 +563,17 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
                         raise
             prompt_full = SYSTEM_PROMPT_PROC + "\n\n" + REPORT_TEMPLATE_INSTRUCTIONS + "\n\n" + prompt
             return _retry(lambda: client.models.generate_content(
-                model=model_cons, contents=[prompt_full]
+                model=model_cons,
+                contents=[prompt_full],
+                config=types.GenerateContentConfig(temperature=0, max_output_tokens=65536),
             ).text)
 
-        return _executar_com_failover_gemini(clients, _consolidar_com)
+        secao = _executar_com_failover_gemini(clients, _consolidar_com)
+        return normalizar_referencias_relatorio(
+            secao, len({Path(p).name for p in pdf_paths}) > 1
+        )
     except Exception:
-        return ""
+        raise
 
 
 TEMPLATE_RESUMIDO_PROC = """\
@@ -593,25 +681,21 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
 
     todos_chunks = []
     hashes_arquivos = {}
+    scans_por_arquivo = {}
     for path in pdf_paths:
         nome = Path(path).name
         mb_orig = Path(path).stat().st_size / 1_048_576
         hashes_arquivos[path] = file_sha256(path)
         record_status(runtime_job, "dividindo_pdf", arquivo=nome, tamanho_mb=round(mb_orig, 1))
-        doc_tmp = fitz.open(path)
-        total_pg = len(doc_tmp)
-        esc = []
-        for i, p in enumerate(doc_tmp):
-            txt = p.get_text().strip()
-            if not txt or len(txt) < 50:
-                esc.append(i)
-                continue
-            alfa = sum(c.isalpha() for c in txt)
-            if alfa / len(txt) < 0.4 or len(txt.split()) < 30:
-                esc.append(i)
-        doc_tmp.close()
+        with fitz.open(path) as doc_tmp:
+            total_pg = len(doc_tmp)
+        esc = _paginas_digitalizadas_pdf(path)
+        scans_por_arquivo[path] = esc
         pct = int(len(esc) / total_pg * 100) if total_pg else 0
-        info_scan = f"{len(esc)} pag. escaneadas ({pct}%)" if esc else "todas pesquisaveis"
+        info_scan = (
+            f"{len(esc)} pag. digitalizadas ({pct}%) — extração visual com {GEMINI_MODEL_OCR}"
+            if esc else f"todas pesquisáveis — extração com {GEMINI_MODEL_EXTRACAO}"
+        )
         chunks = _proc_dividir_pdf(path)
         log.append(f"   · {nome}: {total_pg} pag. — {info_scan}")
         if len(chunks) > 1:
@@ -645,6 +729,7 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
         yield "\n".join(log), "", "", ""
 
         parciais: dict = {}
+        erros_chunks: list[str] = []
 
         def _worker_proc(idx):
             cp, offset, total_pg, original, preparation_note = todos_chunks[idx]
@@ -654,8 +739,10 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
             except Exception:
                 chunk_end = min(offset + CHUNK_MAX_PAGES_PROC, total_pg)
             source_hash = hashes_arquivos[original]
+            paginas_scan = [p for p in scans_por_arquivo[original] if offset < p <= chunk_end]
+            model_extracao = GEMINI_MODEL_OCR if paginas_scan else GEMINI_MODEL_EXTRACAO
             cached = load_chunk_cache(
-                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO, "processo_principal"
+                source_hash, offset, chunk_end, model_extracao, "processo_principal"
             )
             if cached is not None:
                 return idx, cached, "cache por arquivo/páginas"
@@ -670,13 +757,19 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
                 def _extrair_com(client, _indice):
                     try:
                         return _retry(
-                            lambda: _proc_extrair_chunk_fileapi((idx, cp, offset, total_pg, n, client)),
+                            lambda: _proc_extrair_chunk_fileapi(
+                                (idx, cp, offset, total_pg, n, client, model_extracao,
+                                 Path(original).name, paginas_scan)
+                            ),
                             tentativas=2, espera_base=15,
                         )
                     except Exception as e:
                         msg_e = str(e)
                         if any(c in msg_e for c in ["400", "INVALID_ARGUMENT", "403", "PERMISSION_DENIED"]):
-                            ri, res, nota = _proc_extrair_chunk((idx, cp, offset, total_pg, n, client))
+                            ri, res, nota = _proc_extrair_chunk(
+                                (idx, cp, offset, total_pg, n, client, model_extracao,
+                                 Path(original).name, paginas_scan)
+                            )
                             return ri, res, (nota + " | " if nota else "") + "fallback inline"
                         raise
 
@@ -693,7 +786,7 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
                     " | ".join(filter(None, [result[2], preparation_note, *trocas])),
                 )
             save_chunk_cache(
-                source_hash, offset, chunk_end, GEMINI_MODEL_EXTRACAO,
+                source_hash, offset, chunk_end, model_extracao,
                 "processo_principal", result[1],
             )
             return result
@@ -718,6 +811,15 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
                 except Exception as e:
                     i_f = futures[future]
                     log.append(f"   Erro no chunk {i_f+1}: {e}")
+                    cp_erro, offset_erro, total_erro, original_erro, _ = todos_chunks[i_f]
+                    try:
+                        with fitz.open(cp_erro) as doc_erro:
+                            fim_erro = offset_erro + len(doc_erro)
+                    except Exception:
+                        fim_erro = min(offset_erro + CHUNK_MAX_PAGES_PROC, total_erro)
+                    erros_chunks.append(
+                        f"{Path(original_erro).name}, páginas {offset_erro + 1}-{fim_erro}: {e}"
+                    )
                 finally:
                     # Libera o chunk do disco assim que termina (sucesso ou erro), em
                     # vez de esperar a analise inteira acabar — reduz pico de disco.
@@ -731,6 +833,12 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
         t_extr = int(time.time() - t_inicio)
         log.append(f"   Extracao: {t_extr//60}min{t_extr%60:02d}s")
         yield "\n".join(log), "", "", ""
+
+        if erros_chunks:
+            raise RuntimeError(
+                "A extração não cobriu todos os trechos; o relatório parcial foi bloqueado. "
+                + " | ".join(erros_chunks)
+            )
 
         # Configurar cache (apenas para versao normal — resumida nao usa)
         if versao_resumida:
@@ -758,6 +866,7 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
             clients, lista, instrucoes, cache, model_cons,
             versao_resumida, nomes_por_chunk, log,
         )
+        relatorio = normalizar_referencias_relatorio(relatorio, multi_arquivo)
 
         # Processos relacionados
         if pdf_relacionados:

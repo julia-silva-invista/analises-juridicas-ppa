@@ -24,8 +24,35 @@ GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "600000"))
 # Flash 3.6 para sintese juridica e perguntas.
 GEMINI_MODEL_EXTRACAO = os.getenv("GEMINI_MODEL_EXTRACAO", "gemini-3.5-flash-lite")
 GEMINI_MODEL_RELATORIO = os.getenv("GEMINI_MODEL_RELATORIO", "gemini-3.6-flash")
+# Página digitalizada exige leitura visual e interpretação de contratos/atos.
+# Por padrão usa o mesmo modelo forte da consolidação; pode ser alterado no Space
+# sem rebaixar a extração pesquisável, que continua no modelo de alto volume.
+GEMINI_MODEL_OCR = os.getenv("GEMINI_MODEL_OCR", GEMINI_MODEL_RELATORIO)
 GEMINI_MODEL_ESTRUTURADO = os.getenv("GEMINI_MODEL_ESTRUTURADO", "gemini-3.5-flash-lite")
 GEMINI_MODEL_QA = os.getenv("GEMINI_MODEL_QA", "gemini-3.6-flash")
+
+
+def _pagina_tem_texto_pesquisavel(page) -> bool:
+    """Heurística única para distinguir texto pesquisável de imagem/OCR ruim."""
+    texto = (page.get_text() or "").strip()
+    if len(texto) < 50 or len(texto.split()) < 30:
+        return False
+    alfa = sum(c.isalpha() for c in texto)
+    return bool(texto) and alfa / len(texto) >= 0.4
+
+
+def _paginas_digitalizadas_pdf(pdf_path: str, offset: int = 0) -> list[int]:
+    """Devolve páginas absolutas (base 1) sem camada textual confiável.
+
+    A detecção é local e determinística. Ela não faz OCR; serve para escolher o
+    modelo visual forte antes da chamada ao Gemini e para registrar a cobertura.
+    """
+    digitalizadas = []
+    with fitz.open(pdf_path) as doc:
+        for indice, page in enumerate(doc):
+            if not _pagina_tem_texto_pesquisavel(page):
+                digitalizadas.append(offset + indice + 1)
+    return digitalizadas
 
 # Trava global de processamento pesado de PDF (compressao/OCR via PyMuPDF) — compartilhada
 # entre rj.py e processos.py. Nao limita quantas analises rodam ao mesmo tempo (isso e o
@@ -172,7 +199,9 @@ def _gerar_docx(relatorio: str, titulo: str = "Análise Jurídica") -> str:
     doc.add_paragraph()
 
     REF_PAT = re.compile(
-        r'\(([^)]*(?:Mov\.|fls\.|Fls\.|Evento\s+n[oº°]?|ID\s*\d+|\|\s*fls\.)[^)]*)\)'
+        r'\(([^)]*(?:Mov\.|fls?\.|Fls?\.|Evento\s+n[oº°]?|ID\s*\d+'
+        r'|identificador\s+processual\s+n[aã]o\s+localizado|\|\s*fls?\.)[^)]*)\)',
+        re.IGNORECASE,
     )
     HEADING_PAT = re.compile(
         r'^[A-Z]\.\s+[A-ZÁÉÍÓÚ]|^[A-Z]\.\d+\.|^\d+\.\s+[A-ZÁÉÍÓÚ]'

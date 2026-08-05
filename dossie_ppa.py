@@ -23,6 +23,13 @@ from docx.text.paragraph import Paragraph as _DocxParagraph
 from google.genai import types
 
 from utils import _erro_gemini_permite_failover, _retry
+from legal_prompts import (
+    REGRA_FIDELIDADE_PROCESSUAL,
+    REGRA_INDICES_E_ADITAMENTOS,
+    REGRA_CRONOLOGIA_PROCESSUAL,
+    REGRA_AUDITORIA_FINAL,
+    normalizar_referencias_objeto,
+)
 
 # ── Paleta Invista (extraída do template v3.0) ────────────────────────────
 _LARANJA   = "E8440A"   # headers de tabela, títulos
@@ -67,8 +74,8 @@ NUNCA cite "texto bruto", "PARTE i/N" ou qualquer marcador técnico de divisão 
 se fosse referência processual — são só limites internos de divisão, sem significado jurídico.
 Antes de responder, confira mentalmente se o identificador e a página citados são exatamente
 os que aparecem no trecho de onde a informação foi extraída — referências erradas (ID ou
-página incorretos) já causaram problemas antes; na dúvida, prefira omitir a referência a
-citar uma incorreta.
+página incorretos) já causaram problemas antes; na dúvida, sinalize "identificador processual
+não localizado" e preserve a página absoluta do PDF, sem inventar ou deslocar a referência.
 Campos que NUNCA levam referência (só o valor puro, sem parênteses): número do processo,
 vara, nome do credor, nome do exequente, nome do executado.
 ═══ REGRA — SIGLAS DE INSTRUMENTO EM MAIÚSCULA ═══
@@ -98,13 +105,27 @@ descrito nele. Ao transportar uma informação do relatório para um campo do JS
 ═══ FIM DA REGRA DE COMPLETUDE ═══
 """
 
+# O mesmo protocolo passa a reger dossiês e checklists, sem remover as regras
+# específicas de formatação e completude já existentes.
+REGRA_CITACAO_PADRAO = REGRA_FIDELIDADE_PROCESSUAL + "\n" + REGRA_CITACAO_PADRAO
+REGRA_COMPLETUDE_PADRAO = (
+    REGRA_COMPLETUDE_PADRAO
+    + "\n"
+    + REGRA_INDICES_E_ADITAMENTOS
+    + "\n"
+    + REGRA_CRONOLOGIA_PROCESSUAL
+    + "\n"
+    + REGRA_AUDITORIA_FINAL
+)
+
 _RE_MARCADOR_REFERENCIA = re.compile(
     r"(?:\bID\s+(?:n[.º°o]\s*)?\d"
     r"|\bMov(?:imento)?\.?\s+(?:n[.º°o]\s*)?\d"
     r"|\bEvento\s+(?:n[.º°o]\s*)?\d"
     r"|\bfls?\.?\s+(?:\d|s\.?\s*/\s*n\.?)"
     r"|\bp(?:\.|\u00e1g(?:ina)?\.?)\s*\d"
-    r"|refer[êé]ncia\s+não\s+localizada)",
+    r"|refer[êé]ncia\s+não\s+localizada"
+    r"|identificador\s+processual\s+não\s+localizado)",
     re.IGNORECASE,
 )
 _RE_GRUPO_PARENTESES = re.compile(r"\(([^()\n]+)\)")
@@ -115,6 +136,7 @@ _RE_REFERENCIA_PURA = re.compile(
     r"|(?:Evento\s+(?:n[.º°o]\s*)?\d[\d./-]*)"
     r"|(?:fls?\.?\s+(?:\d[\d./-]*|s\.?\s*/\s*n\.?))"
     r"|(?:p(?:\.|\u00e1g(?:ina)?\.?)\s*\d[\d./-]*)"
+    r"|(?:identificador\s+processual\s+não\s+localizado)"
     r")"
     r"(?:\s*(?:\||;|,)\s*(?:"
     r"ID\s+(?:n[.º°o]\s*)?\d[\d./-]*"
@@ -600,8 +622,9 @@ As regras de referência/siglas/status acima (antes deste parágrafo) valem para
   Cada campo (ind_cm/ind_jr/ind_jm/ind_multa/ind_cap) é o ÍNDICE OU A TAXA que o contrato prevê
   — nunca um valor em R$. Exemplos corretos: "IPCA" (ind_cm), "1% ao mês" (ind_jr), "1% ao mês"
   (ind_jm), "2% sobre o débito" (ind_multa), "capitalização mensal/anual" (ind_cap). Se o contrato
-  não disciplinar algum desses itens, deixe "" — nunca infira um valor calculado como se fosse o
-  índice.
+  não disciplinar correção monetária, preencha ind_cm exatamente com "Não há". Para os demais itens
+  não disciplinados, deixe "". Nunca infira um valor calculado como se fosse o índice. Em todos os
+  campos encontrados, preserve também a cláusula contratual e a referência processual completa.
 - Planilha Inicial (plan_*): fonte é a PRIMEIRA memória de cálculo/planilha que instruiu a petição
   inicial (a que embasou o valor da causa). Mesma regra de conteúdo dos campos ind_*: cada campo
   (plan_cm/plan_jr/plan_multa/plan_cap) deve trazer o ÍNDICE OU A TAXA que essa planilha efetivamente
@@ -625,7 +648,7 @@ campo "data" as datas das tentativas e no campo "fls" as páginas correspondente
 
 ═══ REGRA 4 — PENHORAS E ANDAMENTOS ═══
 - Constrições: no campo "status", se a penhora/constrição foi DEFERIDA, inclua a DATA da decisão de
-  deferimento. Ex.: "Penhora deferida em 15/03/2024 (fls. 120)", "Sisbajud deferido em 02/2024 (Mov. 88)".
+  deferimento e a referência completa com identificador real do tribunal e página absoluta do PDF.
 - andamentos: liste TODOS os andamentos processuais que constarem no material E no relatório de apoio —
   NÃO resuma, NÃO omita e NÃO limite a quantidade. Cada andamento com data, descrição objetiva e
   referência (Mov./fls./Evento/ID).
@@ -2037,6 +2060,8 @@ def gerar_dossie_word(texto_completo: str, relatorio: str, client, model: str) -
     dados = _extrair_dados(texto_completo, relatorio, client, model)
     # Passada final: confere campos vazios contra o relatório e completa o que faltou
     dados = _completar_com_relatorio(dados, relatorio, client, model)
+    nomes_pdf = set(re.findall(r"(?:arquivo:\s*|^---\s*)([^\n—]+)", texto_completo or "", re.MULTILINE))
+    dados = normalizar_referencias_objeto(dados, multiplos_pdfs=len(nomes_pdf) > 1)
     return _build_doc(dados)
 
 

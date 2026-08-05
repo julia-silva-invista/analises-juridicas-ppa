@@ -5,6 +5,9 @@ Template configurado com base nos modelos reais do escritório.
 Para ajustar o modelo, edite REPORT_TEMPLATE_INSTRUCTIONS abaixo.
 """
 
+from legal_prompts import REGRAS_CONSOLIDACAO_PROCESSUAL
+
+
 TEMPLATE_CONFIGURED: bool = True
 
 SYSTEM_PROMPT = (
@@ -339,3 +342,10 @@ A.  Execução de Título Extrajudicial nº 0017636-21.2024.8.16.0194 - 14ª Var
 [... demais seções na ordem indicada acima ...]
 
 """.strip()
+
+# Acrescenta o protocolo de fidelidade sem substituir qualquer regra ou seção
+# do template integral acima.
+SYSTEM_PROMPT = SYSTEM_PROMPT + "\n\n" + REGRAS_CONSOLIDACAO_PROCESSUAL
+REPORT_TEMPLATE_INSTRUCTIONS = (
+    REPORT_TEMPLATE_INSTRUCTIONS + "\n\n" + REGRAS_CONSOLIDACAO_PROCESSUAL
+)

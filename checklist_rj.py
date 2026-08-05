@@ -24,6 +24,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from google.genai import types
 
 from utils import _erro_gemini_permite_failover, _retry
+from legal_prompts import normalizar_referencias_objeto
 
 # Reuso dos helpers de formatação do dossiê PPA (mesma paleta/fonte Invista)
 from dossie_ppa import (
@@ -198,11 +199,12 @@ dois divergirem, prefira o relatório.
 
 ═══ REGRA — REFERÊNCIA, UMA VEZ POR LINHA ═══
 Todo campo com conteúdo deve trazer ao final, entre parênteses, a referência de onde foi extraído no
-formato definido acima (ex.: "(ID 188753786 | fl. 135)"). Se não houver ID/Mov./Evento disponível e só
-houver número de página, cite só a página (ex.: "(fl. 340)"), tratando o conjunto como um documento
-contínuo único — a menos que fique evidente que são processos ou documentos efetivamente distintos
-(números de processo diferentes, cabeçalhos de arquivo diferentes), caso em que identifique de qual
-documento veio, conforme a regra acima. O exemplo "(referência)" que aparece no molde abaixo é só uma
+formato definido acima (ex.: "(ID 188753786 | fl. 135)"). Se o fato estiver legível, mas o
+ID/Mov./Evento ou a numeração real dos autos não estiver, escreva de forma transparente
+"(identificador processual não localizado | fl. 340)". Nunca use apenas a página do PDF como se ela
+fosse também o identificador do tribunal e nunca cite página local de chunk/parte. Se forem processos
+ou documentos efetivamente distintos, identifique de qual pdf veio conforme a regra acima. O exemplo
+"(referência)" que aparece no molde abaixo é só uma
 INSTRUÇÃO DE FORMATO PARA VOCÊ, não é texto para copiar — substitua sempre pela referência real.
 NUNCA devolva a anotação de formato vazia ou literal (nunca escreva "(referência)" ou
 "(Mov./ID/fls./Evento)" literalmente).
@@ -214,7 +216,7 @@ ou um recurso com nome/status), coloque a referência SÓ no primeiro campo da l
 Se um dado factual não constar em NENHUMA das duas fontes, preencha com "Não consta" — SEM parênteses
 de referência nenhuma (nem vazia, nem "referência não localizada": esse fallback só vale quando HÁ
 conteúdo mas a referência exata não foi localizada, nunca quando o campo inteiro é "Não consta").
-Em campos de escolha, responda com a opção EXATA e ÚNICA (ex: "Deferido (Mov. 12)"). NUNCA marque mais
+Em campos de escolha, responda com a opção EXATA e ÚNICA (ex: "Deferido (Mov. 12 | fl. 88)"). NUNCA marque mais
 de uma opção; se não houver informação, deixe "" (nenhuma opção marcada).
 
 ═══ REGRA — AGC SEM DATAS ═══
@@ -388,6 +390,8 @@ def _build_checklist_rj(dados: dict) -> str:
 def gerar_checklist_rj(relatorio: str, texto_bruto: str, client, model: str) -> str:
     fonte = _montar_fonte_rj(relatorio, texto_bruto)
     dados = _extrair(_PROMPT_RJ, fonte, client, model)
+    nomes_pdf = set(re.findall(r"(?:arquivo:\s*|^---\s*)([^\n—]+)", fonte, re.MULTILINE))
+    dados = normalizar_referencias_objeto(dados, multiplos_pdfs=len(nomes_pdf) > 1)
     return _build_checklist_rj(dados)
 
 
@@ -670,8 +674,10 @@ def _identificar_exequentes(fonte: str, client, model: str) -> list:
 
 def _gerar_docs_por_credor(fonte: str, creditores: list, client, model: str) -> list:
     caminhos = []
+    nomes_pdf = set(re.findall(r"(?:arquivo:\s*|^---\s*)([^\n—]+)", fonte, re.MULTILINE))
     for nome, doc_id in creditores:
         dados = _extrair_cred_scoped(fonte, nome, doc_id, client, model)
+        dados = normalizar_referencias_objeto(dados, multiplos_pdfs=len(nomes_pdf) > 1)
         if not (dados.get("credor") or "").strip():
             dados["credor"] = nome + (f" · {doc_id}" if doc_id else "")
         caminhos.append(_build_checklist_creditos(dados, sufixo=nome))
@@ -690,4 +696,6 @@ def gerar_checklist_creditos(fonte: str, client, model: str, creditores=None):
         return _gerar_docs_por_credor(fonte, candidatos, client, model)
     # Fallback: não foi possível identificar nenhum exequente — extração genérica de sempre
     dados = _extrair(_PROMPT_CRED, fonte, client, model)
+    nomes_pdf = set(re.findall(r"(?:arquivo:\s*|^---\s*)([^\n—]+)", fonte, re.MULTILINE))
+    dados = normalizar_referencias_objeto(dados, multiplos_pdfs=len(nomes_pdf) > 1)
     return _build_checklist_creditos(dados)
