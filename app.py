@@ -121,13 +121,19 @@ _FORCE_LIGHT_JS = """
 
 # Exportação de imagem da Timeline Societária: rasteriza o PRÓPRIO HTML da timeline
 # (o mesmo que está na tela) num canvas, via <foreignObject> de SVG — sem biblioteca
-# externa e sem redesenhar o layout no servidor. Devolve um data URL PNG; se qualquer
-# etapa falhar, devolve "" e o Python cai no desenho vertical antigo.
+# externa e sem redesenhar o layout no servidor.
+#
+# Roda como pré-processamento do clique (js + fn no MESMO evento): recebe o valor atual
+# do campo-ponte e devolve `[data URL]`, que o Gradio entrega como argumento de
+# `timeline_salvar_imagem`. Não use `fn=None` + `.then(...)` aqui: no Gradio 5.29.1 do
+# Space o `.then` encadeado depois de um evento só-JS nunca dispara, e o botão fica mudo.
+# Se qualquer etapa falhar, devolve "" e o Python explica o que houve.
 _CAPTURAR_TIMELINE_JS = """
-async () => {
+async (_captura) => {
+    const vazio = [""];
     try {
         const shell = document.querySelector("#timeline-export-area");
-        if (!shell) return "";
+        if (!shell) return vazio;
 
         const estilo = shell.querySelector("#tl2-export-style");
         const css = estilo ? estilo.textContent : "";
@@ -160,7 +166,7 @@ async () => {
         const largura = Math.ceil(rect.width);
         const altura = Math.ceil(rect.height) + 8;
         document.body.removeChild(holder);
-        if (!largura || !altura) return "";
+        if (!largura || !altura) return vazio;
 
         const wrapper = document.createElement("div");
         wrapper.style.cssText = "width:" + largura + "px;background:#ffffff;";
@@ -192,9 +198,9 @@ async () => {
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(imagem, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL("image/png");
+        return [canvas.toDataURL("image/png")];
     } catch (e) {
-        return "";
+        return vazio;
     }
 }
 """
@@ -701,12 +707,12 @@ with gr.Blocks(
         inputs=[tl_editando_state, tl_editor, tl_data_state],
         outputs=[tl_editando_state, tl_editar_btn, tl_editor, tl_timeline_html, tl_data_state, tl_edicao_status],
     )
+    # Um único evento: o JS roda antes e o que ele devolve vira o argumento do Python.
     tl_exportar_img_btn.click(
-        fn=None, inputs=None, outputs=[tl_imagem_captura], js=_CAPTURAR_TIMELINE_JS
-    ).then(
         fn=timeline_salvar_imagem,
-        inputs=[tl_imagem_captura, tl_data_state],
+        inputs=[tl_imagem_captura],
         outputs=[tl_imagem_file],
+        js=_CAPTURAR_TIMELINE_JS,
     )
     tl_exportar_html_btn.click(
         fn=timeline_exportar_html, inputs=[tl_data_state], outputs=[tl_exportar_html_btn]

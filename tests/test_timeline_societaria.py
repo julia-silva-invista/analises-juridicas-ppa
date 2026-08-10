@@ -136,19 +136,31 @@ def testar_exportar_imagem_grava_a_captura_do_html():
     Image.new("RGB", (40, 30), "red").save(buffer, "PNG")
     captura = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
 
-    caminho = timeline.timeline_salvar_imagem(captura, {})
+    caminho = timeline.timeline_salvar_imagem(captura)
 
     assert Image.open(caminho).size == (40, 30)
 
 
-@pytest.mark.parametrize("captura", ["", None, "data:image/png;base64,!!!invalido!!!"])
-def testar_exportar_imagem_cai_no_desenho_vertical(captura):
-    """Se o navegador não conseguir rasterizar, ainda sai um PNG."""
-    dados = {"empresa": "Teste", "cnpj": "", "eventos": [
-        {"data": "01/01/2020", "ato": "Constituição", "detalhamento": "x"},
-    ]}
+@pytest.mark.parametrize("captura", ["", None, "nao-e-data-url"])
+def testar_exportar_imagem_sem_timeline_na_tela_avisa(captura):
+    with pytest.raises(gr.Error, match="Não há timeline na tela"):
+        timeline.timeline_salvar_imagem(captura)
 
-    caminho = timeline.timeline_salvar_imagem(captura, dados)
 
-    assert Path(caminho).name == "timeline_societaria_vertical.png"
-    assert Image.open(caminho).size[0] > 0
+def testar_exportar_imagem_com_base64_quebrado_avisa():
+    with pytest.raises(gr.Error, match="não conseguiu gerar a imagem"):
+        timeline.timeline_salvar_imagem("data:image/png;base64,!!!invalido!!!")
+
+
+def testar_captura_js_recebe_um_argumento_e_devolve_lista():
+    """O JS roda como pré-processamento do clique: precisa aceitar o valor atual do
+    campo-ponte e devolver uma lista com os argumentos de timeline_salvar_imagem."""
+    fonte = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+    trecho = fonte.split('_CAPTURAR_TIMELINE_JS = """', 1)[1].split('"""', 1)[0]
+
+    assert trecho.lstrip().startswith("async (_captura) =>")
+    assert 'const vazio = [""];' in trecho
+    assert 'return [canvas.toDataURL("image/png")];' in trecho
+    assert 'return "";' not in trecho, "todo caminho de falha devolve a lista vazia"
+    # O `.then` encadeado depois de um evento só-JS não dispara no Gradio 5 do Space.
+    assert ".then(" not in fonte.split("tl_exportar_img_btn.click(", 1)[1].split(")\n", 1)[0]

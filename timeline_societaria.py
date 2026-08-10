@@ -1139,25 +1139,33 @@ def timeline_exportar_imagem_vertical(data: dict) -> str:
     return str(output)
 
 
-def timeline_salvar_imagem(captura: str, data: dict) -> str:
+def timeline_salvar_imagem(captura: str) -> str:
     """Salva o PNG capturado do próprio HTML da timeline (rasterizado no navegador) e
     devolve o caminho para o link de download.
 
     A captura é a imagem exata do que está na tela — mesmo layout, mesmas cores, mesmos
-    cards. Se o navegador não conseguir rasterizar (bloqueio de canvas, timeline ainda não
-    gerada na aba), cai no desenho vertical antigo em vez de deixar a usuária sem arquivo.
+    cards. Chega como data URL, produzida pelo JS que roda antes desta função no mesmo
+    evento de clique. Quando vier vazia, o motivo quase sempre é não haver timeline na
+    tela; avisar é melhor do que entregar um PNG diferente do que a usuária está vendo.
     """
     captura = str(captura or "")
-    if captura.startswith("data:image/png;base64,"):
-        try:
-            conteudo = base64.b64decode(captura.split(",", 1)[1], validate=True)
-        except (binascii.Error, ValueError):
-            conteudo = b""
-        if conteudo:
-            output = Path(tempfile.gettempdir()) / "timeline_societaria.png"
-            output.write_bytes(conteudo)
-            return str(output)
-    return timeline_exportar_imagem_vertical(data)
+    if not captura.startswith("data:image/png;base64,"):
+        raise gr.Error(
+            "Não há timeline na tela para exportar. Analise os atos societários primeiro; "
+            "se a timeline já estiver visível, recarregue a página e tente de novo."
+        )
+    try:
+        conteudo = base64.b64decode(captura.split(",", 1)[1], validate=True)
+    except (binascii.Error, ValueError):
+        conteudo = b""
+    if not conteudo:
+        raise gr.Error(
+            "O navegador não conseguiu gerar a imagem da timeline. Recarregue a página e "
+            "tente de novo; se persistir, use Exportar HTML."
+        )
+    output = Path(tempfile.gettempdir()) / "timeline_societaria.png"
+    output.write_bytes(conteudo)
+    return str(output)
 
 
 TL2_CSS = """
