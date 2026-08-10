@@ -19,7 +19,7 @@ from analysis_runtime import environment_status_json
 from timeline_societaria import (
     timeline_analisar,
     timeline_toggle_edicao,
-    timeline_exportar_imagem_vertical,
+    timeline_salvar_imagem,
     timeline_gerar_word,
     timeline_exportar_html,
     EDITOR_HEADERS,
@@ -116,6 +116,86 @@ _FORCE_LIGHT_JS = """
     };
     setupTabCarousel();
     new MutationObserver(setupTabCarousel).observe(document.body, { childList: true, subtree: true });
+}
+"""
+
+# Exportação de imagem da Timeline Societária: rasteriza o PRÓPRIO HTML da timeline
+# (o mesmo que está na tela) num canvas, via <foreignObject> de SVG — sem biblioteca
+# externa e sem redesenhar o layout no servidor. Devolve um data URL PNG; se qualquer
+# etapa falhar, devolve "" e o Python cai no desenho vertical antigo.
+_CAPTURAR_TIMELINE_JS = """
+async () => {
+    try {
+        const shell = document.querySelector("#timeline-export-area");
+        if (!shell) return "";
+
+        const estilo = shell.querySelector("#tl2-export-style");
+        const css = estilo ? estilo.textContent : "";
+        const overrides = `
+            .tl2-export-clone { width: max-content !important; box-shadow: none !important;
+                                margin: 0 !important; background: #fff !important; }
+            .tl2-export-clone .tl2-scroll { overflow: visible !important; }
+            .tl2-export-clone, .tl2-export-clone * {
+                font-family: Arial, Helvetica, sans-serif !important; }
+            .tl2-export-clone .tl2-btn,
+            .tl2-export-clone .tl2-modal,
+            .tl2-export-clone .tl2-toggle { display: none !important; }
+        `;
+
+        const clone = shell.cloneNode(true);
+        clone.removeAttribute("id");
+        clone.classList.add("tl2-export-clone");
+        clone.querySelectorAll("#tl2-export-style, .tl2-btn, .tl2-modal, .tl2-toggle")
+             .forEach((n) => n.remove());
+
+        // Mede fora da tela, com o eixo horizontal inteiro visível (sem a barra de rolagem).
+        const holder = document.createElement("div");
+        holder.style.cssText = "position:fixed;left:-100000px;top:0;width:max-content;background:#fff;";
+        const estiloMedicao = document.createElement("style");
+        estiloMedicao.textContent = css + overrides;
+        holder.appendChild(estiloMedicao);
+        holder.appendChild(clone);
+        document.body.appendChild(holder);
+        const rect = clone.getBoundingClientRect();
+        const largura = Math.ceil(rect.width);
+        const altura = Math.ceil(rect.height) + 8;
+        document.body.removeChild(holder);
+        if (!largura || !altura) return "";
+
+        const wrapper = document.createElement("div");
+        wrapper.style.cssText = "width:" + largura + "px;background:#ffffff;";
+        const estiloSvg = document.createElement("style");
+        estiloSvg.textContent = css + overrides;
+        wrapper.appendChild(estiloSvg);
+        wrapper.appendChild(clone);
+        const xhtml = new XMLSerializer().serializeToString(wrapper);
+
+        const escala = Math.max(1, Math.min(2, 3200 / largura));
+        const svg =
+            '<svg xmlns="http://www.w3.org/2000/svg" width="' + Math.round(largura * escala) +
+            '" height="' + Math.round(altura * escala) + '" viewBox="0 0 ' + largura + " " + altura + '">' +
+            '<foreignObject x="0" y="0" width="' + largura + '" height="' + altura + '">' +
+            xhtml + "</foreignObject></svg>";
+
+        const imagem = new Image();
+        imagem.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+        await new Promise((resolve, reject) => {
+            imagem.onload = resolve;
+            imagem.onerror = () => reject(new Error("svg"));
+            window.setTimeout(() => reject(new Error("timeout")), 20000);
+        });
+
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(largura * escala);
+        canvas.height = Math.round(altura * escala);
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(imagem, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL("image/png");
+    } catch (e) {
+        return "";
+    }
 }
 """
 
@@ -463,6 +543,9 @@ with gr.Blocks(
                     elem_classes=["compact-file-output"],
                 )
 
+            # Ponte da captura feita no navegador (data URL PNG) até o Python.
+            tl_imagem_captura = gr.Textbox(visible=False)
+
         # ── Tab 5: Coleta de Informações ─────────────────────────────────────
         with gr.Tab("Coleta de Informações"):
             with gr.Row():
@@ -619,7 +702,11 @@ with gr.Blocks(
         outputs=[tl_editando_state, tl_editar_btn, tl_editor, tl_timeline_html, tl_data_state, tl_edicao_status],
     )
     tl_exportar_img_btn.click(
-        fn=timeline_exportar_imagem_vertical, inputs=[tl_data_state], outputs=[tl_imagem_file]
+        fn=None, inputs=None, outputs=[tl_imagem_captura], js=_CAPTURAR_TIMELINE_JS
+    ).then(
+        fn=timeline_salvar_imagem,
+        inputs=[tl_imagem_captura, tl_data_state],
+        outputs=[tl_imagem_file],
     )
     tl_exportar_html_btn.click(
         fn=timeline_exportar_html, inputs=[tl_data_state], outputs=[tl_exportar_html_btn]

@@ -158,11 +158,23 @@ def _filtrar_arquivos_existentes(paths: list, log: list) -> list:
     return existentes
 
 
+def _erro_gemini_e_teto_de_gasto(exc: Exception) -> bool:
+    """429 por teto de gasto do projeto (spend cap) — diferente de rate limit.
+
+    Insistir não resolve: a cota só volta quando o teto for elevado no AI Studio ou
+    quando virar o mês. Serve para pular o backoff e ir direto para a próxima chave.
+    """
+    msg = str(exc).lower()
+    return "spend cap" in msg or "spending cap" in msg
+
+
 def _retry(fn, tentativas=5, espera_base=20):
     for t in range(1, tentativas + 1):
         try:
             return fn()
         except Exception as e:
+            if _erro_gemini_e_teto_de_gasto(e):
+                raise
             msg = str(e)
             msg_low = msg.lower()
             retryable = (

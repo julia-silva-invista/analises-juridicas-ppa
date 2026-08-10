@@ -14,7 +14,7 @@ from pathlib import Path
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Pt, RGBColor
+from docx.shared import Cm, Emu, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.table import Table as _DocxTable
@@ -1220,20 +1220,20 @@ def _build_doc_programatico_obsoleto(dados: dict) -> str:
     _grid_table(doc, ["NOME", "CPF / CNPJ", "SALDO e-CAC (R$)"], [], [7.0, 5.0, 4.9], min_rows=2)
     _spacer(doc, pts=2)
     _sub_gray(doc, "Execuções Fiscais")
-    cols_exec = ["Nº CNJ", "Vinculado a", "Distribuição", "Exequente", "Valor Causa (R$)", "SAT Est. (R$)", "Status"]
-    ws_exec = [3.0, 2.2, 2.0, 2.8, 2.3, 2.3, 2.3]
+    cols_exec = ["Nº CNJ", "Distribuição", "Executado", "Exequente", "Valor Causa (R$)", "SAT Est. (R$)", "Status"]
+    ws_exec = [3.0, 1.75, 3.4, 2.55, 2.0, 2.0, 2.2]
     _grid_table(doc, cols_exec, [], ws_exec, min_rows=2)
     _spacer(doc)
 
     # 3.2 Passivo Trabalhista
     _sub_orange(doc, "3.2 Passivo Trabalhista")
-    cols_trab = ["Nº CNJ", "Vinculado a", "Distribuição", "Autor", "Valor Causa (R$)", "SAT Est. (R$)", "Status"]
+    cols_trab = ["Nº CNJ", "Distribuição", "Executado", "Autor", "Valor Causa (R$)", "SAT Est. (R$)", "Status"]
     _grid_table(doc, cols_trab, [], ws_exec, min_rows=2)
     _spacer(doc)
 
     # 3.3 Passivo Cível (Terceiros)
     _sub_orange(doc, "3.3 Passivo Cível (Terceiros)")
-    cols_civ = ["Nº CNJ", "Vinculado a", "Distribuição", "Exequente", "Valor Causa (R$)", "SAT Est. (R$)", "Obs."]
+    cols_civ = ["Nº CNJ", "Distribuição", "Executado", "Exequente", "Valor Causa (R$)", "SAT Est. (R$)", "Obs."]
     _grid_table(doc, cols_civ, [], ws_exec, min_rows=2)
     _spacer(doc, pts=2)
 
@@ -1999,6 +1999,12 @@ def _build_doc(dados: dict) -> str:
     shutil.copy2(_TEMPLATE_PATH, caminho)
     doc = Document(caminho)
 
+    # O template ainda traz "Vinculado a" antes de "Distribuição" nas tabelas do passivo;
+    # todo dossiê gerado sai já na ordem CNJ → Distribuição → Executado → Exequente,
+    # mesmo quando o passivo não é preenchido por planilha.
+    for tabela in doc.tables:
+        _reordenar_cabecalho_passivo(tabela)
+
     hoje = _date.today().strftime("%d/%m/%Y")
     _preencher_tabela_chave_valor(doc.tables[0], {
         "Nome do Caso": dados.get("nome_caso", ""),
@@ -2080,29 +2086,63 @@ def _fmt_valor_br(v) -> str:
 
 def _proc_to_row(p: dict) -> list:
     """Mapeia um processo (Predictus ou Coleta de Informações) para as 7 colunas do
-    passivo do dossiê. "sat" só vem preenchido no fluxo da Coleta (Saldo Atualizado
-    estimado, já calculado na própria planilha de origem) — a Predictus não tem essa
-    informação, e _fmt_valor_br(None) devolve "" nesse caso."""
+    passivo do dossiê, na ordem CNJ → Distribuição → Executado → Exequente.
+
+    "Executado" é o POLO PASSIVO do processo; "Vinculado à" (a quem a pesquisa estava
+    atrelada) só entra como reserva quando a planilha de origem não trouxer o polo passivo.
+    "sat" só vem preenchido no fluxo da Coleta (Saldo Atualizado estimado, já calculado na
+    própria planilha de origem) — a Predictus não tem essa informação, e _fmt_valor_br(None)
+    devolve "" nesse caso."""
     return [
-        p.get("cnj", ""),                 # Nº CNJ
-        p.get("vinc", ""),                # Executado
-        p.get("data", "") or "",          # Distribuição
-        p.get("ativo", ""),               # Exequente / Autor (polo ativo)
-        _fmt_valor_br(p.get("valor")),    # Valor Causa (R$)
-        _fmt_valor_br(p.get("sat")),      # SAT Est. (R$)
-        p.get("status", ""),              # Status / Obs.
+        p.get("cnj", ""),                              # Nº CNJ
+        p.get("data", "") or "",                       # Distribuição
+        p.get("passivo", "") or p.get("vinc", ""),     # Executado (polo passivo)
+        p.get("ativo", ""),                            # Exequente / Autor (polo ativo)
+        _fmt_valor_br(p.get("valor")),                 # Valor Causa (R$)
+        _fmt_valor_br(p.get("sat")),                   # SAT Est. (R$)
+        p.get("status", ""),                           # Status / Obs.
     ]
+
+
+# Proporção de largura das 7 colunas do passivo na ordem
+# CNJ · Distribuição · Executado · Exequente · Valor · SAT · Status.
+_PASSIVO_FRACOES_LARGURA = (0.178, 0.103, 0.201, 0.151, 0.118, 0.118, 0.131)
+
+
+def _reordenar_cabecalho_passivo(table) -> None:
+    """Ajusta o cabeçalho das tabelas de processos do passivo para
+    Nº CNJ → Distribuição → Executado → Exequente.
+
+    O template oficial (e os dossiês já salvos) trazem "Nº CNJ | Vinculado a |
+    Distribuição | Exequente"; como _proc_to_row já devolve as linhas na ordem nova,
+    basta reescrever os dois rótulos do meio e redistribuir as larguras — "Executado"
+    passa a receber nomes de parte inteiros, enquanto "Distribuição" só precisa caber
+    uma data. Idempotente: cabeçalho já na ordem nova não sofre alteração.
+    """
+    celulas = table.rows[0].cells
+    if len(celulas) != 7 or "cnj" not in _chave_rotulo(celulas[0].text):
+        return
+    if _chave_rotulo(celulas[1].text) not in ("vinculado a", "vinculado à", "distribuição", "distribuicao"):
+        return
+    _substituir_texto_celula(celulas[1], "Distribuição", justificar=False)
+    _substituir_texto_celula(celulas[2], "Executado", justificar=False)
+    total = sum(c.width for c in celulas if c.width)
+    if total:
+        table.autofit = False
+        for indice, fracao in enumerate(_PASSIVO_FRACOES_LARGURA):
+            largura = Emu(int(total * fracao))
+            celulas[indice].width = largura
+            if indice < len(table.columns):
+                table.columns[indice].width = largura
 
 
 def _fill_passivo_table(table, registros: list):
     """Substitui as linhas de dados de uma tabela do passivo (mantém o header)."""
     ncols = len(table.columns)
+    _reordenar_cabecalho_passivo(table)
     larguras = [c.width for c in table.rows[0].cells]
     _repetir_cabecalho(table.rows[0])
     _nao_dividir_linha(table.rows[0])
-    for header_cell in table.rows[0].cells:
-        if _chave_rotulo(header_cell.text) == "vinculado a":
-            _substituir_texto_celula(header_cell, "Executado")
     # remove linhas de dados (mantém a primeira = header laranja)
     for row in list(table.rows)[1:]:
         table._tbl.remove(row._tr)

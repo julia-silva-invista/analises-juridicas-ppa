@@ -6,6 +6,7 @@ Coleta de Informações — preenche planilha x.xlsx com dados da Predictus
 import os
 import re
 import shutil
+import unicodedata
 import pandas as pd
 from openpyxl import load_workbook
 from datetime import datetime
@@ -368,6 +369,7 @@ def _classificar_predictus(excel_files, log) -> Tuple[list, list, list]:
         col_data    = _col(df, ["data de distribui", "distribuição", "distribuicao"])
         col_classe  = _col(df, ["classe processual", "classe"])
         col_ativo   = _col(df, ["partes ativas", "polo ativo"])
+        col_passivo = _col(df, ["partes passivas", "polo passivo"])
         col_status  = _col(df, ["status", "situação", "situacao"])
 
         n_f = n_t = n_c = 0
@@ -387,12 +389,13 @@ def _classificar_predictus(excel_files, log) -> Tuple[list, list, list]:
                 valor = None
 
             proc = {
-                "cnj":    g(col_cnj),
-                "vinc":   nome,
-                "data":   _parse_date(g(col_data)) or "",
-                "ativo":  _format_parties(g(col_ativo)),
-                "valor":  valor,
-                "status": _format_status(g(col_status)),
+                "cnj":     g(col_cnj),
+                "vinc":    nome,
+                "passivo": _format_parties(g(col_passivo)),
+                "data":    _parse_date(g(col_data)) or "",
+                "ativo":   _format_parties(g(col_ativo)),
+                "valor":   valor,
+                "status":  _format_status(g(col_status)),
             }
             if _is_trabalhista(ramo):
                 trabalhistas.append(proc); n_t += 1
@@ -686,15 +689,38 @@ def _sem_documento(s: str) -> str:
     return _RE_DOCUMENTO_PARTE.sub("", str(s or "")).strip()
 
 
+def _chave_coluna(nome) -> str:
+    """Normaliza um cabeçalho de coluna: sem acento, sem caixa, sem espaço duplicado."""
+    texto = unicodedata.normalize("NFKD", str(nome or ""))
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", texto).strip().casefold()
+
+
+def _campo(linha: dict, *nomes):
+    """Lê uma coluna da planilha da Coleta tolerando acento, caixa e espaço extra no
+    cabeçalho ('Polo Passivo ', 'POLO PASSIVO' e 'Polo passivo' são a mesma coluna).
+    Aceita sinônimos na ordem informada e devolve o primeiro valor não vazio."""
+    normalizados = {_chave_coluna(k): v for k, v in linha.items()}
+    for nome in nomes:
+        valor = normalizados.get(_chave_coluna(nome))
+        if valor not in (None, ""):
+            return valor
+    return None
+
+
 def _linha_processo_coleta(linha: dict) -> dict:
+    # "Executado" do dossiê sai do POLO PASSIVO da planilha (quem é réu/executado no
+    # processo), não de "Vinculado à" — essa coluna diz apenas a quem a pesquisa estava
+    # atrelada, e frequentemente não é a parte que figura no polo passivo.
     return {
-        "cnj":    str(linha.get("Número CNJ") or ""),
-        "vinc":   _sem_documento(linha.get("Vinculado à") or ""),
-        "data":   _parse_date(str(linha.get("Data da distribuição") or "")) or "",
-        "ativo":  _sem_documento(linha.get("Polo ativo") or ""),
-        "valor":  _num(linha.get("Valor da causa")),
-        "status": str(linha.get("Situação atual") or ""),
-        "sat":    _num(linha.get("Saldo Atualizado estimado")),
+        "cnj":     str(_campo(linha, "Número CNJ", "N° CNJ", "Nº CNJ") or ""),
+        "vinc":    _sem_documento(_campo(linha, "Vinculado à", "Vinculado a") or ""),
+        "passivo": _sem_documento(_campo(linha, "Polo passivo", "Partes passivas", "Polo Passivo") or ""),
+        "data":   _parse_date(str(_campo(linha, "Data da distribuição", "Distribuição") or "")) or "",
+        "ativo":  _sem_documento(_campo(linha, "Polo ativo", "Partes ativas") or ""),
+        "valor":  _num(_campo(linha, "Valor da causa")),
+        "status": str(_campo(linha, "Situação atual", "Situação", "Status") or ""),
+        "sat":    _num(_campo(linha, "Saldo Atualizado estimado", "SAT estimado")),
     }
 
 

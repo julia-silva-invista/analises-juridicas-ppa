@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import copy
 import html
 import json
@@ -24,7 +26,12 @@ from google import genai
 from google.genai import types
 from PIL import Image, ImageDraw, ImageFont
 
-from utils import _retry
+from utils import (
+    _erro_gemini_e_teto_de_gasto,
+    _executar_com_failover_gemini,
+    _get_gemini_clients,
+    _retry,
+)
 
 
 MODEL_TIMELINE = os.getenv("GEMINI_MODEL_TIMELINE", "gemini-2.5-pro")
@@ -108,14 +115,30 @@ Responda SOMENTE com JSON válido nesta estrutura:
 """
 
 
-def _client() -> genai.Client:
-    key = os.getenv("GEMINI_API_KEY_1") or os.getenv("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY_1 não configurada.")
-    return genai.Client(
-        api_key=key,
-        http_options=types.HttpOptions(timeout=int(os.getenv("GEMINI_TIMEOUT_MS", "600000"))),
-    )
+def _mensagem_erro_gemini(exc: Exception) -> str:
+    """Traduz a falha da API para uma mensagem acionável (sem expor a chave)."""
+    msg = str(exc)
+    baixo = msg.lower()
+    if _erro_gemini_e_teto_de_gasto(exc):
+        return (
+            "A API Gemini recusou a análise: o projeto atingiu o teto de gasto mensal "
+            "(429 RESOURCE_EXHAUSTED). Nenhuma chave configurada tem cota disponível. "
+            "Eleve o limite em https://ai.studio/spend ou cadastre outra chave "
+            "(GEMINI_API_KEY_2, _3, ...) nos secrets do Space."
+        )
+    if "429" in msg or "resource_exhausted" in baixo or "quota" in baixo or "rate limit" in baixo:
+        return (
+            "A API Gemini está sem cota no momento (429). Tente novamente em alguns "
+            "minutos ou cadastre outra chave (GEMINI_API_KEY_2, _3, ...) nos secrets do Space."
+        )
+    if any(t in baixo for t in ("401", "unauthenticated", "403", "permission_denied", "api key not valid")):
+        return "A chave da API Gemini foi recusada (autenticação/permissão). Revise os secrets do Space."
+    if "404" in msg or "not_found" in baixo:
+        return (
+            f"O modelo '{MODEL_TIMELINE}' não está disponível para esta chave. "
+            "Ajuste GEMINI_MODEL_TIMELINE nas variáveis do Space."
+        )
+    return f"Falha ao analisar os atos societários: {msg}"
 
 
 def _file_path(value: Any) -> str:
@@ -181,13 +204,9 @@ def _upload_pdf(client: genai.Client, path: str):
     return uploaded
 
 
-def _extract(files: list[Any]) -> dict:
-    paths = [_file_path(f) for f in (files or [])]
-    paths = [p for p in paths if p and Path(p).exists()]
-    if not paths:
-        raise ValueError("Envie ao menos um ato societário em PDF.")
-
-    client = _client()
+def _extract_com_cliente(client: genai.Client, paths: list[str]) -> dict:
+    """Upload + geração na MESMA credencial — o arquivo enviado só existe no projeto
+    daquela chave, então uma troca de chave no meio invalidaria os file_uri."""
     uploaded = []
     try:
         parts: list[types.Part] = [types.Part(text=PROMPT_TIMELINE)]
@@ -220,6 +239,19 @@ def _extract(files: list[Any]) -> dict:
                 client.files.delete(name=item.name)
             except Exception:
                 pass
+
+
+def _extract(files: list[Any]) -> dict:
+    paths = [_file_path(f) for f in (files or [])]
+    paths = [p for p in paths if p and Path(p).exists()]
+    if not paths:
+        raise ValueError("Envie ao menos um ato societário em PDF.")
+
+    # Antes a timeline usava só a GEMINI_API_KEY_1 — quando o projeto dela estourava o teto
+    # de gasto, a aba inteira caía com traceback. Agora percorre todas as chaves cadastradas,
+    # como já fazem Processos e RJ.
+    clients = _get_gemini_clients()
+    return _executar_com_failover_gemini(clients, lambda client, _i: _extract_com_cliente(client, paths))
 
 
 def _joined_people(items: list[dict], include_share: bool = False) -> str:
@@ -718,8 +750,11 @@ def render_timeline_html(data: dict) -> str:
         """
         )
 
+    # O <style> vai DENTRO da seção de propósito: a exportação de imagem lê esse CSS
+    # pelo próprio DOM para rasterizar a timeline exatamente como ela aparece na tela.
     return f"""
     <section class="tl2-shell" id="timeline-export-area">
+      <style id="tl2-export-style">{TL2_CSS}</style>
       <div class="tl2-head">
         <span class="tl2-kicker">Cronologia societária</span>
         <h2>{html.escape(data.get("empresa", "") or "Sociedade analisada")}</h2>
@@ -740,7 +775,16 @@ def timeline_analisar(files):
         [],
         {},
     )
-    data = _extract(files)
+    try:
+        data = _extract(files)
+    except gr.Error:
+        raise
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
+    except Exception as exc:
+        mensagem = _mensagem_erro_gemini(exc)
+        yield (mensagem, f'<div class="timeline-empty">{html.escape(mensagem)}</div>', [], {})
+        raise gr.Error(mensagem) from exc
     yield (
         f"Concluído: {len(data.get('eventos', []))} evento(s) societário(s) identificado(s).",
         render_timeline_html(data),
@@ -1093,6 +1137,27 @@ def timeline_exportar_imagem_vertical(data: dict) -> str:
     output = Path(tempfile.gettempdir()) / "timeline_societaria_vertical.png"
     image.save(output, format="PNG", optimize=True, dpi=(192, 192))
     return str(output)
+
+
+def timeline_salvar_imagem(captura: str, data: dict) -> str:
+    """Salva o PNG capturado do próprio HTML da timeline (rasterizado no navegador) e
+    devolve o caminho para o link de download.
+
+    A captura é a imagem exata do que está na tela — mesmo layout, mesmas cores, mesmos
+    cards. Se o navegador não conseguir rasterizar (bloqueio de canvas, timeline ainda não
+    gerada na aba), cai no desenho vertical antigo em vez de deixar a usuária sem arquivo.
+    """
+    captura = str(captura or "")
+    if captura.startswith("data:image/png;base64,"):
+        try:
+            conteudo = base64.b64decode(captura.split(",", 1)[1], validate=True)
+        except (binascii.Error, ValueError):
+            conteudo = b""
+        if conteudo:
+            output = Path(tempfile.gettempdir()) / "timeline_societaria.png"
+            output.write_bytes(conteudo)
+            return str(output)
+    return timeline_exportar_imagem_vertical(data)
 
 
 TL2_CSS = """
