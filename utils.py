@@ -85,19 +85,45 @@ def _get_gemini_clients() -> list:
     return [genai.Client(api_key=k, http_options=http_opts) for k in chaves]
 
 
+def _codigo_http_gemini(exc: Exception) -> int | None:
+    """Status HTTP de um erro da API Gemini, sem depender de casar substring.
+
+    `google.genai.errors.APIError` guarda o código em `.code`; para os demais erros,
+    lê o "NNN" inicial do formato "429 RESOURCE_EXHAUSTED. {...}". Procurar "404" em
+    qualquer lugar do texto produz falso positivo — IDs de arquivo, contagens de token
+    e URLs entram na mensagem e já fizeram um 401 ser anunciado como modelo inexistente.
+    """
+    codigo = getattr(exc, "code", None)
+    if isinstance(codigo, int) and 100 <= codigo <= 599:
+        return codigo
+    inicio = re.match(r"\s*(\d{3})\b", str(exc))
+    return int(inicio.group(1)) if inicio else None
+
+
+def _detalhe_erro_gemini(exc: Exception) -> str:
+    """Texto que a API devolveu, em uma linha e sem o dump do JSON inteiro."""
+    detalhe = getattr(exc, "message", None) or str(exc)
+    return re.sub(r"\s+", " ", str(detalhe)).strip()
+
+
+_TOKENS_FAILOVER = (
+    "unauthenticated", "access_token_type_unsupported",
+    "permission_denied", "api_key_invalid", "api key not valid",
+    "resource_exhausted", "quota", "rate limit",
+    "not_found", "model is no longer available",
+)
+
+
 def _erro_gemini_permite_failover(exc: Exception) -> bool:
     """Indica erros que podem mudar de uma chave/projeto Gemini para outro.
 
     Não inclui erros de schema, JSON ou programação: nesses casos trocar a chave
     apenas esconderia o defeito real. As chaves nunca são incluídas na mensagem.
     """
-    msg = str(exc).lower()
-    return any(token in msg for token in (
-        "401", "unauthenticated", "access_token_type_unsupported",
-        "403", "permission_denied", "api_key_invalid", "api key not valid",
-        "429", "resource_exhausted", "quota", "rate limit",
-        "404", "not_found", "model is no longer available",
-    ))
+    codigo = _codigo_http_gemini(exc)
+    if codigo is not None:
+        return codigo in (401, 403, 404, 429)
+    return any(token in str(exc).lower() for token in _TOKENS_FAILOVER)
 
 
 def _executar_com_failover_gemini(

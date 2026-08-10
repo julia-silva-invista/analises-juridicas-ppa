@@ -54,13 +54,17 @@ class _ArquivosFalsos:
 class _ClienteFalso:
     """Dublê de genai.Client: falha no upload ou devolve um JSON pronto."""
 
-    def __init__(self, registro, rotulo, erro=None, resposta=None):
+    def __init__(self, registro, rotulo, erro=None, resposta=None, catalogo=()):
         self.files = _ArquivosFalsos(registro, rotulo, erro)
         self.models = pytypes.SimpleNamespace(
             generate_content=lambda **_: (
                 registro.append(f"{rotulo}:gen"),
                 pytypes.SimpleNamespace(text=resposta),
-            )[1]
+            )[1],
+            list=lambda: [
+                pytypes.SimpleNamespace(name=f"models/{n}", supported_actions=["generateContent"])
+                for n in catalogo
+            ],
         )
 
 
@@ -110,6 +114,58 @@ def testar_failover_conclui_na_segunda_chave(monkeypatch, pdf_qualquer):
     assert registro == ["k1", "k2", "k2:gen"]
     assert "1 evento" in saidas[-1][0]
     assert saidas[-1][3]["empresa"] == "Teste Ltda"
+
+
+def testar_404_nao_acusa_o_modelo_quando_ele_existe_na_chave(monkeypatch, pdf_qualquer):
+    """O 404 pode vir da Files API, não do modelo. Mandar mexer em
+    GEMINI_MODEL_TIMELINE nesse caso desperdiça o tempo de quem lê o aviso."""
+    registro = []
+    erro_404 = "404 NOT_FOUND. {'error': {'code': 404, 'message': 'File not found.'}}"
+    monkeypatch.setattr(timeline, "_get_gemini_clients", lambda: [
+        _ClienteFalso(registro, "k1", erro=erro_404,
+                      catalogo=[timeline.MODEL_TIMELINE, "gemini-3.6-flash"]),
+    ])
+
+    with pytest.raises(gr.Error) as capturado:
+        list(timeline.timeline_analisar([pdf_qualquer]))
+
+    aviso = str(capturado.value)
+    assert "GEMINI_MODEL_TIMELINE" not in aviso
+    assert "o modelo existe nesta chave" in aviso
+    assert "File not found" in aviso, "a resposta crua da API precisa aparecer"
+
+
+def testar_404_lista_os_modelos_quando_o_configurado_nao_existe(monkeypatch, pdf_qualquer):
+    registro = []
+    erro_404 = "404 NOT_FOUND. {'error': {'code': 404, 'message': 'models/x is not found.'}}"
+    monkeypatch.setattr(timeline, "_get_gemini_clients", lambda: [
+        _ClienteFalso(registro, "k1", erro=erro_404, catalogo=["gemini-3.6-flash", "gemini-3.5-flash"]),
+    ])
+
+    with pytest.raises(gr.Error) as capturado:
+        list(timeline.timeline_analisar([pdf_qualquer]))
+
+    aviso = str(capturado.value)
+    assert "GEMINI_MODEL_TIMELINE" in aviso
+    assert "gemini-3.6-flash" in aviso and "gemini-3.5-flash" in aviso
+
+
+def testar_mensagem_mostra_o_que_cada_chave_respondeu(monkeypatch, pdf_qualquer):
+    """Só o erro da última credencial propaga; uma chave inválida no começo da fila
+    precisa aparecer no aviso, senão o diagnóstico sai pela metade."""
+    registro = []
+    monkeypatch.setattr(timeline, "_get_gemini_clients", lambda: [
+        _ClienteFalso(registro, "k1", erro="401 UNAUTHENTICATED. {'error': {'message': 'API key not valid'}}"),
+        _ClienteFalso(registro, "k2", erro=ERRO_TETO_DE_GASTO),
+    ])
+
+    with pytest.raises(gr.Error) as capturado:
+        list(timeline.timeline_analisar([pdf_qualquer]))
+
+    aviso = str(capturado.value)
+    assert "chave 1: 401" in aviso and "API key not valid" in aviso
+    assert "chave 2: 429" in aviso
+    assert "teto de gasto" in aviso
 
 
 def testar_sem_arquivo_avisa_em_vez_de_quebrar():

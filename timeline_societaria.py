@@ -27,6 +27,8 @@ from google.genai import types
 from PIL import Image, ImageDraw, ImageFont
 
 from utils import (
+    _codigo_http_gemini,
+    _detalhe_erro_gemini,
     _erro_gemini_e_teto_de_gasto,
     _executar_com_failover_gemini,
     _get_gemini_clients,
@@ -115,30 +117,67 @@ Responda SOMENTE com JSON válido nesta estrutura:
 """
 
 
-def _mensagem_erro_gemini(exc: Exception) -> str:
-    """Traduz a falha da API para uma mensagem acionável (sem expor a chave)."""
-    msg = str(exc)
-    baixo = msg.lower()
+def _resumo_erro_gemini(exc: Exception) -> str:
+    """Uma linha por credencial: código + o que a API respondeu, truncado."""
+    codigo = _codigo_http_gemini(exc)
+    detalhe = _detalhe_erro_gemini(exc)
+    if len(detalhe) > 220:
+        detalhe = detalhe[:220].rstrip() + "…"
+    return f"{codigo} — {detalhe}" if codigo else detalhe
+
+
+def _modelos_disponiveis(client: genai.Client) -> list[str]:
+    """Modelos com generateContent nesta credencial. Só é chamado para explicar um 404:
+    dizer "o modelo não existe" sem conferir já mandou a usuária mexer na variável errada."""
+    try:
+        return sorted(
+            m.name.replace("models/", "")
+            for m in client.models.list()
+            if "generateContent" in (getattr(m, "supported_actions", None) or [])
+        )
+    except Exception:
+        return []
+
+
+def _mensagem_erro_gemini(exc: Exception, clients: list | None = None) -> str:
+    """Traduz a falha da API para uma mensagem acionável (sem expor a chave).
+
+    Sempre carrega o texto cru que a API devolveu: classificar por conta própria e
+    esconder o original já produziu diagnóstico errado (um 404 virou "ajuste
+    GEMINI_MODEL_TIMELINE" quando o modelo existia na chave).
+    """
+    codigo = _codigo_http_gemini(exc)
+    falhas = list(getattr(exc, "falhas_por_chave", None) or [])
+    rodape = ("\n\nO que cada credencial respondeu:\n" + "\n".join(f"  • {f}" for f in falhas)) if falhas else ""
+
     if _erro_gemini_e_teto_de_gasto(exc):
         return (
             "A API Gemini recusou a análise: o projeto atingiu o teto de gasto mensal "
             "(429 RESOURCE_EXHAUSTED). Nenhuma chave configurada tem cota disponível. "
             "Eleve o limite em https://ai.studio/spend ou cadastre outra chave "
-            "(GEMINI_API_KEY_2, _3, ...) nos secrets do Space."
+            "(GEMINI_API_KEY_2, _3, ...) nos secrets do Space." + rodape
         )
-    if "429" in msg or "resource_exhausted" in baixo or "quota" in baixo or "rate limit" in baixo:
+    if codigo == 429:
         return (
             "A API Gemini está sem cota no momento (429). Tente novamente em alguns "
-            "minutos ou cadastre outra chave (GEMINI_API_KEY_2, _3, ...) nos secrets do Space."
+            "minutos ou cadastre outra chave (GEMINI_API_KEY_2, _3, ...) nos secrets do Space." + rodape
         )
-    if any(t in baixo for t in ("401", "unauthenticated", "403", "permission_denied", "api key not valid")):
-        return "A chave da API Gemini foi recusada (autenticação/permissão). Revise os secrets do Space."
-    if "404" in msg or "not_found" in baixo:
+    if codigo in (401, 403):
         return (
-            f"O modelo '{MODEL_TIMELINE}' não está disponível para esta chave. "
-            "Ajuste GEMINI_MODEL_TIMELINE nas variáveis do Space."
+            "A chave da API Gemini foi recusada (autenticação/permissão). Revise os secrets "
+            f"do Space. Resposta da API: {_resumo_erro_gemini(exc)}" + rodape
         )
-    return f"Falha ao analisar os atos societários: {msg}"
+    if codigo == 404:
+        modelos = _modelos_disponiveis(clients[-1]) if clients else []
+        if modelos and MODEL_TIMELINE not in modelos:
+            proximos = ", ".join(m for m in modelos if m.startswith("gemini-")) or ", ".join(modelos)
+            return (
+                f"O modelo '{MODEL_TIMELINE}' não existe nesta chave. Ajuste "
+                f"GEMINI_MODEL_TIMELINE nas variáveis do Space para um destes: {proximos}." + rodape
+            )
+        disponivel = " (o modelo existe nesta chave, então o 404 veio de outra coisa)" if modelos else ""
+        return f"A API Gemini respondeu 404{disponivel}: {_resumo_erro_gemini(exc)}" + rodape
+    return f"Falha ao analisar os atos societários: {_resumo_erro_gemini(exc)}" + rodape
 
 
 def _file_path(value: Any) -> str:
@@ -251,7 +290,26 @@ def _extract(files: list[Any]) -> dict:
     # de gasto, a aba inteira caía com traceback. Agora percorre todas as chaves cadastradas,
     # como já fazem Processos e RJ.
     clients = _get_gemini_clients()
-    return _executar_com_failover_gemini(clients, lambda client, _i: _extract_com_cliente(client, paths))
+
+    # Só o erro da ÚLTIMA credencial propaga; sem registrar os anteriores, uma chave
+    # inválida no começo da fila fica invisível e o diagnóstico sai pela metade.
+    anteriores: list[str] = []
+
+    def _registrar(indice: int, _proximo: int, exc: Exception) -> None:
+        anteriores.append(f"chave {indice + 1}: {_resumo_erro_gemini(exc)}")
+
+    try:
+        return _executar_com_failover_gemini(
+            clients,
+            lambda client, _i: _extract_com_cliente(client, paths),
+            ao_falhar=_registrar,
+        )
+    except Exception as exc:
+        # Viajam junto com o erro para a mensagem: as falhas de cada credencial e os
+        # próprios clients, usados para conferir o catálogo de modelos num 404.
+        exc.falhas_por_chave = anteriores + [f"chave {len(clients)}: {_resumo_erro_gemini(exc)}"]
+        exc.clients_gemini = clients
+        raise
 
 
 def _joined_people(items: list[dict], include_share: bool = False) -> str:
@@ -782,7 +840,7 @@ def timeline_analisar(files):
     except ValueError as exc:
         raise gr.Error(str(exc)) from exc
     except Exception as exc:
-        mensagem = _mensagem_erro_gemini(exc)
+        mensagem = _mensagem_erro_gemini(exc, getattr(exc, "clients_gemini", None))
         yield (mensagem, f'<div class="timeline-empty">{html.escape(mensagem)}</div>', [], {})
         raise gr.Error(mensagem) from exc
     yield (

@@ -22,7 +22,12 @@ sys.modules.setdefault("google", google_mod)
 sys.modules.setdefault("google.genai", genai_mod)
 sys.modules.setdefault("google.genai.types", genai_types_mod)
 
-from utils import _erro_gemini_permite_failover, _executar_com_failover_gemini  # noqa: E402
+from utils import (  # noqa: E402
+    _codigo_http_gemini,
+    _detalhe_erro_gemini,
+    _erro_gemini_permite_failover,
+    _executar_com_failover_gemini,
+)
 
 
 def testar_401_troca_para_proxima_credencial():
@@ -79,8 +84,34 @@ def testar_classificacao_de_erros_e_indice_inicial():
     assert ordem == [2]
 
 
+def testar_codigo_http_vem_do_status_e_nao_de_substring():
+    """Casar "404" em qualquer lugar do texto dá falso positivo: IDs de arquivo,
+    contagens de token e URLs entram na mensagem. Um 401 já foi anunciado como
+    "modelo não disponível" por causa disso."""
+    assert _codigo_http_gemini(RuntimeError("429 RESOURCE_EXHAUSTED. {...}")) == 429
+
+    class _ErroDaApi(Exception):
+        code = 401
+        message = "Request had invalid authentication credentials."
+
+    assert _codigo_http_gemini(_ErroDaApi()) == 401
+    # O ".code" manda mesmo quando o texto tem outros números soltos.
+    assert _codigo_http_gemini(RuntimeError("upload de files/404abc com 4040 tokens")) is None
+    assert not _erro_gemini_permite_failover(RuntimeError("upload de files/404abc falhou"))
+
+
+def testar_detalhe_do_erro_e_uma_linha_legivel():
+    class _ErroDaApi(Exception):
+        code = 404
+        message = "models/gemini-x is not found\n  for API version v1beta."
+
+    assert _detalhe_erro_gemini(_ErroDaApi()) == "models/gemini-x is not found for API version v1beta."
+
+
 if __name__ == "__main__":
     testar_401_troca_para_proxima_credencial()
     testar_erro_de_codigo_nao_e_mascarado()
     testar_classificacao_de_erros_e_indice_inicial()
+    testar_codigo_http_vem_do_status_e_nao_de_substring()
+    testar_detalhe_do_erro_e_uma_linha_legivel()
     print("OK — failover Gemini")
