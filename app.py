@@ -125,9 +125,10 @@ _FORCE_LIGHT_JS = """
 #
 # Roda como pré-processamento do clique (js + fn no MESMO evento): recebe o valor atual
 # do campo-ponte e devolve `[data URL]`, que o Gradio entrega como argumento de
-# `timeline_salvar_imagem`. Não use `fn=None` + `.then(...)` aqui: no Gradio 5.29.1 do
-# Space o `.then` encadeado depois de um evento só-JS nunca dispara, e o botão fica mudo.
-# Se qualquer etapa falhar, devolve "" e o Python explica o que houve.
+# `timeline_salvar_imagem`. Evite `fn=None` + `.then(...)`: encadear um evento de backend
+# depois de um evento só-JS depende de comportamento que muda entre a versão de
+# desenvolvimento (Gradio 6) e a 5.29.1 do Space. O evento único não depende disso.
+# Se qualquer etapa falhar, devolve [""] e o Python explica o que houve.
 _CAPTURAR_TIMELINE_JS = """
 async (_captura) => {
     const vazio = [""];

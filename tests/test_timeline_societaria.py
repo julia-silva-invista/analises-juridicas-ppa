@@ -162,5 +162,6 @@ def testar_captura_js_recebe_um_argumento_e_devolve_lista():
     assert 'const vazio = [""];' in trecho
     assert 'return [canvas.toDataURL("image/png")];' in trecho
     assert 'return "";' not in trecho, "todo caminho de falha devolve a lista vazia"
-    # O `.then` encadeado depois de um evento só-JS não dispara no Gradio 5 do Space.
+    # Um evento só: encadear backend depois de um evento só-JS depende de comportamento
+    # que varia entre a versão de desenvolvimento e a do Space.
     assert ".then(" not in fonte.split("tl_exportar_img_btn.click(", 1)[1].split(")\n", 1)[0]
