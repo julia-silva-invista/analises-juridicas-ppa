@@ -28,6 +28,7 @@ from analysis_runtime import (
     save_chunk_cache, split_pdf_chunk_for_token_limit,
 )
 from dossie_ppa import gerar_dossie_word
+from dossie_previa import gerar_previa_word
 from legal_prompts import (
     REGRA_EXTRACAO_POR_PAGINA,
     REGRA_FIDELIDADE_PROCESSUAL,
@@ -954,6 +955,28 @@ def proc_gerar_dossie(relatorio: str, extracao: str = ""):
         yield gr.update(value=caminho, visible=True), "✅ Dossiê gerado — clique no arquivo para baixar."
     except Exception:
         yield gr.update(value=None, visible=False), "❌ Erro ao gerar dossiê:\n\n" + traceback.format_exc()
+
+
+def proc_gerar_previa(relatorio: str, extracao: str = ""):
+    """Dossiê Prévia — triagem de viabilidade, mais enxuta que o desalinhado.
+
+    Mesma fonte e mesma extração do dossiê desalinhado; muda o documento montado.
+    """
+    fonte = extracao.strip() if extracao and extracao.strip() else (relatorio or "").strip()
+    if not fonte:
+        yield gr.update(value=None, visible=False), "Gere uma análise primeiro."
+        return
+    yield gr.update(visible=False), "⏳ Gerando Dossiê Prévia (extraindo dados via IA)..."
+    try:
+        caminho = _executar_com_failover_gemini(
+            _get_gemini_clients(),
+            lambda client, _indice: gerar_previa_word(
+                extracao or "", relatorio or "", client, GEMINI_MODEL_ESTRUTURADO
+            ),
+        )
+        yield gr.update(value=caminho, visible=True), "✅ Dossiê Prévia gerado — clique no arquivo para baixar."
+    except Exception:
+        yield gr.update(value=None, visible=False), "❌ Erro ao gerar Dossiê Prévia:\n\n" + traceback.format_exc()
 
 
 def proc_responder(pergunta: str, relatorio: str):

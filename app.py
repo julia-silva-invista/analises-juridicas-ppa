@@ -11,7 +11,7 @@ import tempfile
 import gradio as gr
 
 from design import CSS, HEADER_HTML, FOOTER_HTML
-from processos import proc_analisar, proc_gerar_word, proc_gerar_dossie, proc_responder
+from processos import proc_analisar, proc_gerar_word, proc_gerar_dossie, proc_gerar_previa, proc_responder
 from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores, rj_gerar_checklist, rj_gerar_checklist_creditos
 from matriculas import mat_gerar_excel, mat_responder
 from coleta import coleta_gerar, coleta_gerar_dossie_dispatch
@@ -270,17 +270,23 @@ with gr.Blocks(
                     )
 
             proc_relatorio_state = gr.State("")
-            proc_extracao_state  = gr.State("")   # texto OCR completo (fonte para o dossiê PPA)
+            proc_extracao_state  = gr.State("")   # texto OCR completo (fonte para os dossiês)
 
             with gr.Row():
-                proc_word_btn   = gr.Button("Baixar Word",  variant="secondary", elem_classes=["word-download-btn"])
-                proc_dossie_btn = gr.Button("Dossiê PPA",   variant="secondary", elem_classes=["word-download-btn"])
+                proc_word_btn   = gr.Button("Baixar Word",        variant="secondary", elem_classes=["word-download-btn"])
+                proc_previa_btn = gr.Button("Dossiê Prévia",      variant="secondary", elem_classes=["word-download-btn"])
+                proc_dossie_btn = gr.Button("Dossiê Desalinhado", variant="secondary", elem_classes=["word-download-btn"])
             proc_word_file = gr.File(
                 label="", interactive=False, visible=False, height=72,
                 elem_classes=["word-file-output", "compact-file-output"],
             )
+            proc_previa_file = gr.File(
+                label="Dossiê Prévia", interactive=False, visible=False, height=72,
+                elem_classes=["word-file-output", "compact-file-output"],
+            )
+            proc_previa_status = gr.Markdown("")
             proc_dossie_file = gr.File(
-                label="Dossiê PPA", interactive=False, visible=False, height=72,
+                label="Dossiê Desalinhado", interactive=False, visible=False, height=72,
                 elem_classes=["word-file-output", "compact-file-output"],
             )
             proc_dossie_status = gr.Markdown("")
@@ -624,6 +630,7 @@ with gr.Blocks(
         concurrency_id="analises_pdf",
     )
     proc_word_btn.click(fn=proc_gerar_word, inputs=[proc_relatorio_state], outputs=[proc_word_file])
+    proc_previa_btn.click(fn=proc_gerar_previa, inputs=[proc_relatorio_state, proc_extracao_state], outputs=[proc_previa_file, proc_previa_status])
     proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state, proc_extracao_state], outputs=[proc_dossie_file, proc_dossie_status])
     proc_perguntar_btn.click(
         fn=proc_responder, inputs=[proc_pergunta, proc_relatorio_state], outputs=[proc_resposta]
