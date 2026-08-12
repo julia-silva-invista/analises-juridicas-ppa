@@ -1,0 +1,417 @@
+# -*- coding: utf-8 -*-
+"""Base de regras da prescrição intercorrente na EXECUÇÃO COMUM (cível/bancária).
+
+Por que existe: pedir ao modelo que "lembre" o regime aplicável a cada intervalo é caro
+e instável — a resposta muda entre execuções e não dá para auditar. Aqui as regras ficam
+escritas uma vez, versionadas e revisáveis; o modelo só extrai FATOS DATADOS do processo
+e o enquadramento por data é feito em Python (`regime_aplicavel`), deterministicamente.
+
+FORA DO ESCOPO, de propósito: execução fiscal (art. 40 da LEF, Súmula 314/STJ, Tema
+566/STJ) e execução trabalhista (art. 11-A da CLT, IN 41/2018 do TST). São árvores de
+regra próprias; misturá-las aqui produziria enquadramento errado em silêncio.
+
+⚠️ REVISÃO JURÍDICA: este arquivo é conteúdo jurídico curado, não código neutro. Cada
+entrada declara `status`:
+  - "confirmado" — dispositivo de lei com texto e vigência estáveis;
+  - "a_revisar"  — depende de jurisprudência, tem divergência real, ou a redação exata
+                   precisa ser conferida antes de virar fundamento de parecer.
+Nada aqui deve ser citado em parecer sem conferência na fonte primária. Onde há
+divergência, a entrada registra as DUAS posições em vez de escolher uma.
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import date
+
+# ── Marcos de vigência ───────────────────────────────────────────────────────
+# Datas usadas para cortar a linha do tempo do processo em janelas de regime.
+
+VIGENCIA_CC_2002 = date(2003, 1, 11)
+VIGENCIA_CPC_2015 = date(2016, 3, 18)
+VIGENCIA_LEI_14195 = date(2021, 8, 27)
+
+MARCOS_LEGAIS = [
+    {
+        "data": VIGENCIA_CC_2002,
+        "titulo": "Código Civil de 2002 entra em vigor",
+        "detalhe": "Novos prazos prescricionais. A transição é regida pelo art. 2.028: "
+                   "permanece o prazo da lei anterior quando o novo o reduziu E já havia "
+                   "transcorrido mais da metade do prazo antigo em 11/01/2003.",
+        "status": "confirmado",
+    },
+    {
+        "data": VIGENCIA_CPC_2015,
+        "titulo": "CPC/2015 entra em vigor — art. 921 disciplina a intercorrente",
+        "detalhe": "Pela primeira vez a execução comum ganha disciplina expressa: suspensão "
+                   "de 1 ano sem correr prescrição (§1º), arquivamento (§2º) e, decorrido o "
+                   "prazo sem localização de bens, curso da prescrição intercorrente (§4º), "
+                   "reconhecível de ofício depois de ouvidas as partes (§5º).",
+        "status": "confirmado",
+    },
+    {
+        "data": VIGENCIA_LEI_14195,
+        "titulo": "Lei 14.195/2021 altera o art. 921",
+        "detalhe": "Muda o TERMO INICIAL: o prazo passa a contar da ciência da primeira "
+                   "tentativa infrutífera de localizar o devedor ou bens penhoráveis, e não "
+                   "do fim do ano de suspensão. Redação exata e alcance intertemporal devem "
+                   "ser conferidos antes de fundamentar.",
+        "status": "a_revisar",
+    },
+]
+
+
+# ── Regimes, por janela de vigência ──────────────────────────────────────────
+
+REGIMES = [
+    {
+        "id": "cpc1973",
+        "rotulo": "CPC/1973 (até 17/03/2016)",
+        "inicio": None,
+        "fim": date(2016, 3, 17),
+        "fundamento": "CPC/1973, art. 791, III",
+        "regra": "Não havia disciplina legal expressa da prescrição intercorrente na "
+                 "execução comum. O art. 791, III permitia suspender a execução sem prazo "
+                 "determinado quando não encontrados bens penhoráveis.",
+        "termo_inicial": "Definido pela jurisprudência, a partir da inércia do exequente. "
+                         "Não há marco legal único — depende do caso e do tribunal.",
+        "observacao": "Aplicar este regime a atos anteriores a 18/03/2016 exige apoio "
+                      "jurisprudencial específico; não há dispositivo a citar.",
+        "status": "a_revisar",
+    },
+    {
+        "id": "cpc2015_original",
+        "rotulo": "CPC/2015, redação original (18/03/2016 a 26/08/2021)",
+        "inicio": VIGENCIA_CPC_2015,
+        "fim": date(2021, 8, 26),
+        "fundamento": "CPC/2015, art. 921, III e §§1º a 5º (redação original)",
+        "regra": "Não localizado o devedor ou bens penhoráveis, o juiz suspende a execução "
+                 "por 1 ano, durante o qual a prescrição NÃO corre (§1º). Findo esse prazo "
+                 "sem bens, os autos vão ao arquivo (§2º). A partir daí corre a prescrição "
+                 "intercorrente (§4º), reconhecível de ofício após ouvir as partes (§5º).",
+        "termo_inicial": "Fim do ano de suspensão do §1º — ou seja, um ano após a decisão "
+                         "que suspendeu a execução.",
+        "observacao": "O prazo que corre é o MESMO da pretensão executiva (Súmula 150/STF), "
+                      "definido pelo título.",
+        "status": "confirmado",
+    },
+    {
+        "id": "lei14195",
+        "rotulo": "CPC/2015 com a Lei 14.195/2021 (a partir de 27/08/2021)",
+        "inicio": VIGENCIA_LEI_14195,
+        "fim": None,
+        "fundamento": "CPC/2015, art. 921, §§1º, 4º e 4º-A (redação da Lei 14.195/2021)",
+        "regra": "O termo inicial deixa de depender da decisão de suspensão: passa a ser a "
+                 "ciência da primeira tentativa infrutífera de localizar o devedor ou bens "
+                 "penhoráveis. A suspensão de 1 ano ocorre uma única vez. A efetiva citação, "
+                 "intimação ou constrição de bens penhoráveis interfere na contagem.",
+        "termo_inicial": "Ciência da PRIMEIRA tentativa infrutífera — em regra anterior à "
+                         "decisão de suspensão, o que antecipa o início da contagem.",
+        "observacao": "Antecipar o termo inicial pode consumar a prescrição bem antes do que "
+                      "o regime anterior indicaria. A aplicação a execuções já em curso em "
+                      "27/08/2021 é questão de direito intertemporal em disputa — conferir o "
+                      "estado da jurisprudência antes de concluir.",
+        "status": "a_revisar",
+    },
+]
+
+
+# ── Prazo da pretensão executiva, por título ─────────────────────────────────
+# Súmula 150/STF: "Prescreve a execução no mesmo prazo de prescrição da ação."
+# É o prazo que corre como intercorrente depois de iniciado o cômputo.
+
+PRAZOS_POR_TITULO = {
+    "nota_promissoria": {
+        "rotulo": "Nota promissória",
+        "prazo": "3 anos",
+        "termo": "Do vencimento",
+        "fundamento": "LUG (Decreto 57.663/1966), art. 70",
+        "status": "confirmado",
+    },
+    "letra_de_cambio": {
+        "rotulo": "Letra de câmbio",
+        "prazo": "3 anos",
+        "termo": "Do vencimento",
+        "fundamento": "LUG (Decreto 57.663/1966), art. 70",
+        "status": "confirmado",
+    },
+    "duplicata": {
+        "rotulo": "Duplicata",
+        "prazo": "3 anos contra o sacado",
+        "termo": "Do vencimento",
+        "fundamento": "Lei 5.474/1968, art. 18, I",
+        "observacao": "Contra endossante e avalista os prazos são menores (art. 18, II e III).",
+        "status": "confirmado",
+    },
+    "cheque": {
+        "rotulo": "Cheque",
+        "prazo": "6 meses para a execução",
+        "termo": "Do fim do prazo de apresentação",
+        "fundamento": "Lei 7.357/1985, art. 59",
+        "observacao": "Perdida a força executiva: ação de enriquecimento em 2 anos (art. 61) "
+                      "e monitória em 5 anos (Súmula 503/STJ).",
+        "status": "confirmado",
+    },
+    "instrumento_particular": {
+        "rotulo": "Contrato / instrumento particular de dívida líquida",
+        "prazo": "5 anos",
+        "termo": "Do vencimento da obrigação",
+        "fundamento": "CC/2002, art. 206, §5º, I",
+        "observacao": "Alcança confissão de dívida e contratos assinados por duas testemunhas "
+                      "(CPC/2015, art. 784, III).",
+        "status": "confirmado",
+    },
+    "ccb": {
+        "rotulo": "Cédula de Crédito Bancário (CCB)",
+        "prazo": "DIVERGENTE — 3 anos ou 5 anos",
+        "termo": "Do vencimento",
+        "fundamento": "Lei 10.931/2004, arts. 26 a 28",
+        "divergencia": [
+            "3 anos: a CCB é título de crédito e atrai a disciplina cambial (LUG, art. 70), "
+            "por força da aplicação subsidiária da legislação cambiária.",
+            "5 anos: prevalece o art. 206, §5º, I, do CC/2002, por se tratar de dívida líquida "
+            "constante de instrumento particular.",
+        ],
+        "observacao": "É o título mais comum da carteira e o de prazo mais disputado. Não "
+                      "adotar uma das posições sem conferir o entendimento atual do STJ e do "
+                      "tribunal de origem: a diferença de 2 anos decide o caso.",
+        "status": "a_revisar",
+    },
+    "cpr": {
+        "rotulo": "Cédula de Produto Rural (CPR e CPR-F)",
+        "prazo": "A conferir — em regra 3 anos, pela disciplina cambial",
+        "termo": "Do vencimento",
+        "fundamento": "Lei 8.929/1994 (aplicação subsidiária da legislação cambial)",
+        "observacao": "A CPR-F (liquidação financeira) e a CPR física podem receber tratamento "
+                      "distinto. Conferir antes de fundamentar.",
+        "status": "a_revisar",
+    },
+    "cedula_rural": {
+        "rotulo": "Cédula rural (pignoratícia, hipotecária, CCR)",
+        "prazo": "A conferir — em regra 3 anos, pela disciplina cambial",
+        "termo": "Do vencimento",
+        "fundamento": "Decreto-lei 167/1967",
+        "status": "a_revisar",
+    },
+    "honorarios_advocaticios": {
+        "rotulo": "Honorários advocatícios",
+        "prazo": "5 anos",
+        "termo": "Do trânsito em julgado da decisão que os fixou",
+        "fundamento": "CC/2002, art. 206, §5º, II; Lei 8.906/1994, art. 25",
+        "status": "confirmado",
+    },
+    "alugueis": {
+        "rotulo": "Aluguéis",
+        "prazo": "3 anos",
+        "termo": "Do vencimento de cada parcela",
+        "fundamento": "CC/2002, art. 206, §3º, I",
+        "status": "confirmado",
+    },
+}
+
+
+# ── Regra de transição do CC/2002 ────────────────────────────────────────────
+
+TRANSICAO = [
+    {
+        "id": "art_2028",
+        "rotulo": "Prazos a cavaleiro da entrada em vigor do CC/2002",
+        "fundamento": "CC/2002, art. 2.028",
+        "regra": "Aplica-se o prazo da lei anterior quando (a) o CC/2002 REDUZIU o prazo E "
+                 "(b) em 11/01/2003 já havia transcorrido MAIS DA METADE do prazo da lei "
+                 "revogada. Faltando qualquer das duas condições, aplica-se o prazo novo, "
+                 "contado a partir de 11/01/2003.",
+        "status": "confirmado",
+    },
+    {
+        "id": "intertemporal_921",
+        "rotulo": "Execuções em curso quando mudou o regime do art. 921",
+        "fundamento": "Direito intertemporal processual (isolamento dos atos processuais)",
+        "regra": "Cada ato processual rege-se pela lei vigente à sua data. Um mesmo processo "
+                 "pode atravessar os três regimes: o enquadramento é feito intervalo a "
+                 "intervalo, não pelo regime vigente na distribuição nem pelo atual.",
+        "observacao": "A aplicação do termo inicial da Lei 14.195/2021 a fatos anteriores a "
+                      "27/08/2021 é controvertida. Conferir o estado da jurisprudência.",
+        "status": "a_revisar",
+    },
+]
+
+
+# ── Mitigantes: o que impede, suspende, interrompe ou afasta ─────────────────
+
+MITIGANTES = [
+    {"efeito": "afasta", "rotulo": "Bens penhoráveis localizados / penhora efetivada",
+     "detalhe": "A execução deixa de estar na hipótese do art. 921, III. Sem a causa da "
+                "suspensão, não há intercorrente a contar naquele intervalo.",
+     "fundamento": "CPC/2015, art. 921, III, a contrario sensu", "status": "confirmado"},
+    {"efeito": "interrompe", "rotulo": "Reconhecimento da dívida pelo devedor",
+     "detalhe": "Parcelamento, acordo, confissão ou pagamento parcial interrompem a "
+                "prescrição e zeram a contagem.",
+     "fundamento": "CC/2002, art. 202, VI", "status": "confirmado"},
+    {"efeito": "suspende", "rotulo": "Suspensão convencional a pedido do exequente",
+     "detalhe": "Suspensão por convenção das partes; não é a hipótese do art. 921, III e "
+                "não deflagra a contagem da intercorrente.",
+     "fundamento": "CPC/2015, art. 922", "status": "confirmado"},
+    {"efeito": "suspende", "rotulo": "Recuperação judicial do devedor",
+     "detalhe": "As execuções contra o devedor ficam suspensas; o período não corre contra "
+                "o credor.",
+     "fundamento": "Lei 11.101/2005, art. 6º", "status": "confirmado"},
+    {"efeito": "suspende", "rotulo": "Embargos à execução com efeito suspensivo",
+     "detalhe": "Enquanto suspensa a execução por decisão judicial, não há inércia imputável "
+                "ao exequente.",
+     "fundamento": "CPC/2015, art. 919, §1º", "status": "confirmado"},
+    {"efeito": "afasta", "rotulo": "Demora imputável ao Judiciário",
+     "detalhe": "A parte não é prejudicada pela demora dos mecanismos do Poder Judiciário. "
+                "Súmula editada para a citação, aplicada por analogia à intercorrente.",
+     "fundamento": "Súmula 106/STJ", "status": "a_revisar"},
+    {"efeito": "afasta", "rotulo": "Diligências efetivas do exequente",
+     "detalhe": "Pedidos de Sisbajud, Renajud, Infojud, penhora no rosto dos autos e "
+                "desconsideração afastam a inércia — desde que efetivamente requeridos e "
+                "apreciados, com data e referência nos autos.",
+     "fundamento": "Ausência de inércia (pressuposto da intercorrente)", "status": "a_revisar"},
+    {"efeito": "nulidade", "rotulo": "Reconhecimento sem intimação prévia do exequente",
+     "detalhe": "O juiz só pode reconhecer de ofício depois de ouvidas as partes. A falta "
+                "dessa intimação é vício da decisão que extinguiu a execução — é tese de "
+                "ataque quando o crédito já foi declarado prescrito.",
+     "fundamento": "CPC/2015, art. 921, §5º", "status": "confirmado"},
+    {"efeito": "suspende", "rotulo": "Incidente de desconsideração em curso",
+     "detalhe": "Instaurado o IDPJ, a execução fica suspensa quanto ao incidente.",
+     "fundamento": "CPC/2015, art. 134, §3º", "status": "a_revisar"},
+]
+
+
+TIPOS_DE_MARCO = [
+    "distribuicao", "citacao", "tentativa_infrutifera", "suspensao_921",
+    "arquivamento", "penhora", "bens_localizados", "parcelamento", "embargos",
+    "recuperacao_judicial", "retomada", "extincao", "outro",
+]
+
+
+# ── Enquadramento determinístico ─────────────────────────────────────────────
+
+def _para_data(valor) -> date | None:
+    """Aceita date ou 'DD/MM/AAAA' (com ou sem texto em volta)."""
+    if isinstance(valor, date):
+        return valor
+    achado = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", str(valor or ""))
+    if not achado:
+        return None
+    try:
+        return date(int(achado.group(3)), int(achado.group(2)), int(achado.group(1)))
+    except ValueError:
+        return None
+
+
+def regime_aplicavel(valor) -> dict | None:
+    """Regime do art. 921 vigente na data informada.
+
+    Determinístico e em Python de propósito: é o tipo de conta que o modelo erra de
+    forma silenciosa e que ninguém consegue auditar depois.
+    """
+    quando = _para_data(valor)
+    if quando is None:
+        return None
+    for regime in REGIMES:
+        depois_do_inicio = regime["inicio"] is None or quando >= regime["inicio"]
+        antes_do_fim = regime["fim"] is None or quando <= regime["fim"]
+        if depois_do_inicio and antes_do_fim:
+            return regime
+    return None
+
+
+def marcos_no_intervalo(inicio, fim) -> list[dict]:
+    """Marcos de vigência que caem entre duas datas — as viradas de regime que a
+    cronologia precisa mostrar entre um ato e o seguinte."""
+    de, ate = _para_data(inicio), _para_data(fim)
+    if de is None or ate is None:
+        return []
+    if de > ate:
+        de, ate = ate, de
+    return [m for m in MARCOS_LEGAIS if de < m["data"] <= ate]
+
+
+def prazo_do_titulo(descricao) -> dict | None:
+    """Casa a descrição livre do lastro com uma entrada de PRAZOS_POR_TITULO."""
+    texto = str(descricao or "").casefold()
+    if not texto:
+        return None
+    chaves = [
+        ("ccb", ("ccb", "cédula de crédito bancário", "cedula de credito bancario")),
+        ("cpr", ("cpr", "cédula de produto rural", "cedula de produto rural")),
+        ("cedula_rural", ("cédula rural", "cedula rural", "pignoratícia", "pignoraticia",
+                          "cédula hipotecária", "decreto-lei 167")),
+        ("nota_promissoria", ("nota promissória", "nota promissoria", "promissória")),
+        ("letra_de_cambio", ("letra de câmbio", "letra de cambio")),
+        ("duplicata", ("duplicata",)),
+        ("cheque", ("cheque",)),
+        ("honorarios_advocaticios", ("honorário", "honorario")),
+        ("alugueis", ("aluguel", "aluguéis", "alugueis", "locação", "locacao")),
+        ("instrumento_particular", ("contrato", "confissão de dívida", "confissao de divida",
+                                    "instrumento particular", "abertura de crédito",
+                                    "abertura de credito")),
+    ]
+    for chave, termos in chaves:
+        if any(termo in texto for termo in termos):
+            return dict(PRAZOS_POR_TITULO[chave], id=chave)
+    return None
+
+
+# ── Bloco para o prompt ──────────────────────────────────────────────────────
+
+def _linha_status(entrada: dict) -> str:
+    return " [CONFERIR]" if entrada.get("status") == "a_revisar" else ""
+
+
+def bloco_prompt() -> str:
+    """Renderiza a base como texto para o prompt.
+
+    O modelo recebe as regras prontas em vez de recordá-las: o que se pede a ele é
+    aplicar aos fatos do processo, não lembrar de legislação.
+    """
+    partes = ["═══ BASE DE REGRAS — PRESCRIÇÃO INTERCORRENTE (EXECUÇÃO COMUM) ═══",
+              "Use EXCLUSIVAMENTE as regras abaixo. Não recorra a memória própria sobre",
+              "prazos ou dispositivos. Itens marcados [CONFERIR] têm divergência ou",
+              "dependem de jurisprudência: ao usá-los, diga isso expressamente no texto.",
+              "",
+              "REGIMES POR DATA DO ATO (o processo pode atravessar mais de um):"]
+    for regime in REGIMES:
+        partes.append(f"- {regime['rotulo']}{_linha_status(regime)}")
+        partes.append(f"    Fundamento: {regime['fundamento']}")
+        partes.append(f"    Regra: {regime['regra']}")
+        partes.append(f"    Termo inicial: {regime['termo_inicial']}")
+        if regime.get("observacao"):
+            partes.append(f"    Atenção: {regime['observacao']}")
+
+    partes += ["", "PRAZO DA PRETENSÃO EXECUTIVA POR TÍTULO (Súmula 150/STF — é o prazo que",
+               "corre como intercorrente):"]
+    for entrada in PRAZOS_POR_TITULO.values():
+        partes.append(f"- {entrada['rotulo']}: {entrada['prazo']} ({entrada['termo']})"
+                      f" — {entrada['fundamento']}{_linha_status(entrada)}")
+        for posicao in entrada.get("divergencia", []):
+            partes.append(f"    · {posicao}")
+        if entrada.get("observacao"):
+            partes.append(f"    Atenção: {entrada['observacao']}")
+
+    partes += ["", "DIREITO INTERTEMPORAL:"]
+    for entrada in TRANSICAO:
+        partes.append(f"- {entrada['rotulo']}{_linha_status(entrada)}: {entrada['regra']}"
+                      f" ({entrada['fundamento']})")
+        if entrada.get("observacao"):
+            partes.append(f"    Atenção: {entrada['observacao']}")
+
+    partes += ["", "MITIGANTES — verificar TODOS antes de afirmar risco:"]
+    for entrada in MITIGANTES:
+        partes.append(f"- [{entrada['efeito'].upper()}] {entrada['rotulo']}"
+                      f"{_linha_status(entrada)}: {entrada['detalhe']} ({entrada['fundamento']})")
+
+    partes += [
+        "",
+        "COMO CONCLUIR:",
+        "- O risco é apresentado como RISCO, com o fundamento e a referência processual",
+        "  ao lado. Nunca afirme prescrição consumada como fato.",
+        "- Se faltar data para fechar a conta (ex.: não consta a ciência da tentativa",
+        "  infrutífera), diga qual data falta e onde ela seria encontrada.",
+        "- Aponte cada mitigante encontrado nos autos, com data e referência.",
+        "",
+    ]
+    return "\n".join(partes)

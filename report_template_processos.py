@@ -281,6 +281,20 @@ Use "Lastro constante da inicial" e "Lastro em execução" quando houver título
       DD/MM/AAAA – ([Descrição objetiva do ato processual] [Mov. X/Evento nº X /Fls. XX/XX/ID XXXX/etc (dos autos do recurso, caso haja) | fls. XX/XX (do pdf do recurso, caso haja])
       DD/MM/AAAA – ([Próximo ato] [Mov. X/Evento nº X /Fls. XX/XX/ID XXXX/etc (dos autos do recurso, caso haja) | fls. XX/XX (do pdf do recurso, caso haja]) (e assim por diante)
        
+--- 11a. Prescrição intercorrente ---
+• Prescrição intercorrente: (sempre preencher — inclusive para dizer que não há risco. Aplique a BASE DE REGRAS fornecida no prompt; não recorra a memória própria sobre prazos ou dispositivos)
+  ∘ Risco: [Não identificado / Baixo / Provável / Consumada segundo a contagem / Pendente de análise por falta de informação nos autos]
+  ∘ Título e prazo aplicável: [natureza do lastro] — [prazo] ([fundamento]) [Mov. X/Evento nº X /Fls. XX/XX/ID XXXX | fls. XXX/XXX]
+    ▪ Se o prazo do título for divergente (é o caso da CCB), exponha as DUAS posições e o resultado da contagem em cada uma. Não escolha uma sem dizer que escolheu.
+  ∘ Marcos da contagem: (na ordem cronológica, cada um com data e referência)
+    ▪ [Ato — ex: primeira tentativa infrutífera de localização de bens / decisão de suspensão do art. 921, III / arquivamento / retomada] [DD/MM/AAAA] [Mov. X/Evento nº X /Fls. XX/XX/ID XXXX | fls. XXX/XXX]
+  ∘ Regime aplicável a cada intervalo: [identifique qual regime do art. 921 governa cada trecho da linha do tempo, pela data dos atos — um mesmo processo pode atravessar mais de um]
+  ∘ Mitigantes verificados: (percorra TODOS os da base e diga o que encontrou nos autos)
+    ▪ [Mitigante encontrado — ex: penhora efetivada / parcelamento / recuperação judicial do devedor / demora imputável ao Judiciário] [DD/MM/AAAA] [Mov. X/Evento nº X /Fls. XX/XX/ID XXXX | fls. XXX/XXX]
+    ▪ [Se nenhum for encontrado, escrever: "Nenhum mitigante localizado nos autos."]
+  ∘ Conclusão: [síntese com a conta feita: de quando a quando correu, quanto correu, quanto falta. Apresente como RISCO, nunca como prescrição consumada declarada. Se faltar data para fechar a contagem, diga QUAL data falta e onde ela seria encontrada]
+  ∘ Se a execução foi extinta por prescrição intercorrente reconhecida de ofício, verifique e registre se houve a intimação prévia do exequente (art. 921, §5º) — a falta dela é vício da decisão e tese de ataque.
+
 --- 12. Constrições (somente se houver referência nos autos) ---
 • Constrições: (Se não houver: "Não há.". Se houver constrições vigentes, descreva que tipo de constrição (arresto, penhora, bloqueio), os bens, a quem pertence, valores (se aplicável), datas e referência/movimento, pra cada uma das constrições, conforme modelo abaixo) (apenas constrições deferidas. não inserir pedidos de penhora não deferidos ou bloqueio sisbajud caso tenha sido determinado o desbloqueio dos valores)
   ∘ [Bem constrito - ex: Penhora do Imóvel de Matrícula nº X.XXX no Xº CRI de Cidade/UF ou Bloqueio de valores via Sisbajud ou Arresto do Imóvel de Matrícula nº X.XXX no Xº CRI de Cidade/UF] [de propriedade do executado (nome)] [em DD/MM/AAAA] [no montante de R$ X.XXX,00 - provavelmente apenas será aplicável ao Sisbajud] [Mov. X/Evento nº X /Fls. XX/XX/ID XXXX/etc | fls. XXX/XXX]

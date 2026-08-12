@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import sys
 import types as pytypes
 from pathlib import Path
@@ -78,11 +79,22 @@ def testar_template_autoriza_item_novo():
 
 
 def testar_cache_do_template_foi_versionado():
-    """O template fica cacheado 1h no Gemini; sem bumpar o nome, a versão velha
-    continuaria sendo servida depois da mudança."""
+    """O conteúdo estático fica cacheado 1h no Gemini; sem bumpar o nome, a versão
+    velha continuaria sendo servida depois da mudança. `_v1` é a versão anterior a
+    todas estas alterações — o nome tem que ter avançado."""
     fonte = inspect.getsource(processos)
-    assert 'display_name="invista_proc_template_v2"' in fonte
-    assert "invista_proc_template_v1" not in fonte
+    versoes = set(re.findall(r'display_name="invista_proc_template_(v\d+)"', fonte))
+    assert versoes, "o cache precisa de display_name versionado"
+    assert "v1" not in versoes, "o nome do cache não foi bumpado após mudar o conteúdo"
+    assert len(versoes) == 1, f"versões divergentes no mesmo código: {versoes}"
+
+
+def testar_conteudo_cacheado_inclui_template_e_regras_de_prescricao():
+    """É a mudança de conteúdo que obriga o bump — se um dos dois sair daqui, o
+    cache passa a servir um prompt diferente do que o código monta."""
+    estatico = processos._conteudo_estatico_consolidacao()
+    assert "TEMPLATE DO RELATORIO" in estatico
+    assert "PRESCRIÇÃO INTERCORRENTE" in estatico
 
 
 def testar_dossies_recebem_a_instrucao():

@@ -6,6 +6,7 @@ import tempfile
 import threading
 import traceback
 import concurrent.futures
+import html as html_lib
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
@@ -29,6 +30,13 @@ from analysis_runtime import (
 )
 from dossie_ppa import gerar_dossie_word
 from dossie_previa import gerar_previa_word
+from prescricao_intercorrente import bloco_prompt as bloco_prompt_prescricao
+from cronologia_prescricao import (
+    analisar as analisar_prescricao,
+    extrair_marcos as extrair_marcos_prescricao,
+    marcos_para_linhas as marcos_prescricao_para_linhas,
+    render_html as render_cronologia_html,
+)
 from legal_prompts import (
     REGRA_EXTRACAO_POR_PAGINA,
     REGRA_FIDELIDADE_PROCESSUAL,
@@ -45,6 +53,7 @@ CHUNK_MAX_PAGES_PROC    = 400
 # MÓDULO — ANÁLISE DE PROCESSOS (com melhorias Teste B)
 # ══════════════════════════════════════════════════════════════════════════════
 
+_DUAS_QUEBRAS = chr(10) * 2
 _proc_cache_nome: dict[str, str] = {}
 _proc_cache_lock = threading.Lock()
 
@@ -324,6 +333,14 @@ def _proc_extrair_chunk_adaptativo(args) -> tuple:
     return _extrair(chunk_path, offset)
 
 
+# Conteúdo estático da consolidação: template + base de regras da prescrição. Vai junto
+# no cache do Gemini porque não muda entre execuções — o modelo aplica as regras aos
+# fatos em vez de recordá-las, e o item 11a do template depende delas.
+def _conteudo_estatico_consolidacao() -> str:
+    return (f"TEMPLATE DO RELATORIO:\n\n{REPORT_TEMPLATE_INSTRUCTIONS}\n\n"
+            + bloco_prompt_prescricao())
+
+
 def _proc_obter_cache(client, model_cons: str) -> Optional[str]:
     global _proc_cache_nome
     with _proc_cache_lock:
@@ -338,11 +355,11 @@ def _proc_obter_cache(client, model_cons: str) -> Optional[str]:
             cache = client.caches.create(
                 model=model_cons,
                 config=types.CreateCachedContentConfig(
-                    display_name="invista_proc_template_v2",
+                    display_name="invista_proc_template_v3",
                     system_instruction=SYSTEM_PROMPT_PROC,
                     contents=[types.Content(
                         role="user",
-                        parts=[types.Part(text=f"TEMPLATE DO RELATORIO:\n\n{REPORT_TEMPLATE_INSTRUCTIONS}")]
+                        parts=[types.Part(text=_conteudo_estatico_consolidacao())]
                     )],
                     ttl="3600s",
                 )
@@ -420,7 +437,7 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
                 # Cache invalido — descarta e refaz sem cache
                 with _proc_cache_lock:
                     _proc_cache_nome.pop(model_cons, None)
-                prompt_full = SYSTEM_PROMPT_PROC + "\n\n" + REPORT_TEMPLATE_INSTRUCTIONS + "\n\n" + prompt
+                prompt_full = SYSTEM_PROMPT_PROC + _DUAS_QUEBRAS + _conteudo_estatico_consolidacao() + _DUAS_QUEBRAS + prompt
                 def _fn_fallback():
                     return client.models.generate_content(
                         model=model_cons,
@@ -430,7 +447,7 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
                 return _retry(_fn_fallback)
             raise
     else:
-        prompt_full = SYSTEM_PROMPT_PROC + "\n\n" + REPORT_TEMPLATE_INSTRUCTIONS + "\n\n" + prompt
+        prompt_full = SYSTEM_PROMPT_PROC + _DUAS_QUEBRAS + _conteudo_estatico_consolidacao() + _DUAS_QUEBRAS + prompt
         def _fn():
             return client.models.generate_content(
                 model=model_cons,
@@ -977,6 +994,33 @@ def proc_gerar_previa(relatorio: str, extracao: str = "", instrucoes: str = ""):
         yield gr.update(value=caminho, visible=True), "✅ Dossiê Prévia gerado — clique no arquivo para baixar."
     except Exception:
         yield gr.update(value=None, visible=False), "❌ Erro ao gerar Dossiê Prévia:\n\n" + traceback.format_exc()
+
+
+def proc_gerar_cronologia(relatorio: str, extracao: str = ""):
+    """Cronologia processual com foco em prescrição intercorrente.
+
+    O modelo só extrai marcos datados; o enquadramento por regime é calculado depois,
+    em Python, a partir da base de regras.
+    """
+    fonte = extracao.strip() if extracao and extracao.strip() else (relatorio or "").strip()
+    if not fonte:
+        yield {}, '<div class="timeline-empty">Gere uma análise primeiro.</div>', [["", "", "", ""]], ""
+        return
+    yield ({}, '<div class="timeline-loading">Localizando os marcos da prescrição…</div>',
+           [["", "", "", ""]], "")
+    try:
+        dados = _executar_com_failover_gemini(
+            _get_gemini_clients(),
+            lambda client, _indice: extrair_marcos_prescricao(
+                extracao or "", relatorio or "", client, GEMINI_MODEL_ESTRUTURADO
+            ),
+        )
+    except Exception:
+        aviso = html_lib.escape("Erro ao montar a cronologia: " + traceback.format_exc())
+        yield {}, f'<div class="timeline-empty">{aviso}</div>', [["", "", "", ""]], ""
+        return
+    yield (dados, render_cronologia_html(analisar_prescricao(dados)),
+           marcos_prescricao_para_linhas(dados), str(dados.get("titulo", "") or ""))
 
 
 def proc_responder(pergunta: str, relatorio: str):

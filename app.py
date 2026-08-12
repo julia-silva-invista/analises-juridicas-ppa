@@ -11,7 +11,16 @@ import tempfile
 import gradio as gr
 
 from design import CSS, HEADER_HTML, FOOTER_HTML
-from processos import proc_analisar, proc_gerar_word, proc_gerar_dossie, proc_gerar_previa, proc_responder
+from processos import (
+    proc_analisar, proc_gerar_word, proc_gerar_dossie, proc_gerar_previa,
+    proc_gerar_cronologia, proc_responder,
+)
+from cronologia_prescricao import (
+    COLUNAS_MARCOS,
+    aplicar_marcos as presc_aplicar_marcos,
+    exportar_html as presc_exportar_html,
+)
+from prescricao_intercorrente import TIPOS_DE_MARCO
 from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores, rj_gerar_checklist, rj_gerar_checklist_creditos
 from matriculas import mat_gerar_excel, mat_responder
 from coleta import coleta_gerar, coleta_gerar_dossie_dispatch
@@ -300,6 +309,28 @@ with gr.Blocks(
                 elem_classes=["word-file-output", "compact-file-output"],
             )
             proc_dossie_status = gr.Markdown("")
+
+            # Cronologia da prescrição: o modelo extrai os marcos datados; o regime de
+            # cada intervalo e as viradas de lei são calculados em Python.
+            with gr.Row():
+                proc_cronologia_btn = gr.Button(
+                    "Cronologia processual — prescrição intercorrente",
+                    variant="secondary", elem_classes=["word-download-btn"],
+                )
+            proc_presc_state = gr.State({})
+            proc_presc_html = gr.HTML()
+            with gr.Accordion("Editar cronologia", open=False, elem_classes=["mat-accordion"]):
+                proc_presc_titulo = gr.Textbox(
+                    label="Título / lastro (define o prazo aplicado)",
+                    placeholder="Ex: Cédula de Crédito Bancário (CCB) nº 123",
+                )
+                proc_presc_marcos = gr.Dataframe(
+                    headers=COLUNAS_MARCOS, col_count=(len(COLUNAS_MARCOS), "fixed"),
+                    row_count=(1, "dynamic"), interactive=True, wrap=True,
+                    label=f"Marcos (tipos: {' · '.join(TIPOS_DE_MARCO)})",
+                    elem_classes=["tl-editor-table"],
+                )
+                proc_presc_export_btn = gr.DownloadButton("Exportar cronologia (HTML)", variant="secondary")
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Column(elem_classes=["qa-section"]):
@@ -720,6 +751,25 @@ with gr.Blocks(
     # que o template do dossiê não prevê.
     proc_previa_btn.click(fn=proc_gerar_previa, inputs=[proc_relatorio_state, proc_extracao_state, proc_instrucoes], outputs=[proc_previa_file, proc_previa_status])
     proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state, proc_extracao_state, proc_instrucoes], outputs=[proc_dossie_file, proc_dossie_status])
+
+    proc_cronologia_btn.click(
+        fn=proc_gerar_cronologia,
+        inputs=[proc_relatorio_state, proc_extracao_state],
+        outputs=[proc_presc_state, proc_presc_html, proc_presc_marcos, proc_presc_titulo],
+        concurrency_limit=2,
+    )
+    # Editar título ou marcos refaz o enquadramento na hora. `.input` e não `.change`:
+    # o preenchimento programático do dataframe reescreveria o estado sozinho.
+    for _campo in (proc_presc_titulo, proc_presc_marcos):
+        _campo.input(
+            fn=presc_aplicar_marcos,
+            inputs=[proc_presc_state, proc_presc_titulo, proc_presc_marcos],
+            outputs=[proc_presc_state, proc_presc_html],
+            show_progress="hidden",
+        )
+    proc_presc_export_btn.click(
+        fn=presc_exportar_html, inputs=[proc_presc_state], outputs=[proc_presc_export_btn]
+    )
     proc_perguntar_btn.click(
         fn=proc_responder, inputs=[proc_pergunta, proc_relatorio_state], outputs=[proc_resposta]
     )
