@@ -488,45 +488,73 @@ def _periodo(events: list[dict]) -> str:
     return anos[0] if anos[0] == anos[-1] else f"{anos[0]}–{anos[-1]}"
 
 
-def _detalhe_modal(index: int, event: dict) -> str:
-    quadro = "".join(
-        f'<span class="tl2-chip">{html.escape(nome)}'
-        + (f' <b>{html.escape(pct)}</b>' if pct else "")
-        + "</span>"
-        for nome, pct in _socios_map(event).items()
-    )
-    linhas = [
-        ("Administração", _joined_people(event.get("administradores_apos", [])) or "—"),
-        ("Capital social", str(event.get("capital_social_apos", "")) or "—"),
-        ("Sede", str(event.get("sede_apos", "")) or "—"),
-        ("Objeto social", str(event.get("objeto_apos", "")) or "—"),
-        ("Filiais", _joined_filiais(event.get("filiais_apos") or []) or "—"),
-    ]
-    imoveis = "".join(
-        f'<li><b>Matrícula {html.escape(str(i.get("matricula", "")) or "—")}</b> — '
-        f'{html.escape(str(i.get("cartorio", "")) or str(i.get("cidade", "")))} · '
-        f'{html.escape(str(i.get("valor", "")) or "valor não informado")} · '
-        f'{html.escape(str(i.get("movimento", "")) or "—")}</li>'
-        for i in (event.get("imoveis") or [])
-    )
-    cessoes = "".join(
-        f'<li><b>{html.escape(str(c.get("cedente", "")) or "—")} → '
-        f'{html.escape(str(c.get("cessionario", "")) or "—")}</b> — '
-        + html.escape(
-            " · ".join(
-                x
-                for x in [
-                    str(c.get("participacao", "")).strip(),
-                    str(c.get("valor", "")).strip(),
-                    str(c.get("observacao", "")).strip(),
-                ]
-                if x
-            )
-            or "sem valores informados"
+def _bloco_editavel(chave: str, campos: list, rotulos: list, itens: list,
+                    titulo: str, singular: str) -> str:
+    """Lista do JSON como linhas editáveis, com + para acrescentar e × para remover.
+
+    Cada linha carrega um <span data-tl-campo> por campo, na ordem de `campos`. A
+    serialização lê por POSIÇÃO dentro do bloco, não por índice no atributo — é o que
+    permite acrescentar e remover linha sem renumerar nada.
+    """
+    def _linha(item: dict) -> str:
+        celulas = "".join(
+            f'<span class="tl2-celula" data-tl-campo="{campo}" '
+            f'data-tl-rotulo="{html.escape(rotulo)}">'
+            f'{html.escape(str(item.get(campo, "") or ""))}</span>'
+            for campo, rotulo in zip(campos, rotulos)
         )
-        + "</li>"
-        for c in (event.get("cessoes") or [])
+        return ('<li data-tl-item>' + celulas
+                + '<button type="button" class="tl2-rm" data-tl-remover '
+                  'title="Remover">×</button></li>')
+
+    linhas = "".join(_linha(i) for i in itens if isinstance(i, dict))
+    modelo = html.escape(json.dumps(list(zip(campos, rotulos)), ensure_ascii=False), quote=True)
+    return (
+        f'<div class="tl2-bloco" data-tl-lista="{chave}" data-tl-modelo="{modelo}">'
+        f"<h4>{html.escape(titulo)}</h4>"
+        f'<ul class="tl2-list">{linhas}</ul>'
+        f'<button type="button" class="tl2-add" data-tl-adicionar>+ {html.escape(singular)}</button>'
+        "</div>"
     )
+
+
+def _detalhe_modal(index: int, event: dict) -> str:
+    """Painel de detalhe do ato — e, no modo de edição, o formulário do ato.
+
+    Todos os campos de origem vivem aqui. Os cards da coluna são DERIVADOS
+    (movimentos_do_ato compara um ato com o anterior), então não há como escrever de
+    volta neles: quem se edita é o dado que os gera, e os cards se redesenham depois.
+    """
+    blocos = "".join([
+        _bloco_editavel("socios_apos", ["nome", "participacao", "quotas"],
+                        ["Nome", "Participação", "Quotas"],
+                        event.get("socios_apos") or [],
+                        "Quadro societário após o ato", "sócio"),
+        _bloco_editavel("cessoes", ["cedente", "cessionario", "participacao", "valor", "observacao"],
+                        ["Cedente", "Cessionário", "Participação", "Valor", "Observação"],
+                        event.get("cessoes") or [],
+                        "Transmissão de quotas", "cessão"),
+        _bloco_editavel("imoveis", ["matricula", "cartorio", "cidade", "valor", "movimento", "descricao"],
+                        ["Matrícula", "Cartório", "Cidade", "Valor",
+                         "Movimento (integralizacao/saida/aquisicao)", "Descrição"],
+                        event.get("imoveis") or [],
+                        "Bens imóveis", "imóvel"),
+        _bloco_editavel("administradores_apos", ["nome", "cargo"], ["Nome", "Cargo"],
+                        event.get("administradores_apos") or [],
+                        "Administração após o ato", "administrador"),
+        _bloco_editavel("filiais_apos", ["nome", "local"], ["Nome", "Local"],
+                        event.get("filiais_apos") or [],
+                        "Filiais existentes após o ato", "filial"),
+        _bloco_editavel("filiais_adicionadas", ["nome", "local"], ["Nome", "Local"],
+                        event.get("filiais_adicionadas") or [],
+                        "Filiais abertas NESTE ato", "filial"),
+    ])
+
+    def _campo(rotulo: str, chave: str, vazio: str = "—") -> str:
+        return (f"<dt>{html.escape(rotulo)}</dt>"
+                f'<dd data-tl-campo="{chave}">'
+                f'{html.escape(str(event.get(chave, "") or "") or vazio)}</dd>')
+
     return f"""
       <input type="checkbox" id="tl2-det-{index}" class="tl2-toggle">
       <label class="tl2-btn" for="tl2-det-{index}">Ver detalhamento</label>
@@ -535,28 +563,29 @@ def _detalhe_modal(index: int, event: dict) -> str:
         <div class="tl2-modal-card">
           <div class="tl2-modal-head">
             <div>
-              <span class="tl2-modal-date">{html.escape(str(event.get("data", "")) or "—")}</span>
-              <strong>{html.escape(str(event.get("ato", "")) or "Ato societário")}</strong>
-              <small>{html.escape(str(event.get("numero_arquivamento", "")))}</small>
+              <span class="tl2-modal-date" data-tl-campo="data">{html.escape(str(event.get("data", "")) or "—")}</span>
+              <strong data-tl-campo="ato">{html.escape(str(event.get("ato", "")) or "Ato societário")}</strong>
+              <small data-tl-campo="numero_arquivamento">{html.escape(str(event.get("numero_arquivamento", "")) or "—")}</small>
             </div>
             <label class="tl2-close" for="tl2-det-{index}">Fechar</label>
           </div>
           <div class="tl2-modal-body">
             <h4>Detalhamento do ato</h4>
-            <p>{html.escape(str(event.get("detalhamento", "")) or "Não informado.")}</p>
-            <h4>Quadro societário após o ato</h4>
-            <div class="tl2-chips">{quadro or '<span class="tl2-chip">Não informado</span>'}</div>
-            {'<h4>Transmissão de quotas</h4><ul class="tl2-list">' + cessoes + '</ul>' if cessoes else ''}
-            {'<h4>Bens imóveis</h4><ul class="tl2-list">' + imoveis + '</ul>' if imoveis else ''}
+            <p data-tl-campo="detalhamento">{html.escape(str(event.get("detalhamento", "")) or "Não informado.")}</p>
+            {blocos}
             <h4>Estado da sociedade</h4>
             <dl class="tl2-dl">
-              {''.join(f'<dt>{html.escape(k)}</dt><dd>{html.escape(str(v))}</dd>' for k, v in linhas)}
+              {_campo("Capital social anterior", "capital_social_anterior")}
+              {_campo("Capital social", "capital_social_apos")}
+              {_campo("Sede", "sede_apos")}
+              {_campo("Objeto social", "objeto_apos")}
             </dl>
-            <p class="tl2-fonte">Fonte: {html.escape(str(event.get("fonte", "")) or "não informada")}</p>
+            <p class="tl2-fonte">Fonte: <span data-tl-campo="fonte">{html.escape(str(event.get("fonte", "")) or "não informada")}</span></p>
           </div>
         </div>
       </div>
     """
+
 
 
 def render_timeline_html(data: dict) -> str:
@@ -575,12 +604,20 @@ def render_timeline_html(data: dict) -> str:
             + "</div>"
             for m in movimentos_do_ato(event, prev)
         )
+        # Campos do JSON que o painel não desenha viajam aqui, para o round-trip não
+        # perdê-los — e para o servidor não precisar do estado anterior na volta, o que
+        # obrigaria a passar um gr.State pelo JavaScript.
+        extra = html.escape(json.dumps(
+            {c: event.get(c) for c in ("categorias",) if c in event}, ensure_ascii=False
+        ), quote=True)
         colunas.append(
             f"""
-        <article class="tl2-col">
+        <article class="tl2-col" data-tl-evento data-tl-extra="{extra}">
           <div class="tl2-col-head">
-            <strong>{html.escape(str(event.get("data", "")) or "—")}</strong>
-            <span>{html.escape(str(event.get("ato", "")) or "Ato societário")}</span>
+            <strong data-tl-campo="data">{html.escape(str(event.get("data", "")) or "—")}</strong>
+            <span data-tl-campo="ato">{html.escape(str(event.get("ato", "")) or "Ato societário")}</span>
+            <button type="button" class="tl2-rm tl2-rm-ato" data-tl-remover-ato
+                    title="Remover este ato">×</button>
           </div>
           <div class="tl2-axis"><i class="tl2-pin"></i></div>
           <div class="tl2-moves">{blocos}</div>
@@ -593,17 +630,18 @@ def render_timeline_html(data: dict) -> str:
     # O <style> vai DENTRO da seção de propósito: a exportação de imagem lê esse CSS
     # pelo próprio DOM para rasterizar a timeline exatamente como ela aparece na tela.
     return f"""
-    <section class="tl2-shell" id="timeline-export-area">
+    <section class="tl2-shell" id="timeline-export-area" data-tl-raiz>
       <style id="tl2-export-style">{TL2_CSS}</style>
       <div class="tl2-head">
         <span class="tl2-kicker">Cronologia societária</span>
-        <h2>{html.escape(data.get("empresa", "") or "Sociedade analisada")}</h2>
-        <p>{("CNPJ " + html.escape(data.get("cnpj", "")) + " · ") if data.get("cnpj") else ""}
-           {len(events)} atos · {_periodo(events)}</p>
+        <h2 data-tl-campo="empresa">{html.escape(data.get("empresa", "") or "Sociedade analisada")}</h2>
+        <p>CNPJ <span data-tl-campo="cnpj">{html.escape(data.get("cnpj", "") or "—")}</span>
+           · {len(events)} atos · {_periodo(events)}</p>
       </div>
       <div class="tl2-scroll">
         <div class="tl2-track" style="--tl2-cols:{len(events)}">{"".join(colunas)}</div>
       </div>
+      <button type="button" class="tl2-add tl2-add-ato" data-tl-adicionar-ato>+ Adicionar ato</button>
     </section>
     """
 
@@ -612,7 +650,6 @@ def timeline_analisar(files):
     yield (
         "Preparando os atos societários...",
         '<div class="timeline-loading">Lendo os documentos e reconstruindo a evolução societária…</div>',
-        gr.update(choices=[], value=None),
         {},
     )
     try:
@@ -623,201 +660,129 @@ def timeline_analisar(files):
         raise gr.Error(str(exc)) from exc
     except Exception as exc:
         mensagem = _mensagem_erro_gemini(exc, getattr(exc, "clients_gemini", None))
-        yield (mensagem, f'<div class="timeline-empty">{html.escape(mensagem)}</div>',
-               gr.update(choices=[], value=None), {})
+        yield (mensagem, f'<div class="timeline-empty">{html.escape(mensagem)}</div>', {})
         raise gr.Error(mensagem) from exc
-    rotulos = rotulos_dos_eventos(data)
     yield (
         f"Concluído: {len(data.get('eventos', []))} evento(s) societário(s) identificado(s).",
         render_timeline_html(data),
-        gr.update(choices=rotulos, value=(rotulos[0] if rotulos else None)),
         data,
     )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Edição por evento
+# Edição no próprio HTML
 #
-# A grade de 12 colunas foi substituída por campos rotulados: cada lista do JSON
-# (sócios, administração, cessões, imóveis, filiais) ganhou uma tabelinha com uma
-# coluna por campo. Não existe mais mini-linguagem dentro da célula — nada de "|",
-# ";", ">" ou " — " para a usuária decorar, e nada de parse posicional, que deslocava
-# campos quando um valor vinha vazio (um imóvel sem cartório virava um imóvel com o
-# valor no lugar do cartório e o movimento trocado por "integralizacao").
+# O painel renderizado É o editor: "Editar timeline" liga contenteditable nos campos
+# marcados com data-tl-campo, você digita direto no card, e "Concluir edição" devolve a
+# árvore serializada para cá. Mesmo modelo do Painel de Deals.
 #
-# Também some a reconciliação por chave "data|ato": o evento é editado no lugar, pelo
-# índice, então corrigir a data não apaga mais capital_social_anterior nem
-# filiais_adicionadas.
+# Os cards da coluna são derivados (movimentos_do_ato compara um ato com o anterior),
+# então a superfície editável é o cabeçalho da coluna e o modal de detalhe, onde vivem
+# os campos de origem. Ao concluir, os cards se redesenham a partir do dado novo.
 # ══════════════════════════════════════════════════════════════════════════════
 
-COLUNAS_SOCIOS = ["Nome", "Participação", "Quotas"]
-COLUNAS_ADMINISTRADORES = ["Nome", "Cargo"]
-COLUNAS_CESSOES = ["Cedente", "Cessionário", "Participação", "Valor", "Observação"]
-COLUNAS_IMOVEIS = ["Matrícula", "Cartório", "Cidade", "Valor", "Movimento", "Descrição"]
-COLUNAS_FILIAIS = ["Nome", "Local"]
-
-# (chave no JSON, colunas da tabelinha, campos do dict na ordem das colunas)
-LISTAS_DO_EVENTO = [
-    ("socios_apos", COLUNAS_SOCIOS, ["nome", "participacao", "quotas"]),
-    ("administradores_apos", COLUNAS_ADMINISTRADORES, ["nome", "cargo"]),
-    ("cessoes", COLUNAS_CESSOES, ["cedente", "cessionario", "participacao", "valor", "observacao"]),
-    ("imoveis", COLUNAS_IMOVEIS, ["matricula", "cartorio", "cidade", "valor", "movimento", "descricao"]),
-    ("filiais_apos", COLUNAS_FILIAIS, ["nome", "local"]),
-    ("filiais_adicionadas", COLUNAS_FILIAIS, ["nome", "local"]),
-]
-
-# Campos de texto simples, na ordem em que a interface os envia.
+# Campos escalares do evento que o HTML expõe para edição.
 CAMPOS_TEXTO_DO_EVENTO = [
     "data", "ato", "numero_arquivamento", "detalhamento",
     "capital_social_anterior", "capital_social_apos", "sede_apos", "objeto_apos", "fonte",
 ]
 
+# Listas do evento e os campos de cada item, na ordem em que o HTML as desenha.
+LISTAS_DO_EVENTO = {
+    "socios_apos": ["nome", "participacao", "quotas"],
+    "cessoes": ["cedente", "cessionario", "participacao", "valor", "observacao"],
+    "imoveis": ["matricula", "cartorio", "cidade", "valor", "movimento", "descricao"],
+    "administradores_apos": ["nome", "cargo"],
+    "filiais_apos": ["nome", "local"],
+    "filiais_adicionadas": ["nome", "local"],
+}
+
 MOVIMENTOS_IMOVEL = ["integralizacao", "saida", "aquisicao"]
 
-
-def _linhas_de_lista(itens, campos: list) -> list[list[str]]:
-    """Lista de dicts → linhas da tabelinha, uma coluna por campo."""
-    linhas = [
-        [str(item.get(campo, "") or "") for campo in campos]
-        for item in (itens or []) if isinstance(item, dict)
-    ]
-    return linhas or [[""] * len(campos)]
+# Texto que o render usa quando o campo está vazio. Voltando igual, é vazio de novo —
+# senão o primeiro "Concluir edição" gravaria "—" e "Não informado." como conteúdo.
+_PLACEHOLDERS = {"—", "-", "Não informado.", "não informada", "Ato societário",
+                 "Sociedade analisada"}
 
 
-def _lista_de_linhas(linhas: Any, campos: list) -> list[dict]:
-    """Tabelinha → lista de dicts. Linha inteiramente vazia é descartada."""
-    if hasattr(linhas, "values"):
-        linhas = linhas.values.tolist()
-    resultado = []
-    for linha in linhas or []:
-        valores = [str(v).strip() if v is not None and str(v) != "nan" else "" for v in linha]
-        valores += [""] * (len(campos) - len(valores))
-        if not any(valores):
-            continue
-        resultado.append(dict(zip(campos, valores[:len(campos)])))
-    return resultado
+def _limpar(valor) -> str:
+    texto = re.sub(r"\s+", " ", str(valor or "")).strip()
+    return "" if texto in _PLACEHOLDERS else texto
 
 
-def rotulos_dos_eventos(data: dict) -> list[str]:
-    """Rótulos do seletor de ato, na ordem em que os eventos estão em `data`."""
-    rotulos = []
-    for indice, evento in enumerate((data or {}).get("eventos", []), 1):
-        data_evento = str(evento.get("data", "") or "s/ data")
-        ato = str(evento.get("ato", "") or "ato sem nome")
-        rotulos.append(f"{indice}. {data_evento} — {ato}")
-    return rotulos
+def _evento_do_html(recebido: dict) -> dict:
+    """Um ato, montado a partir do que o navegador devolveu."""
+    evento = {}
+    extra = recebido.get("_extra")
+    if isinstance(extra, dict):
+        evento.update(extra)          # campos que o painel não desenha (categorias)
+    for campo in CAMPOS_TEXTO_DO_EVENTO:
+        evento[campo] = _limpar(recebido.get(campo))
+    for chave, campos in LISTAS_DO_EVENTO.items():
+        itens = []
+        for item in recebido.get(chave) or []:
+            if not isinstance(item, dict):
+                continue
+            valores = {campo: _limpar(item.get(campo)) for campo in campos}
+            if any(valores.values()):     # linha em branco não vira item
+                itens.append(valores)
+        evento[chave] = itens
+    return evento
 
 
-def _evento_em(data: dict, indice) -> dict:
-    eventos = (data or {}).get("eventos", [])
-    try:
-        return eventos[int(indice)]
-    except (TypeError, ValueError, IndexError):
-        return {}
+def aplicar_edicao_html(bruto: str):
+    """Reconstrói o JSON a partir da árvore que o navegador serializou.
 
+    O painel carrega o schema inteiro — inclusive o que ele não desenha, que viaja em
+    `data-tl-extra`. Por isso não precisa do estado anterior aqui, e o `gr.State` não
+    precisa atravessar o JavaScript, que é onde essa ponte seria frágil.
 
-def campos_do_evento(data: dict, indice) -> list:
-    """Valores de todos os campos do editor para o evento selecionado."""
-    evento = _evento_em(data, indice)
-    textos = [str(evento.get(campo, "") or "") for campo in CAMPOS_TEXTO_DO_EVENTO]
-    tabelas = [_linhas_de_lista(evento.get(chave), campos) for chave, _cols, campos in LISTAS_DO_EVENTO]
-    return textos + tabelas
-
-
-def _update_seletor(data: dict, posicao: int):
-    """Rótulos do seletor refeitos, mantendo o ato aberto selecionado.
-
-    Precisa ser um gr.update: devolver a lista crua trocaria o VALOR do dropdown pela
-    lista inteira, em vez de repovoar as opções.
+    Os atos são lidos por POSIÇÃO, na ordem em que estão na tela e já com as inclusões
+    e remoções feitas ali.
     """
-    rotulos = rotulos_dos_eventos(data)
-    valor = rotulos[posicao] if 0 <= posicao < len(rotulos) else None
-    return gr.update(choices=rotulos, value=valor)
-
-
-def aplicar_edicao(data: dict, indice, *valores):
-    """Grava os campos no evento selecionado e devolve (data, html, seletor).
-
-    Edita o dict no lugar, preservando as chaves que o editor não expõe (por exemplo
-    "categorias"), em vez de reconstruir o evento a partir de texto.
-    """
-    data = copy.deepcopy(data or {})
-    eventos = data.setdefault("eventos", [])
+    if not isinstance(bruto, (str, dict)) or (isinstance(bruto, str) and not bruto.strip()):
+        return None                       # nada veio do navegador
     try:
-        posicao = int(indice)
-        evento = eventos[posicao]
-    except (TypeError, ValueError, IndexError):
-        return data, render_timeline_html(data), _update_seletor(data, -1)
+        editado = json.loads(bruto) if isinstance(bruto, str) else bruto
+    except (json.JSONDecodeError, TypeError):
+        editado = None
+    if not isinstance(editado, dict):
+        return None                       # serialização torta: quem chama mantém o que tinha
 
-    n_textos = len(CAMPOS_TEXTO_DO_EVENTO)
-    for campo, valor in zip(CAMPOS_TEXTO_DO_EVENTO, valores[:n_textos]):
-        evento[campo] = str(valor or "").strip()
-    for (chave, _colunas, campos), tabela in zip(LISTAS_DO_EVENTO, valores[n_textos:]):
-        evento[chave] = _lista_de_linhas(tabela, campos)
-
-    # O rótulo do seletor carrega data e ato — editar qualquer um dos dois muda o rótulo.
-    return data, render_timeline_html(data), _update_seletor(data, posicao)
+    return {
+        "empresa": _limpar(editado.get("empresa")),
+        "cnpj": _limpar(editado.get("cnpj")),
+        "eventos": [_evento_do_html(e) for e in (editado.get("eventos") or [])
+                    if isinstance(e, dict)],
+    }
 
 
-def aplicar_cabecalho(data: dict, empresa: str, cnpj: str):
-    """Empresa e CNPJ não tinham nenhuma via de correção na interface."""
+def timeline_aplicar_html(modo: str, bruto: str):
+    """Liga e desliga o modo de edição do painel.
+
+    Entrando, só troca o rótulo do botão — quem pinta os campos é o JS, e o estado fica
+    intocado via gr.skip(). Saindo, aplica o que foi digitado e redesenha, para os cards
+    derivados refletirem o dado novo.
+    """
+    if str(modo or "0") == "1":
+        return ("1", "", gr.skip(), gr.skip(),
+                gr.update(value="Concluir edição", variant="primary"))
+
+    novo = aplicar_edicao_html(bruto)
+    if novo is None:   # serialização torta: não mexe no que já estava
+        return ("0", "", gr.skip(), gr.skip(),
+                gr.update(value="Editar timeline", variant="secondary"))
+    return ("0", "", novo, render_timeline_html(novo),
+            gr.update(value="Editar timeline", variant="secondary"))
+
+
+def ordenar_eventos(data: dict):
+    """Reordena os atos por data. Sai do botão da barra, não do painel."""
     data = copy.deepcopy(data or {})
-    data["empresa"] = str(empresa or "").strip()
-    data["cnpj"] = str(cnpj or "").strip()
+    data.get("eventos", []).sort(key=lambda e: _date_key(e.get("data", "")))
     return data, render_timeline_html(data)
 
 
-def _indice_valido(data: dict, indice) -> int:
-    total = len((data or {}).get("eventos", []))
-    try:
-        posicao = int(indice)
-    except (TypeError, ValueError):
-        return 0
-    return max(0, min(posicao, total - 1)) if total else 0
-
-
-def selecionar_evento(data: dict, indice):
-    """Carrega um ato no editor. O ato anterior já foi salvo pelo .change de cada campo."""
-    posicao = _indice_valido(data, indice)
-    return [posicao] + campos_do_evento(data, posicao)
-
-
-def adicionar_evento(data: dict):
-    """Ato novo no fim da lista, já selecionado para edição."""
-    data = copy.deepcopy(data or {})
-    eventos = data.setdefault("eventos", [])
-    novo = {campo: "" for campo in CAMPOS_TEXTO_DO_EVENTO}
-    novo["ato"] = "Novo ato"
-    novo["categorias"] = []
-    for chave, _colunas, _campos in LISTAS_DO_EVENTO:
-        novo[chave] = []
-    eventos.append(novo)
-    posicao = len(eventos) - 1
-    return ([data, render_timeline_html(data), _update_seletor(data, posicao), posicao]
-            + campos_do_evento(data, posicao))
-
-
-def remover_evento(data: dict, indice):
-    data = copy.deepcopy(data or {})
-    eventos = data.setdefault("eventos", [])
-    posicao = _indice_valido(data, indice)
-    if eventos:
-        eventos.pop(posicao)
-    posicao = _indice_valido(data, posicao)
-    return ([data, render_timeline_html(data), _update_seletor(data, posicao), posicao]
-            + campos_do_evento(data, posicao))
-
-
-def ordenar_eventos(data: dict, indice):
-    """Reordena por data sem perder o ato que está aberto no editor."""
-    data = copy.deepcopy(data or {})
-    eventos = data.get("eventos", [])
-    posicao = _indice_valido(data, indice)
-    atual = eventos[posicao] if eventos else None
-    eventos.sort(key=lambda e: _date_key(e.get("data", "")))
-    posicao = eventos.index(atual) if atual in eventos else 0
-    return ([data, render_timeline_html(data), _update_seletor(data, posicao), posicao]
-            + campos_do_evento(data, posicao))
 
 
 
@@ -981,6 +946,43 @@ TL2_CSS = """
 .tl2-dl dt { color: #92948f; }
 .tl2-dl dd { margin: 0; color: #4a4d48; font-weight: 600; }
 .tl2-fonte { margin-top: 18px !important; font-size: 10px !important; color: #92948f !important; }
+
+/* ── Modo de edição — mesma linguagem do Painel de Deals ─────────────────── */
+/* Fora do modo de edição, nada disso aparece: os botões somem e os campos não
+   mostram contorno nenhum. */
+.tl2-add, .tl2-rm { display: none; }
+.tl2-bloco > h4 { margin-top: 14px; }
+.tl2-bloco .tl2-celula:not(:last-of-type)::after { content: " · "; color: #b9bbb6; }
+.tl2-bloco .tl2-list { list-style: none; padding-left: 0; }
+.tl2-bloco .tl2-list li { padding: 2px 0; }
+
+.tl2-edit-mode [contenteditable="true"] {
+    outline: 1px dashed #8FB2DA; outline-offset: 2px; border-radius: 3px;
+    background: rgba(235, 241, 250, .38); cursor: text; min-width: 26px;
+    display: inline-block;
+}
+.tl2-edit-mode [contenteditable="true"]:focus {
+    outline: 2px solid #1A56A0; background: #fff;
+}
+.tl2-edit-mode p[contenteditable="true"], .tl2-edit-mode dd[contenteditable="true"] { display: block; }
+.tl2-edit-mode .tl2-celula[data-tl-rotulo]:empty::before {
+    content: attr(data-tl-rotulo); color: #b0b2ad; font-style: italic;
+}
+.tl2-edit-mode .tl2-add, .tl2-edit-mode .tl2-rm { display: inline-block; }
+.tl2-add {
+    margin-top: 6px; padding: 3px 9px; font-size: 11px; font-weight: 700;
+    color: #1A56A0; background: #eef3fa; border: 1px solid #cfdcec; border-radius: 3px;
+    cursor: pointer;
+}
+.tl2-add:hover { background: #e2ebf7; }
+.tl2-add-ato { margin: 0 28px 22px; }
+.tl2-rm {
+    margin-left: 8px; padding: 0 6px; font-size: 12px; line-height: 1.5;
+    color: #dc4405; background: transparent; border: 1px solid #f0d3c8; border-radius: 3px;
+    cursor: pointer;
+}
+.tl2-rm:hover { background: #fdeee8; }
+.tl2-rm-ato { float: right; }
 """
 
 

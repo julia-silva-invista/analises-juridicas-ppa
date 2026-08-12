@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import copy
 import io
+import json
 import sys
 import types as pytypes
 from pathlib import Path
@@ -114,7 +115,7 @@ def testar_failover_conclui_na_segunda_chave(monkeypatch, pdf_qualquer):
 
     assert registro == ["k1", "k2", "k2:gen"]
     assert "1 evento" in saidas[-1][0]
-    assert saidas[-1][3]["empresa"] == "Teste Ltda"
+    assert saidas[-1][2]["empresa"] == "Teste Ltda"
 
 
 def testar_404_nao_acusa_o_modelo_quando_ele_existe_na_chave(monkeypatch, pdf_qualquer):
@@ -224,11 +225,10 @@ def testar_captura_js_recebe_um_argumento_e_devolve_lista():
     assert ".then(" not in fonte.split("tl_exportar_img_btn.click(", 1)[1].split(")\n", 1)[0]
 
 
-# ── Edição por evento ────────────────────────────────────────────────────────
-# A grade de 12 colunas achatava cinco listas do JSON numa mini-linguagem por célula
-# ("Nome | 50%; Outro | 40%", "Cedente > Cessionário | % | valor"). Os joins omitiam
-# campos vazios e os parses liam por posição, então um imóvel sem cartório voltava com
-# o valor no lugar do cartório e o movimento trocado pelo default "integralizacao".
+# ── Edição no próprio painel ─────────────────────────────────────────────────
+# O painel renderizado É o editor: contenteditable nos campos marcados com
+# data-tl-campo e, ao concluir, o navegador devolve a árvore serializada. Não há mais
+# grade com sintaxe dentro da célula, nem parse posicional deslocando campos.
 
 EVENTO_COMPLETO = {
     "data": "05/06/2015",
@@ -256,11 +256,19 @@ DADOS_EDICAO = {"empresa": "Agropecuária Teste Ltda", "cnpj": "12.345.678/0001-
                 "eventos": [EVENTO_COMPLETO]}
 
 
-def _round_trip(dados, indice=0):
-    """Carrega o evento no editor e aplica de volta sem alterar nada."""
-    campos = timeline.campos_do_evento(dados, indice)
-    novo, _html, _rotulos = timeline.aplicar_edicao(dados, indice, *campos)
-    return novo
+def _arvore_do_evento(evento: dict) -> dict:
+    """Reproduz o que o JS do navegador serializa a partir do painel."""
+    montado = {campo: evento.get(campo, "") for campo in timeline.CAMPOS_TEXTO_DO_EVENTO}
+    montado["_extra"] = {"categorias": evento.get("categorias", [])}
+    for chave, campos in timeline.LISTAS_DO_EVENTO.items():
+        montado[chave] = [{c: item.get(c, "") for c in campos} for item in evento.get(chave, [])]
+    return montado
+
+
+def _round_trip(dados: dict) -> dict:
+    arvore = {"empresa": dados.get("empresa", ""), "cnpj": dados.get("cnpj", ""),
+              "eventos": [_arvore_do_evento(e) for e in dados.get("eventos", [])]}
+    return timeline.aplicar_edicao_html(json.dumps(arvore, ensure_ascii=False))
 
 
 def testar_round_trip_nao_perde_nenhum_campo():
@@ -269,90 +277,100 @@ def testar_round_trip_nao_perde_nenhum_campo():
         assert resultado[chave] == valor, f"campo {chave} mudou no round-trip"
 
 
-def testar_campo_fora_do_editor_sobrevive():
-    """"categorias" era zerada a cada edição."""
+def testar_campo_fora_do_painel_viaja_em_data_tl_extra():
+    """"categorias" não é desenhado; viaja no atributo para o servidor não precisar do
+    estado anterior — o que obrigaria a passar um gr.State pelo JavaScript."""
     assert _round_trip(DADOS_EDICAO)["eventos"][0]["categorias"] == ["Sócios", "Imóvel"]
+    assert 'data-tl-extra="' in timeline.render_timeline_html(DADOS_EDICAO)
 
 
-def testar_corrigir_a_data_nao_apaga_nada():
-    """A reconciliação antiga era pela chave "data|ato": mudar a data fazia o lookup
-    falhar e apagava capital_social_anterior e filiais_adicionadas — e, com elas, o
-    card "Filial aberta" sumia da timeline sem explicação."""
-    campos = timeline.campos_do_evento(DADOS_EDICAO, 0)
-    campos[0] = "06/06/2015"          # data
-    campos[1] = "2ª Alteração Contratual"  # ato
-    evento = timeline.aplicar_edicao(DADOS_EDICAO, 0, *campos)[0]["eventos"][0]
-
-    assert evento["data"] == "06/06/2015"
-    assert evento["capital_social_anterior"] == "R$ 100.000,00"
-    assert evento["filiais_adicionadas"] == [{"nome": "Filial Maringá", "local": "Maringá/PR"}]
+def testar_empresa_e_cnpj_sao_editaveis():
+    arvore = {"empresa": "Outra Empresa Ltda", "cnpj": "99.999.999/0001-99",
+              "eventos": [_arvore_do_evento(EVENTO_COMPLETO)]}
+    novo = timeline.aplicar_edicao_html(json.dumps(arvore, ensure_ascii=False))
+    assert novo["empresa"] == "Outra Empresa Ltda"
+    assert novo["cnpj"] == "99.999.999/0001-99"
 
 
-def testar_imovel_sem_cartorio_nao_desloca_campos():
-    """O caso que corrompia: campo vazio no meio da lista."""
-    dados = copy.deepcopy(DADOS_EDICAO)
-    dados["eventos"][0]["imoveis"] = [{"matricula": "12.345", "cartorio": "", "cidade": "",
-                                       "valor": "R$ 800.000,00", "movimento": "saida",
-                                       "descricao": ""}]
-    imovel = _round_trip(dados)["eventos"][0]["imoveis"][0]
-    assert imovel["valor"] == "R$ 800.000,00", "o valor escorregou para outra coluna"
-    assert imovel["movimento"] == "saida", "o movimento virou o default silencioso"
-    assert imovel["cartorio"] == ""
+def testar_placeholder_nao_vira_conteudo():
+    """O render escreve "—" e "Não informado." quando o campo está vazio. Voltando
+    igual, tem que virar vazio de novo — senão o primeiro "Concluir edição" gravaria o
+    travessão como se fosse o dado."""
+    vazio = dict(EVENTO_COMPLETO, sede_apos="—", detalhamento="Não informado.",
+                 numero_arquivamento="—", fonte="não informada")
+    resultado = _round_trip({"empresa": "—", "cnpj": "—", "eventos": [vazio]})
+    assert resultado["eventos"][0]["sede_apos"] == ""
+    assert resultado["eventos"][0]["detalhamento"] == ""
+    assert resultado["empresa"] == "" and resultado["cnpj"] == ""
 
 
-def testar_cessao_sem_participacao_preserva_o_valor():
-    dados = copy.deepcopy(DADOS_EDICAO)
-    dados["eventos"][0]["cessoes"] = [{"cedente": "A", "cessionario": "B", "participacao": "",
-                                       "valor": "R$ 1,00", "observacao": ""}]
-    cessao = _round_trip(dados)["eventos"][0]["cessoes"][0]
-    assert cessao["participacao"] == "" and cessao["valor"] == "R$ 1,00"
+def testar_linha_em_branco_nao_vira_item():
+    arvore = {"empresa": "X", "cnpj": "", "eventos": [dict(
+        _arvore_do_evento(EVENTO_COMPLETO),
+        socios_apos=[{"nome": "Maria Souza", "participacao": "100%", "quotas": ""},
+                     {"nome": "", "participacao": "", "quotas": ""}],
+    )]}
+    socios = timeline.aplicar_edicao_html(json.dumps(arvore))["eventos"][0]["socios_apos"]
+    assert len(socios) == 1
 
 
-def testar_linha_em_branco_da_tabelinha_e_descartada():
-    campos = timeline.campos_do_evento(DADOS_EDICAO, 0)
-    campos[9] = [["Maria Souza", "100%", "100.000"], ["", "", ""], [None, None, None]]
-    socios = timeline.aplicar_edicao(DADOS_EDICAO, 0, *campos)[0]["eventos"][0]["socios_apos"]
-    assert socios == [{"nome": "Maria Souza", "participacao": "100%", "quotas": "100.000"}]
+def testar_ato_acrescentado_no_painel():
+    """O JS acrescenta e remove colunas no DOM; o servidor recebe a lista resolvida."""
+    arvore = {"empresa": "X", "cnpj": "", "eventos": [
+        _arvore_do_evento(EVENTO_COMPLETO),
+        dict({c: "" for c in timeline.CAMPOS_TEXTO_DO_EVENTO}, data="01/02/2024",
+             ato="7ª Alteração", _extra={}),
+    ]}
+    novo = timeline.aplicar_edicao_html(json.dumps(arvore, ensure_ascii=False))
+    assert len(novo["eventos"]) == 2
+    assert novo["eventos"][1]["ato"] == "7ª Alteração"
+    assert novo["eventos"][1]["socios_apos"] == []
 
 
-def testar_empresa_e_cnpj_agora_sao_editaveis():
-    """Não havia nenhuma via de correção: apareciam no cabeçalho do HTML e da imagem."""
-    dados, html_gerado = timeline.aplicar_cabecalho(DADOS_EDICAO, "Outra Empresa Ltda", "99.999.999/0001-99")
-    assert dados["empresa"] == "Outra Empresa Ltda"
-    assert dados["cnpj"] == "99.999.999/0001-99"
-    assert "Outra Empresa Ltda" in html_gerado
-    assert dados["eventos"] == DADOS_EDICAO["eventos"], "editar o cabeçalho não toca nos atos"
+def testar_json_torto_do_navegador_nao_derruba():
+    for entrada in ("", "isso não é json", "[]", None, "{"):
+        assert timeline.aplicar_edicao_html(entrada) is None
 
 
-def testar_adicionar_remover_e_ordenar_atos():
-    dados, _html, _sel, indice, *campos = timeline.adicionar_evento(DADOS_EDICAO)
-    assert len(dados["eventos"]) == 2 and indice == 1
-    assert campos[1] == "Novo ato", "o ato novo já entra selecionado no editor"
+def testar_botao_alterna_entre_editar_e_concluir():
+    # O JS devolve o modo NOVO: ao entrar manda "1"; ao concluir manda "0".
+    entrando = timeline.timeline_aplicar_html("1", "")
+    assert entrando[0] == "1" and "Concluir" in entrando[4]["value"]
 
-    dados2, _h, _s, indice2, *_ = timeline.remover_evento(dados, 1)
-    assert len(dados2["eventos"]) == 1 and indice2 == 0
+    saindo = timeline.timeline_aplicar_html(
+        "0", json.dumps({"empresa": "Nova", "cnpj": "", "eventos": []}))
+    assert saindo[0] == "0" and "Editar" in saindo[4]["value"]
+    assert saindo[2]["empresa"] == "Nova"
 
+
+def testar_serializacao_torta_preserva_o_que_havia():
+    """gr.skip() nas saídas de estado: JSON quebrado não pode zerar a timeline."""
+    saida = timeline.timeline_aplicar_html("0", "{")
+    assert saida[0] == "0"
+    assert isinstance(saida[2], type(gr.skip()))
+    assert isinstance(saida[3], type(gr.skip()))
+
+
+def testar_marcacao_de_edicao_esta_no_html():
+    html_gerado = timeline.render_timeline_html(DADOS_EDICAO)
+    for marca in ("data-tl-raiz", "data-tl-evento", 'data-tl-lista="socios_apos"',
+                  "data-tl-item", "data-tl-adicionar", "data-tl-remover",
+                  'data-tl-campo="cnpj"', 'data-tl-campo="capital_social_anterior"'):
+        assert marca in html_gerado, marca
+
+
+def testar_ordenar_atos_por_data():
     fora_de_ordem = {"empresa": "X", "cnpj": "", "eventos": [
         dict(EVENTO_COMPLETO, data="05/06/2015", ato="Segundo"),
         dict(EVENTO_COMPLETO, data="10/03/2010", ato="Primeiro"),
     ]}
-    ordenado, _h, _s, indice3, *_ = timeline.ordenar_eventos(fora_de_ordem, 0)
+    ordenado, _html = timeline.ordenar_eventos(fora_de_ordem)
     assert [e["ato"] for e in ordenado["eventos"]] == ["Primeiro", "Segundo"]
-    assert indice3 == 1, "o ato que estava aberto continua aberto depois de reordenar"
 
 
-def testar_rotulos_do_seletor_identificam_o_ato():
-    assert timeline.rotulos_dos_eventos(DADOS_EDICAO) == ["1. 05/06/2015 — 2ª Alteração"]
-
-
-def testar_indice_invalido_nao_quebra():
-    for indice in (None, -5, 99, "abc"):
-        assert timeline.campos_do_evento(DADOS_EDICAO, indice)
-        timeline.aplicar_edicao(DADOS_EDICAO, indice, *timeline.campos_do_evento(DADOS_EDICAO, 0))
-
-
-def testar_renderizadores_pil_orfaos_foram_removidos():
-    """Eram três implementações paralelas do mesmo layout; duas nunca eram chamadas."""
+def testar_codigo_orfao_foi_removido():
+    """Eram três implementações paralelas do mesmo layout, mais o parse posicional."""
     for morto in ("timeline_exportar_imagem", "timeline_exportar_imagem_vertical",
-                  "timeline_ver_tabela", "MOV_CORES"):
+                  "timeline_ver_tabela", "MOV_CORES", "data_to_rows", "rows_to_data",
+                  "campos_do_evento", "selecionar_evento"):
         assert not hasattr(timeline, morto), f"{morto} deveria ter sido removido"

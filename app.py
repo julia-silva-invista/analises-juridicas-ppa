@@ -30,18 +30,8 @@ from timeline_societaria import (
     timeline_salvar_imagem,
     timeline_gerar_word,
     timeline_exportar_html,
-    aplicar_cabecalho as timeline_aplicar_cabecalho,
-    aplicar_edicao as timeline_aplicar_edicao,
-    adicionar_evento as timeline_adicionar_evento,
     ordenar_eventos as timeline_ordenar_eventos,
-    remover_evento as timeline_remover_evento,
-    selecionar_evento as timeline_selecionar_evento,
-    COLUNAS_ADMINISTRADORES,
-    COLUNAS_CESSOES,
-    COLUNAS_FILIAIS,
-    COLUNAS_IMOVEIS,
-    COLUNAS_SOCIOS,
-    MOVIMENTOS_IMOVEL,
+    timeline_aplicar_html,
 )
 
 os.makedirs("resultados", exist_ok=True)
@@ -165,10 +155,16 @@ async (_captura) => {
                 font-family: Arial, Helvetica, sans-serif !important; }
             .tl2-export-clone .tl2-btn,
             .tl2-export-clone .tl2-modal,
+            .tl2-export-clone .tl2-add,
+            .tl2-export-clone .tl2-rm,
             .tl2-export-clone .tl2-toggle { display: none !important; }
         `;
 
         const clone = shell.cloneNode(true);
+        // O modo de edição não pode vazar para a imagem: sai o contorno tracejado
+        // junto com os atributos, como faz o Painel de Deals ao exportar.
+        clone.querySelectorAll("[contenteditable]").forEach((n) => n.removeAttribute("contenteditable"));
+        clone.classList.remove("tl2-edit-mode");
         clone.removeAttribute("id");
         clone.classList.add("tl2-export-clone");
         clone.querySelectorAll("#tl2-export-style, .tl2-btn, .tl2-modal, .tl2-toggle")
@@ -224,6 +220,128 @@ async (_captura) => {
     }
 }
 """
+
+
+def _editar_no_html_js(seletor_raiz: str) -> str:
+    """Liga/desliga a edição no próprio painel e serializa o resultado.
+
+    Mesmo modelo do Painel de Deals: `contenteditable` nos campos marcados com
+    data-tl-campo, contorno tracejado, e o botão troca de rótulo. Ao concluir, percorre
+    a árvore e devolve JSON — os itens são lidos por POSIÇÃO dentro de cada bloco, então
+    acrescentar e remover linha funciona sem renumerar nada.
+
+    Recebe (modo_ligado, ponte) e devolve [novo_modo, json] — evento único com js= e fn=,
+    porque `.then` encadeado após evento só-JS não dispara no Gradio 5.29.1 do Space.
+    """
+    return """
+async (ligado, _ponte) => {
+    const raiz = document.querySelector("__RAIZ__");
+    if (!raiz) return [String(ligado), ""];
+
+    const editaveis = () => raiz.querySelectorAll("[data-tl-campo]");
+    // textContent e nao innerText: innerText aplica o text-transform do CSS, e o
+    // cabecalho da coluna e maiusculo por estilo — editar "7a Alteracao" ali gravaria
+    // "7A ALTERACAO" no JSON.
+    const texto = (el) => (el.textContent || "").replace(/\\s+/g, " ").trim();
+
+    if (String(ligado) !== "1") {
+        raiz.classList.add("tl2-edit-mode");
+        editaveis().forEach((el) => { el.contentEditable = "true"; });
+
+        if (!raiz.dataset.tlLigado) {
+            raiz.dataset.tlLigado = "1";
+            raiz.addEventListener("click", (ev) => {
+                const alvo = ev.target;
+                if (!alvo || !alvo.matches) return;
+                if (alvo.matches("[data-tl-remover]")) {
+                    ev.preventDefault();
+                    const linha = alvo.closest("[data-tl-item]");
+                    if (linha) linha.remove();
+                } else if (alvo.matches("[data-tl-adicionar-ato]")) {
+                    ev.preventDefault();
+                    const trilha = raiz.querySelector(".tl2-track");
+                    const modelo = raiz.querySelector("[data-tl-evento]");
+                    if (!trilha || !modelo) return;
+                    const novo = modelo.cloneNode(true);
+                    novo.setAttribute("data-tl-extra", "{}");
+                    novo.querySelectorAll("[data-tl-item]").forEach((n) => n.remove());
+                    novo.querySelectorAll("[data-tl-campo]").forEach((n) => { n.textContent = ""; });
+                    // Cada modal tem id proprio; sem renumerar, dois atos abririam o mesmo.
+                    const sufixo = "novo-" + Date.now();
+                    const marca = novo.querySelector(".tl2-toggle");
+                    if (marca) marca.id = "tl2-det-" + sufixo;
+                    novo.querySelectorAll("label[for^='tl2-det-']").forEach(
+                        (l) => l.setAttribute("for", "tl2-det-" + sufixo));
+                    trilha.appendChild(novo);
+                    trilha.style.setProperty("--tl2-cols", trilha.children.length);
+                } else if (alvo.matches("[data-tl-remover-ato]")) {
+                    ev.preventDefault();
+                    const coluna = alvo.closest("[data-tl-evento]");
+                    const trilha = coluna && coluna.parentElement;
+                    if (coluna) coluna.remove();
+                    if (trilha) trilha.style.setProperty("--tl2-cols", trilha.children.length);
+                } else if (alvo.matches("[data-tl-adicionar]")) {
+                    ev.preventDefault();
+                    const bloco = alvo.closest("[data-tl-lista]");
+                    const lista = bloco && bloco.querySelector(".tl2-list");
+                    if (!lista) return;
+                    let modelo = [];
+                    try { modelo = JSON.parse(bloco.dataset.tlModelo || "[]"); } catch (e) { return; }
+                    const celulas = modelo.map(([campo, rotulo]) =>
+                        '<span class="tl2-celula" data-tl-campo="' + campo +
+                        '" data-tl-rotulo="' + rotulo + '" contenteditable="true"></span>').join("");
+                    const li = document.createElement("li");
+                    li.setAttribute("data-tl-item", "");
+                    li.innerHTML = celulas +
+                        '<button type="button" class="tl2-rm" data-tl-remover title="Remover">×</button>';
+                    lista.appendChild(li);
+                    const primeiro = li.querySelector("[data-tl-campo]");
+                    if (primeiro) primeiro.focus();
+                }
+            });
+        }
+        return ["1", ""];
+    }
+
+    // Concluindo: lê a árvore inteira do DOM e devolve para o servidor.
+    const arvore = {eventos: []};
+    const cabecalho = raiz.querySelector('[data-tl-campo="empresa"]');
+    if (cabecalho) arvore.empresa = texto(cabecalho);
+    const cnpj = raiz.querySelector('[data-tl-campo="cnpj"]');
+    if (cnpj) arvore.cnpj = texto(cnpj);
+
+    raiz.querySelectorAll("[data-tl-evento]").forEach((col) => {
+        const evento = {};
+        try { evento._extra = JSON.parse(col.getAttribute("data-tl-extra") || "{}"); }
+        catch (e) { evento._extra = {}; }
+        col.querySelectorAll("[data-tl-campo]").forEach((el) => {
+            // Campo de item de lista é lido no laço de baixo, não aqui.
+            if (el.closest("[data-tl-lista]")) return;
+            const nome = el.getAttribute("data-tl-campo");
+            if (nome && !(nome in evento)) evento[nome] = texto(el);
+        });
+        col.querySelectorAll("[data-tl-lista]").forEach((bloco) => {
+            const chave = bloco.getAttribute("data-tl-lista");
+            evento[chave] = [...bloco.querySelectorAll("[data-tl-item]")].map((linha) => {
+                const item = {};
+                linha.querySelectorAll("[data-tl-campo]").forEach((cel) => {
+                    item[cel.getAttribute("data-tl-campo")] = texto(cel);
+                });
+                return item;
+            });
+        });
+        arvore.eventos.push(evento);
+    });
+
+    raiz.classList.remove("tl2-edit-mode");
+    editaveis().forEach((el) => { el.contentEditable = "false"; });
+    return ["0", JSON.stringify(arvore)];
+}
+""".replace("__RAIZ__", seletor_raiz)
+
+
+_EDITAR_TIMELINE_JS = _editar_no_html_js("#timeline-export-area")
+_EDITAR_CRONOLOGIA_JS = _editar_no_html_js("#cronologia-prescricao-area")
 
 with gr.Blocks(
     title="Análises Jurídicas — Invista",
@@ -592,71 +710,16 @@ with gr.Blocks(
             )
             tl_timeline_html = gr.HTML()
             tl_data_state = gr.State({})
-            tl_evento_idx = gr.State(0)
 
-            # Edição por ato: campos rotulados, uma tabelinha por lista do JSON.
-            # A grade de 12 colunas anterior exigia decorar uma sintaxe ("Nome | 50%;
-            # Outro | 40%", "Cedente > Cessionário | % | valor") e perdia campos no
-            # caminho de volta.
-            with gr.Accordion("Editar timeline", open=False, elem_classes=["mat-accordion"]):
-                with gr.Row():
-                    tl_empresa = gr.Textbox(label="Empresa", scale=3)
-                    tl_cnpj = gr.Textbox(label="CNPJ", scale=2)
+            # Edição no próprio painel, como no Painel de Deals: o botão liga
+            # contenteditable nos campos e "Concluir edição" devolve a árvore.
+            tl_editando = gr.Textbox(value="0", visible=False)
+            tl_edicao_ponte = gr.Textbox(visible=False)
 
-                tl_evento_sel = gr.Dropdown(
-                    label="Ato em edição", choices=[], value=None,
-                    interactive=True, filterable=False,
-                )
-                with gr.Row():
-                    tl_add_evento_btn = gr.Button("+ Adicionar ato", variant="secondary")
-                    tl_del_evento_btn = gr.Button("Remover ato", variant="secondary")
-                    tl_ordenar_btn = gr.Button("Ordenar por data", variant="secondary")
+            with gr.Row():
+                tl_editar_btn = gr.Button("Editar timeline", variant="secondary")
+                tl_ordenar_btn = gr.Button("Ordenar atos por data", variant="secondary")
 
-                with gr.Row():
-                    tl_f_data = gr.Textbox(label="Data", placeholder="DD/MM/AAAA", scale=1)
-                    tl_f_ato = gr.Textbox(label="Ato / ACS", placeholder="Ex: 2ª Alteração", scale=2)
-                    tl_f_arquivamento = gr.Textbox(label="Nº de arquivamento", scale=1)
-                tl_f_detalhamento = gr.Textbox(label="Detalhamento", lines=3)
-                with gr.Row():
-                    tl_f_cap_ant = gr.Textbox(label="Capital social anterior")
-                    tl_f_cap_apos = gr.Textbox(label="Capital social após o ato")
-                with gr.Row():
-                    tl_f_sede = gr.Textbox(label="Sede após o ato")
-                    tl_f_objeto = gr.Textbox(label="Objeto social após o ato")
-                tl_f_fonte = gr.Textbox(label="Fonte")
-
-                tl_t_socios = gr.Dataframe(
-                    headers=COLUNAS_SOCIOS, col_count=(len(COLUNAS_SOCIOS), "fixed"),
-                    row_count=(1, "dynamic"), interactive=True, wrap=True,
-                    label="Sócios após o ato", elem_classes=["tl-editor-table"],
-                )
-                tl_t_admin = gr.Dataframe(
-                    headers=COLUNAS_ADMINISTRADORES, col_count=(len(COLUNAS_ADMINISTRADORES), "fixed"),
-                    row_count=(1, "dynamic"), interactive=True, wrap=True,
-                    label="Administração após o ato", elem_classes=["tl-editor-table"],
-                )
-                tl_t_cessoes = gr.Dataframe(
-                    headers=COLUNAS_CESSOES, col_count=(len(COLUNAS_CESSOES), "fixed"),
-                    row_count=(1, "dynamic"), interactive=True, wrap=True,
-                    label="Cessões de quotas", elem_classes=["tl-editor-table"],
-                )
-                tl_t_imoveis = gr.Dataframe(
-                    headers=COLUNAS_IMOVEIS, col_count=(len(COLUNAS_IMOVEIS), "fixed"),
-                    row_count=(1, "dynamic"), interactive=True, wrap=True,
-                    label=f"Imóveis (movimento: {' · '.join(MOVIMENTOS_IMOVEL)})",
-                    elem_classes=["tl-editor-table"],
-                )
-                tl_t_filiais = gr.Dataframe(
-                    headers=COLUNAS_FILIAIS, col_count=(len(COLUNAS_FILIAIS), "fixed"),
-                    row_count=(1, "dynamic"), interactive=True, wrap=True,
-                    label="Filiais existentes após o ato", elem_classes=["tl-editor-table"],
-                )
-                tl_t_filiais_novas = gr.Dataframe(
-                    headers=COLUNAS_FILIAIS, col_count=(len(COLUNAS_FILIAIS), "fixed"),
-                    row_count=(1, "dynamic"), interactive=True, wrap=True,
-                    label="Filiais abertas NESTE ato (é o que gera o card 'Filial aberta')",
-                    elem_classes=["tl-editor-table"],
-                )
 
             with gr.Row():
                 tl_exportar_html_btn = gr.DownloadButton("Exportar HTML", variant="secondary")
@@ -854,68 +917,34 @@ with gr.Blocks(
     )
 
     # Timeline Societária
-    # Campos do editor, na MESMA ordem que timeline_societaria espera
-    # (CAMPOS_TEXTO_DO_EVENTO seguido de LISTAS_DO_EVENTO).
-    tl_campos_evento = [
-        tl_f_data, tl_f_ato, tl_f_arquivamento, tl_f_detalhamento,
-        tl_f_cap_ant, tl_f_cap_apos, tl_f_sede, tl_f_objeto, tl_f_fonte,
-        tl_t_socios, tl_t_admin, tl_t_cessoes, tl_t_imoveis,
-        tl_t_filiais, tl_t_filiais_novas,
-    ]
-
     tl_analisar_btn.click(
         fn=timeline_analisar,
         inputs=[tl_arquivos],
-        outputs=[tl_status, tl_timeline_html, tl_evento_sel, tl_data_state],
+        outputs=[tl_status, tl_timeline_html, tl_data_state],
         concurrency_limit=2,
-    ).then(
-        fn=timeline_selecionar_evento,
-        inputs=[tl_data_state, tl_evento_idx],
-        outputs=[tl_evento_idx] + tl_campos_evento,
-    ).then(
-        fn=lambda data: (data.get("empresa", ""), data.get("cnpj", "")),
+    )
+
+    # Edição no próprio painel. Evento único com js= + fn=: o JS liga/desliga o
+    # contenteditable e, ao concluir, devolve a árvore serializada, que o Python aplica
+    # sobre o JSON e redesenha.
+    tl_editar_btn.click(
+        fn=timeline_aplicar_html,
+        # Só campos simples entram aqui: o JS recebe os inputs e o que ele devolve vira
+        # os argumentos do Python, então um gr.State atravessando o JavaScript seria a
+        # parte frágil da ponte. O painel já carrega o schema inteiro (inclusive o que
+        # não desenha, em data-tl-extra), então o estado anterior não é necessário.
+        inputs=[tl_editando, tl_edicao_ponte],
+        outputs=[tl_editando, tl_edicao_ponte, tl_data_state, tl_timeline_html, tl_editar_btn],
+        js=_EDITAR_TIMELINE_JS,
+    )
+
+    tl_ordenar_btn.click(
+        fn=timeline_ordenar_eventos,
         inputs=[tl_data_state],
-        outputs=[tl_empresa, tl_cnpj],
+        outputs=[tl_data_state, tl_timeline_html],
     )
 
-    # Preview ao vivo: cada campo grava no ato selecionado e redesenha o HTML na hora,
-    # em vez de só ao fechar um modo de edição.
-    #
-    # `.input` e não `.change`: change dispara também quando o Gradio preenche o campo
-    # por conta própria. Ao trocar de ato, os 15 campos seriam reescritos — e, se algum
-    # deles rodasse antes de tl_evento_idx chegar ao valor novo, gravaria os dados do
-    # ato recém-aberto por cima do anterior.
-    for _campo in tl_campos_evento:
-        _campo.input(
-            fn=timeline_aplicar_edicao,
-            inputs=[tl_data_state, tl_evento_idx] + tl_campos_evento,
-            outputs=[tl_data_state, tl_timeline_html, tl_evento_sel],
-            show_progress="hidden",
-        )
 
-    for _campo in (tl_empresa, tl_cnpj):
-        _campo.input(
-            fn=timeline_aplicar_cabecalho,
-            inputs=[tl_data_state, tl_empresa, tl_cnpj],
-            outputs=[tl_data_state, tl_timeline_html],
-            show_progress="hidden",
-        )
-
-    tl_evento_sel.select(
-        fn=lambda data, evt: timeline_selecionar_evento(data, evt.index),
-        inputs=[tl_data_state, tl_evento_sel],
-        outputs=[tl_evento_idx] + tl_campos_evento,
-    )
-
-    for _botao, _fn in ((tl_add_evento_btn, timeline_adicionar_evento),
-                        (tl_del_evento_btn, timeline_remover_evento),
-                        (tl_ordenar_btn, timeline_ordenar_eventos)):
-        _entradas = [tl_data_state] if _fn is timeline_adicionar_evento else [tl_data_state, tl_evento_idx]
-        _botao.click(
-            fn=_fn,
-            inputs=_entradas,
-            outputs=[tl_data_state, tl_timeline_html, tl_evento_sel, tl_evento_idx] + tl_campos_evento,
-        )
     # Um único evento: o JS roda antes e o que ele devolve vira o argumento do Python.
     tl_exportar_img_btn.click(
         fn=timeline_salvar_imagem,
