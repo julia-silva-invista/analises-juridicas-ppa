@@ -45,14 +45,17 @@ except ImportError:
     sys.modules["google.genai"] = genai_mod
     sys.modules["google.genai.types"] = genai_types_mod
 
-if "utils" not in sys.modules:
-    utils_mod = pytypes.ModuleType("utils")
-    utils_mod._retry = lambda fn, tentativas=3, espera_base=10: fn()
-    utils_mod._erro_gemini_permite_failover = lambda exc: False
-    sys.modules["utils"] = utils_mod
-
 import checklist_rj as cr  # noqa: E402
 import dossie_ppa as dp  # noqa: E402
+
+# Aqui havia um dublê que trocava `utils` inteiro em sys.modules. Como este é o primeiro
+# arquivo coletado, o dublê sobrevivia à sessão e todo teste seguinte importava ele — daí
+# os ImportError em cascata na suíte completa. Neutralizar o retry no próprio consumidor
+# tem o mesmo efeito (nenhuma espera entre tentativas) sem contaminar ninguém.
+for _consumidor in (cr, dp):
+    _consumidor._retry = lambda fn, tentativas=3, espera_base=10: fn()
+    _consumidor._erro_gemini_permite_failover = lambda exc: False
+
 from docx import Document  # noqa: E402
 
 

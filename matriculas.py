@@ -579,7 +579,14 @@ def _mat_detectar_alertas(resultado: dict, devedores: list,
     """
     Retorna set com alertas detectados: 'amarelo' e/ou 'vermelho'.
     - amarelo: transmissão envolve devedor ou pessoa do grupo econômico
-    - vermelho: transmissão após data de ajuizamento
+    - vermelho: alienação PELO DEVEDOR depois do ajuizamento
+
+    O vermelho sinaliza fraude à execução, e fraude à execução pressupõe alienação
+    feita PELO EXECUTADO (CPC/2015, art. 792). Antes bastava a data ser posterior ao
+    ajuizamento, o que pintava de vermelho transmissão de pessoa do grupo e até de
+    terceiro sem nenhuma relação com a execução — nenhuma das duas caracteriza a fraude.
+    Transmissão de pessoa do grupo continua merecendo atenção, e por isso segue no
+    amarelo; mas amarelo e vermelho não são a mesma tese.
     """
     alertas = set()
     todas_partes = list(devedores or []) + list(relacionados or [])
@@ -605,7 +612,10 @@ def _mat_detectar_alertas(resultado: dict, devedores: list,
         ):
             alertas.add("amarelo")
 
-        if data_ajuizamento and data_str:
+        # Só quem TRANSMITIU importa aqui, e só se for devedor: quem adquire não
+        # frauda a própria execução, e o grupo não é parte dela.
+        alienou_devedor = bool(devedores) and _mat_parte_envolvida(devedores, de_doc, de_nome)
+        if alienou_devedor and data_ajuizamento and data_str:
             try:
                 p = data_str.strip().split("/")
                 dt = date(int(p[2]), int(p[1]), int(p[0]))

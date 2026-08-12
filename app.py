@@ -636,7 +636,8 @@ with gr.Blocks(
 
                 gr.Markdown(
                     "🟡 **Amarelo claro** — transmissão envolvendo devedor ou pessoa do grupo  \n"
-                    "🔴 **Vermelho claro** — transmissão após data de ajuizamento  \n"
+                    "🔴 **Vermelho claro** — alienação **pelo devedor** após o ajuizamento "
+                    "(fraude à execução)  \n"
                     "_Basta o nome: sem CPF/CNPJ, o cruzamento é feito pelo nome._"
                 )
 

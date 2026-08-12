@@ -395,7 +395,7 @@ body,
     background: linear-gradient(270deg, #FCFCFA 0%, #FCFCFA 55%, rgba(252, 252, 250, 0) 100%) !important;
 }
 
-.tab-nav button {
+.tab-nav button[role="tab"] {
     font-size: 12px !important;
     font-weight: 720 !important;
     color: rgba(55, 58, 54, 0.62) !important;
@@ -411,7 +411,7 @@ body,
     white-space: nowrap !important;
 }
 
-.tab-nav button:hover {
+.tab-nav button[role="tab"]:hover {
     color: var(--invista-charcoal) !important;
     background: rgba(55, 58, 54, 0.045) !important;
 }
@@ -616,26 +616,46 @@ body,
     color: #1F211F !important;
 }
 
-.word-download-btn,
-.word-download-btn button,
-.gradio-container .word-download-btn button {
-    background: var(--invista-charcoal) !important;
-    color: #FFFFFF !important;
-    border: 1px solid rgba(55, 58, 54, 0.12) !important;
+/* Botões de ação secundária — exportar, gerar, editar, baixar.
+   O Gradio renderiza a variante como CLASSE (`button.secondary`), não como atributo:
+   a regra acima, escrita como [variant="secondary"], nunca casou, e por isso esses
+   botões apareciam como texto solto sobre o fundo. Aqui eles ganham corpo com um
+   contorno leve e sombra rasa, sem competir com o laranja das ações principais.
+   Fica ANTES das regras da .qa-section de propósito: lá os botões continuam laranja,
+   e a especificidade das duas é a mesma — quem vem depois vence. */
+.gradio-container button.secondary,
+.gradio-container button.word-download-btn {
+    background: #FFFFFF !important;
+    color: var(--invista-charcoal) !important;
+    border: 1px solid rgba(55, 58, 54, 0.14) !important;
     border-radius: 999px !important;
-    padding: 10px 22px !important;
+    padding: 9px 20px !important;
     font-size: 11px !important;
-    font-weight: 760 !important;
-    letter-spacing: 0.11em !important;
+    font-weight: 740 !important;
+    letter-spacing: 0.08em !important;
     text-transform: uppercase !important;
-    box-shadow: 0 9px 22px rgba(55, 58, 54, 0.12) !important;
+    box-shadow: 0 1px 2px rgba(55, 58, 54, 0.06),
+                0 2px 8px rgba(55, 58, 54, 0.05) !important;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease !important;
 }
 
-.word-download-btn:hover,
-.word-download-btn button:hover,
-.gradio-container .word-download-btn button:hover {
-    background: #1F211F !important;
+.gradio-container button.secondary:hover,
+.gradio-container button.word-download-btn:hover {
+    background: #FCFCFB !important;
+    border-color: rgba(55, 58, 54, 0.28) !important;
+    box-shadow: 0 2px 4px rgba(55, 58, 54, 0.08),
+                0 6px 16px rgba(55, 58, 54, 0.09) !important;
 }
+
+.gradio-container button.secondary:active,
+.gradio-container button.word-download-btn:active {
+    box-shadow: inset 0 1px 3px rgba(55, 58, 54, 0.12) !important;
+}
+
+/* A pílula escura que existia aqui nunca chegava a aparecer: a regra dos cabeçalhos de
+   aba, mais específica, pintava o fundo de transparente por cima. Com os seletores das
+   abas restritos a [role="tab"], os botões de ação passaram a seguir um único estilo —
+   o contorno sutil definido acima —, em vez de metade pílula escura e metade texto. */
 
 /* Arquivo Word só aparece depois de gerado */
 .word-file-output {
@@ -945,17 +965,18 @@ body,
 }
 
 /* Linha laranja das subabas: remove a linha inferior e mantém só o chip arredondado */
-.tab-nav button,
-.tab-nav button.selected,
-.tabs button,
-.tabs button.selected,
+/* Só o CABEÇALHO da aba. ".tabs button" pegava todo botão dentro do painel e zerava
+   borda e sombra dos botões de ação — era o que deixava "Exportar HTML", "Dossiê
+   Prévia" e companhia como texto solto. */
+.tab-nav button[role="tab"],
+.tab-nav button[role="tab"].selected,
+.tabs > .tab-nav button[role="tab"],
 .gradio-container button[role="tab"],
 .gradio-container button[role="tab"][aria-selected="true"] {
     border-bottom: 0 !important;
 }
 
-.tab-nav button.selected::after,
-.tabs button.selected::after,
+.tab-nav button[role="tab"].selected::after,
 .gradio-container button[role="tab"]::after {
     display: none !important;
     content: none !important;
@@ -1783,17 +1804,19 @@ button[title*="copy"] {
     border-bottom: 0 !important;
 }
 
-.tab-nav button,
-.tab-nav button.selected,
-.tabs button,
-.tabs button.selected,
+/* Só o CABEÇALHO da aba. ".tabs button" pegava todo botão dentro do painel e zerava
+   borda e sombra dos botões de ação — era o que deixava "Exportar HTML", "Dossiê
+   Prévia" e companhia como texto solto. */
+.tab-nav button[role="tab"],
+.tab-nav button[role="tab"].selected,
+.tabs > .tab-nav button[role="tab"],
 .gradio-container button[role="tab"],
 .gradio-container button[role="tab"][aria-selected="true"] {
     border-bottom: 0 !important;
     box-shadow: none !important;
 }
 
-.tab-nav button.selected,
+.tab-nav button[role="tab"].selected,
 .gradio-container button[role="tab"][aria-selected="true"] {
     background: rgba(220, 68, 5, 0.085) !important;
     box-shadow: inset 0 0 0 1px rgba(220, 68, 5, 0.12) !important;

@@ -22,19 +22,13 @@ sys.modules.setdefault("google", google_mod)
 sys.modules.setdefault("google.genai", genai_mod)
 sys.modules.setdefault("google.genai.types", genai_types_mod)
 
-utils_stub = pytypes.ModuleType("utils")
-utils_stub._get_gemini_clients = lambda: []
-utils_stub._erro_gemini_permite_failover = lambda exc: False
-utils_stub._paginas_digitalizadas_pdf = lambda path: []
-utils_stub._retry = lambda fn, **kwargs: fn()
-utils_stub._responder_pergunta_generica = lambda *args, **kwargs: ""
-utils_stub.GEMINI_MODEL_EXTRACAO = "gemini-extracao-teste"
-utils_stub.GEMINI_MODEL_OCR = "gemini-ocr-teste"
-utils_stub.GEMINI_MODEL_RELATORIO = "gemini-relatorio-teste"
-utils_stub.GEMINI_MODEL_QA = "gemini-qa-teste"
-sys.modules["utils"] = utils_stub
-
 import matriculas as mat  # noqa: E402
+
+# Havia aqui um dublê de `utils` posto em sys.modules; ele vazava para os arquivos
+# coletados depois, que quebravam ao importar de `utils` algo que o dublê não tinha.
+# Nenhum teste deste arquivo chama a API — desligar o retry no consumidor basta.
+mat._retry = lambda fn, **kwargs: fn()
+mat._get_gemini_clients = lambda: []
 
 
 def testar_modelos_por_etapa():
@@ -201,3 +195,72 @@ def testar_campos_achatados_viram_dois_blocos():
     assert devedores == [("Devedor 1", "111"), ("Devedor 2", "222")]
     assert grupo == [("Grupo 1", "333"), ("Grupo 2", "444")]
     assert mat._mat_pares_dos_campos(()) == ([], [])
+
+
+# ── Vermelho = fraude à execução, e ela pressupõe alienação PELO DEVEDOR ─────
+# Antes bastava a data ser posterior ao ajuizamento: transmissão de pessoa do grupo — e
+# até de terceiro sem relação nenhuma — saía pintada de vermelho. Nenhuma das duas
+# caracteriza fraude à execução (CPC/2015, art. 792).
+
+AJUIZAMENTO = date(2020, 1, 1)
+
+
+def _alertas(transmissao, devedores=(), grupo=()):
+    return mat._mat_detectar_alertas(
+        {"transmissoes_estruturadas": [dict(
+            {"de_nome": "", "para_nome": "", "de_doc": "", "para_doc": "", "data": ""},
+            **transmissao)]},
+        mat._mat_parse_parties(list(devedores)),
+        mat._mat_parse_parties(list(grupo)),
+        AJUIZAMENTO,
+    )
+
+
+def testar_devedor_aliena_depois_do_ajuizamento_e_vermelho():
+    alertas = _alertas({"de_nome": "Agropecuária Teste Ltda", "para_nome": "Comprador X",
+                        "data": "10/05/2021"},
+                       devedores=[("Agropecuária Teste Ltda", "")])
+    assert alertas == {"amarelo", "vermelho"}
+
+
+def testar_pessoa_do_grupo_alienando_nao_e_fraude_a_execucao():
+    """Fica no amarelo: merece atenção, mas não é a mesma tese."""
+    alertas = _alertas({"de_nome": "Holdings XYZ S/A", "para_nome": "Comprador X",
+                        "data": "10/05/2021"},
+                       devedores=[("Agropecuária Teste Ltda", "")],
+                       grupo=[("Holdings XYZ S/A", "")])
+    assert alertas == {"amarelo"}, "grupo não é parte da execução"
+
+
+def testar_terceiro_alienando_nao_gera_alerta_nenhum():
+    alertas = _alertas({"de_nome": "Fulano Sem Relação", "para_nome": "Beltrano",
+                        "data": "10/05/2021"},
+                       devedores=[("Agropecuária Teste Ltda", "")])
+    assert alertas == set()
+
+
+def testar_devedor_ADQUIRINDO_depois_do_ajuizamento_nao_e_vermelho():
+    """Quem compra não frauda a própria execução — o bem entra no patrimônio dele."""
+    alertas = _alertas({"de_nome": "Vendedor Qualquer", "para_nome": "Agropecuária Teste Ltda",
+                        "data": "10/05/2021"},
+                       devedores=[("Agropecuária Teste Ltda", "")])
+    assert alertas == {"amarelo"}
+
+
+def testar_alienacao_do_devedor_ANTES_do_ajuizamento_nao_e_vermelho():
+    alertas = _alertas({"de_nome": "Agropecuária Teste Ltda", "para_nome": "Comprador X",
+                        "data": "10/05/2019"},
+                       devedores=[("Agropecuária Teste Ltda", "")])
+    assert alertas == {"amarelo"}
+
+
+def testar_sem_devedor_informado_nao_ha_vermelho():
+    """Sem saber quem é o executado, não dá para atribuir a alienação a ele."""
+    alertas = _alertas({"de_nome": "Alguém", "para_nome": "Outro", "data": "10/05/2021"})
+    assert "vermelho" not in alertas
+
+
+def testar_devedor_casado_por_documento_tambem_dispara():
+    alertas = _alertas({"de_doc": "12345678000190", "de_nome": "", "data": "10/05/2021"},
+                       devedores=[("", "12.345.678/0001-90")])
+    assert "vermelho" in alertas
