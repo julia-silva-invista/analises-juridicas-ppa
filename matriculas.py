@@ -514,48 +514,95 @@ def _mat_resumo_garantias(onus_list: list) -> str:
 
 # ── Parsing de devedores/relacionados ─────────────────────────────────────────
 
-def _mat_parse_parties(texto: str) -> set:
+# Nome curto casa com qualquer coisa por conter-se em outro nome ("Ana" dentro de
+# "Ana Paula"). Abaixo deste tamanho, só igualdade exata conta.
+_MIN_NOME_PARA_CONTER = 8
+
+
+def _mat_chave_nome(nome) -> str:
+    """Normaliza um nome para comparação: sem acento, sem pontuação, sem caixa."""
+    texto = unicodedata.normalize("NFKD", str(nome or ""))
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    texto = re.sub(r"[^\w\s]", " ", texto)
+    return re.sub(r"\s+", " ", texto).strip().casefold()
+
+
+def _mat_nomes_casam(chave_a: str, chave_b: str) -> bool:
+    """Igualdade, ou um nome contido no outro como sequência inteira de palavras.
+
+    A conteção nos dois sentidos cobre o caso real: a matrícula traz "Agropecuária
+    Teste Ltda - EPP" e a usuária digitou "Agropecuária Teste Ltda", ou o contrário.
     """
-    Parseia texto com entradas 'CPF/CNPJ — Nome' (uma por linha).
-    Retorna set de documentos normalizados (apenas dígitos).
+    if not chave_a or not chave_b:
+        return False
+    if chave_a == chave_b:
+        return True
+    menor, maior = sorted((chave_a, chave_b), key=len)
+    if len(menor) < _MIN_NOME_PARA_CONTER:
+        return False
+    return re.search(rf"(?:^|\s){re.escape(menor)}(?:\s|$)", maior) is not None
+
+
+def _mat_parse_parties(pares) -> list:
+    """Normaliza os pares (nome, CPF/CNPJ) vindos da interface.
+
+    Antes esta função lia texto livre e devolvia SÓ um set de documentos — quem
+    digitasse apenas o nome não gerava alerta nenhum, em silêncio. Agora o nome é
+    preservado e vira critério de busca por si.
     """
-    docs = set()
-    if not texto or not texto.strip():
-        return docs
-    for linha in texto.strip().split("\n"):
-        linha = linha.strip()
-        if not linha:
+    partes = []
+    for nome, doc in pares or []:
+        doc_norm = re.sub(r"[^\d]", "", str(doc or ""))
+        if len(doc_norm) not in (11, 14):  # nem CPF nem CNPJ
+            doc_norm = ""
+        chave = _mat_chave_nome(nome)
+        if not doc_norm and not chave:
             continue
-        # Extrai qualquer sequência que pareça CPF ou CNPJ
-        for m in re.finditer(r"[\d]{3}[\d.\-/]{3,}[\d]", linha):
-            doc_norm = re.sub(r"[^\d]", "", m.group())
-            if len(doc_norm) in (11, 14):  # CPF ou CNPJ
-                docs.add(doc_norm)
-    return docs
+        partes.append({"nome": str(nome or "").strip(), "doc": doc_norm, "chave": chave})
+    return partes
 
 
-def _mat_detectar_alertas(resultado: dict, devedores_docs: set,
-                           relacionados_docs: set, data_ajuizamento: date | None) -> set:
+def _mat_parte_envolvida(partes: list, doc: str, nome: str) -> bool:
+    """Casa por documento quando ele existe; senão, cai para o nome."""
+    doc_norm = re.sub(r"[^\d]", "", str(doc or ""))
+    chave = _mat_chave_nome(nome)
+    for parte in partes:
+        if parte["doc"] and doc_norm and parte["doc"] == doc_norm:
+            return True
+        if _mat_nomes_casam(parte["chave"], chave):
+            return True
+    return False
+
+
+def _mat_detectar_alertas(resultado: dict, devedores: list,
+                           relacionados: list, data_ajuizamento: date | None) -> set:
     """
     Retorna set com alertas detectados: 'amarelo' e/ou 'vermelho'.
     - amarelo: transmissão envolve devedor ou pessoa do grupo econômico
     - vermelho: transmissão após data de ajuizamento
     """
     alertas = set()
-    todos_docs = devedores_docs | relacionados_docs
+    todas_partes = list(devedores or []) + list(relacionados or [])
     transmissoes = resultado.get("transmissoes_estruturadas") or []
 
     for t in transmissoes:
         if isinstance(t, dict):
-            de_doc   = re.sub(r"[^\d]", "", t.get("de_doc") or "")
-            para_doc = re.sub(r"[^\d]", "", t.get("para_doc") or "")
-            data_str = t.get("data") or ""
+            de_doc    = t.get("de_doc") or ""
+            para_doc  = t.get("para_doc") or ""
+            de_nome   = t.get("de_nome") or ""
+            para_nome = t.get("para_nome") or ""
+            data_str  = t.get("data") or ""
         else:
-            de_doc   = re.sub(r"[^\d]", "", getattr(t, "de_doc", "") or "")
-            para_doc = re.sub(r"[^\d]", "", getattr(t, "para_doc", "") or "")
-            data_str = getattr(t, "data", "") or ""
+            de_doc    = getattr(t, "de_doc", "") or ""
+            para_doc  = getattr(t, "para_doc", "") or ""
+            de_nome   = getattr(t, "de_nome", "") or ""
+            para_nome = getattr(t, "para_nome", "") or ""
+            data_str  = getattr(t, "data", "") or ""
 
-        if todos_docs and (de_doc in todos_docs or para_doc in todos_docs):
+        if todas_partes and (
+            _mat_parte_envolvida(todas_partes, de_doc, de_nome)
+            or _mat_parte_envolvida(todas_partes, para_doc, para_nome)
+        ):
             alertas.add("amarelo")
 
         if data_ajuizamento and data_str:
@@ -840,17 +887,35 @@ def _mat_salvar_excel(df, caminho, alert_map: dict):
 
 # ── Função pública ────────────────────────────────────────────────────────────
 
-def mat_gerar_excel(arquivos,
-                    data_ajuizamento: str = "",
-                    devedores_txt: str = "",
-                    relacionados_txt: str = ""):
+def _mat_pares_dos_campos(campos: tuple) -> tuple:
+    """Reagrupa os campos achatados da interface em (devedores, pessoas do grupo).
+
+    A UI manda quatro blocos do mesmo tamanho, nesta ordem: nomes de devedor, docs de
+    devedor, nomes do grupo, docs do grupo. Mesmo padrão da aba de RJ, que achata
+    nomes+docs e reparea do lado Python.
+    """
+    if not campos:
+        return [], []
+    bloco = len(campos) // 4
+    if bloco == 0:
+        return [], []
+    nomes_dev, docs_dev = campos[:bloco], campos[bloco:2 * bloco]
+    nomes_grp, docs_grp = campos[2 * bloco:3 * bloco], campos[3 * bloco:4 * bloco]
+    return (
+        list(zip(nomes_dev, docs_dev)),
+        list(zip(nomes_grp, docs_grp)),
+    )
+
+
+def mat_gerar_excel(arquivos, data_ajuizamento: str = "", *campos):
     if not arquivos:
         yield "Envie ao menos um PDF.", "", None
         return
 
     # Parse dos parâmetros opcionais
-    devedores_docs  = _mat_parse_parties(devedores_txt)
-    relacionados_docs = _mat_parse_parties(relacionados_txt)
+    pares_devedores, pares_grupo = _mat_pares_dos_campos(campos)
+    devedores  = _mat_parse_parties(pares_devedores)
+    relacionados = _mat_parse_parties(pares_grupo)
     data_ajuiz: date | None = None
     if data_ajuizamento and data_ajuizamento.strip():
         try:
@@ -859,7 +924,7 @@ def mat_gerar_excel(arquivos,
         except Exception:
             pass
 
-    usar_alertas = bool(devedores_docs or relacionados_docs or data_ajuiz)
+    usar_alertas = bool(devedores or relacionados or data_ajuiz)
 
     try:
         clients = _mat_get_clients()
@@ -893,10 +958,10 @@ def mat_gerar_excel(arquivos,
         partes = []
         if data_ajuiz:
             partes.append(f"ajuizamento: {data_ajuizamento.strip()}")
-        if devedores_docs:
-            partes.append(f"{len(devedores_docs)} devedor(es)")
-        if relacionados_docs:
-            partes.append(f"{len(relacionados_docs)} pessoa(s) do grupo")
+        if devedores:
+            partes.append(f"{len(devedores)} devedor(es)")
+        if relacionados:
+            partes.append(f"{len(relacionados)} pessoa(s) do grupo")
         log.append(f"   Alertas ativos: {', '.join(partes)}")
     yield "\n".join(log), "", None
 
@@ -938,7 +1003,7 @@ def mat_gerar_excel(arquivos,
         r["principais_garantias_vigentes"] = _mat_resumo_garantias(onus_list)
 
         if usar_alertas:
-            alertas = _mat_detectar_alertas(r, devedores_docs, relacionados_docs, data_ajuiz)
+            alertas = _mat_detectar_alertas(r, devedores, relacionados, data_ajuiz)
             if alertas:
                 alert_map[pos] = alertas
 

@@ -612,6 +612,50 @@ def _creditor_sections(doc, dados: dict):
             contador_recurso += 1
             _render_recurso(doc, rec, contador_recurso, rec.get("processo_vinculado") or "Não identificado")
 
+    _quadro_resumo_lastros(doc, execucoes)
+
+
+# Larguras (cm) do quadro-resumo: somam ~16,9 cm, a área útil do A4 com as margens
+# de _montar_cabecalho_rodape. Lastro e garantia levam a maior parte porque carregam
+# descrição corrida; o Nº da ordem só precisa caber dois dígitos.
+_WS_QUADRO_RESUMO = [1.0, 4.0, 4.6, 4.6, 2.7]
+
+
+def _quadro_resumo_lastros(doc, execucoes: list) -> None:
+    """Fecha o documento com uma visão de uma linha por processo.
+
+    A seção 5 detalha cada execução num quadro próprio, o que é bom para ler caso a
+    caso e ruim para comparar. Este quadro põe lastro, garantia e valor lado a lado.
+    Não custa chamada de IA: os quatro campos já vêm de "execucoes" na mesma extração.
+    """
+    linhas = []
+    for indice, execucao in enumerate(execucoes or [], 1):
+        if not isinstance(execucao, dict):
+            continue
+        valores = [
+            str(execucao.get("numero", "") or ""),
+            str(execucao.get("lastro_fls", "") or ""),
+            str(execucao.get("garantia", "") or ""),
+            str(execucao.get("valor_causa", "") or ""),
+        ]
+        if not any(v.strip() for v in valores):
+            continue
+        linhas.append([str(indice), *valores])
+
+    if not linhas:
+        return
+
+    _spacer(doc)
+    _sec_title(doc, "6. QUADRO-RESUMO — LASTROS E GARANTIAS POR PROCESSO")
+    _para(doc, "Consolidação dos processos analisados, com os respectivos instrumentos "
+               "de lastro e as garantias vinculadas.")
+    _grid_table(
+        doc,
+        ["Nº", "PROCESSO", "LASTRO", "GARANTIA", "VALOR DA CAUSA"],
+        linhas,
+        _WS_QUADRO_RESUMO,
+    )
+
 
 def _build_checklist_creditos(dados: dict, sufixo: str = "") -> str:
     doc = _base_doc()

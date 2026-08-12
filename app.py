@@ -418,6 +418,8 @@ with gr.Blocks(
                 rj_resposta = gr.Textbox(label="Resposta", lines=5, interactive=False)
 
         # ── Tab 3: Análise de Matrículas ─────────────────────────────────────
+        MAT_MAX_PESSOAS = 12
+
         with gr.Tab("Matrículas"):
             with gr.Row():
                 with gr.Column(scale=2):
@@ -444,22 +446,43 @@ with gr.Blocks(
                         lines=1,
                         scale=1,
                     )
-                with gr.Row(elem_classes=["mat-accordion-row"]):
-                    mat_devedores = gr.Textbox(
-                        label="Devedores (um por linha: CPF/CNPJ — Nome)",
-                        placeholder="123.456.789-00 — João da Silva\n12.345.678/0001-90 — Empresa XYZ Ltda",
-                        lines=4,
-                        scale=1,
-                    )
-                    mat_relacionados = gr.Textbox(
-                        label="Pessoas do grupo econômico (um por linha: CPF/CNPJ — Nome)",
-                        placeholder="111.222.333-44 — Maria Oliveira\n55.666.777/0001-88 — Holdings XYZ S/A",
-                        lines=4,
-                        scale=1,
-                    )
+                # Mesmo padrão da aba de RJ: MAX linhas criadas de uma vez, só a
+                # primeira visível, e o botão apenas revela a próxima. Antes eram dois
+                # textareas livres e o NOME era descartado no parse — quem digitasse só
+                # o nome não gerava alerta nenhum, em silêncio.
+                mat_dev_count = gr.State(1)
+                mat_grp_count = gr.State(1)
+                mat_dev_rows, mat_dev_nomes, mat_dev_docs = [], [], []
+                mat_grp_rows, mat_grp_nomes, mat_grp_docs = [], [], []
+
+                def _mat_bloco_pessoas(titulo, placeholder_nome, linhas, nomes, docs):
+                    gr.Markdown(f"**{titulo}**")
+                    for indice in range(MAT_MAX_PESSOAS):
+                        with gr.Row(visible=(indice == 0), elem_classes=["mat-accordion-row"]) as linha:
+                            campo_nome = gr.Textbox(
+                                label="Nome", scale=3, container=True,
+                                placeholder=placeholder_nome,
+                            )
+                            campo_doc = gr.Textbox(
+                                label="CPF/CNPJ", scale=2, container=True,
+                                placeholder="000.000.000-00",
+                            )
+                        linhas.append(linha)
+                        nomes.append(campo_nome)
+                        docs.append(campo_doc)
+
+                _mat_bloco_pessoas("Inserir devedor", "Ex: João da Silva",
+                                   mat_dev_rows, mat_dev_nomes, mat_dev_docs)
+                mat_dev_add_btn = gr.Button("+ Adicionar mais uma pessoa", variant="secondary")
+
+                _mat_bloco_pessoas("Inserir pessoa do grupo", "Ex: Holdings XYZ S/A",
+                                   mat_grp_rows, mat_grp_nomes, mat_grp_docs)
+                mat_grp_add_btn = gr.Button("+ Adicionar mais uma pessoa", variant="secondary")
+
                 gr.Markdown(
                     "🟡 **Amarelo claro** — transmissão envolvendo devedor ou pessoa do grupo  \n"
-                    "🔴 **Vermelho claro** — transmissão após data de ajuizamento"
+                    "🔴 **Vermelho claro** — transmissão após data de ajuizamento  \n"
+                    "_Basta o nome: sem CPF/CNPJ, o cruzamento é feito pelo nome._"
                 )
 
             with gr.Row(elem_classes=["analysis-action-row"]):
@@ -693,9 +716,21 @@ with gr.Blocks(
     )
 
     # Matrículas
+    def _mat_add_pessoa(contagem):
+        contagem = min(int(contagem) + 1, MAT_MAX_PESSOAS)
+        return [contagem] + [gr.update(visible=(k < contagem)) for k in range(MAT_MAX_PESSOAS)]
+
+    mat_dev_add_btn.click(_mat_add_pessoa, inputs=[mat_dev_count],
+                          outputs=[mat_dev_count] + mat_dev_rows)
+    mat_grp_add_btn.click(_mat_add_pessoa, inputs=[mat_grp_count],
+                          outputs=[mat_grp_count] + mat_grp_rows)
+
+    # Ordem achatada esperada por _mat_pares_dos_campos: nomes de devedor, docs de
+    # devedor, nomes do grupo, docs do grupo — quatro blocos do mesmo tamanho.
     mat_gerar_btn.click(
         fn=mat_gerar_excel,
-        inputs=[mat_arquivos, mat_data_ajuizamento, mat_devedores, mat_relacionados],
+        inputs=([mat_arquivos, mat_data_ajuizamento]
+                + mat_dev_nomes + mat_dev_docs + mat_grp_nomes + mat_grp_docs),
         outputs=[mat_log, mat_status, mat_excel],
         concurrency_limit=2,
     )

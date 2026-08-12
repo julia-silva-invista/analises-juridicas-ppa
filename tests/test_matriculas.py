@@ -128,3 +128,76 @@ if __name__ == "__main__":
     testar_formatacao_deterministica()
     testar_moeda_historica_nao_calculada()
     print("5 testes de Matrículas: OK")
+
+
+# ── Partes da execução: nome passou a valer por si ──────────────────────────
+# Antes, o parse devolvia só um set de documentos e o nome digitado era descartado:
+# quem informasse apenas o nome não recebia alerta nenhum, sem aviso.
+
+def _transmissao(**campos) -> dict:
+    base = {"de_nome": "", "para_nome": "", "de_doc": "", "para_doc": "", "data": ""}
+    return {"transmissoes_estruturadas": [{**base, **campos}]}
+
+
+def testar_parse_de_partes_estruturadas():
+    partes = mat._mat_parse_parties([
+        ("João da Silva", "123.456.789-00"),
+        ("Empresa XYZ Ltda", ""),
+        ("", "12.345.678/0001-90"),
+        ("", ""),                       # linha em branco não vira parte
+        ("Fulano", "123"),              # documento inválido não vira documento
+    ])
+    assert [p["doc"] for p in partes] == ["12345678900", "", "12345678000190", ""]
+    assert partes[1]["chave"] == "empresa xyz ltda"
+    assert partes[3]["nome"] == "Fulano" and partes[3]["doc"] == ""
+
+
+def testar_alerta_por_documento_continua_valendo():
+    partes = mat._mat_parse_parties([("João da Silva", "123.456.789-00")])
+    alertas = mat._mat_detectar_alertas(
+        _transmissao(para_doc="12345678900"), partes, [], None
+    )
+    assert alertas == {"amarelo"}
+
+
+def testar_alerta_sai_pelo_nome_quando_nao_ha_documento():
+    partes = mat._mat_parse_parties([("Agropecuária Teste Ltda", "")])
+    # Acento, caixa e pontuação diferentes; e a matrícula traz um sufixo a mais.
+    alertas = mat._mat_detectar_alertas(
+        _transmissao(de_nome="AGROPECUARIA TESTE LTDA - EPP"), partes, [], None
+    )
+    assert alertas == {"amarelo"}
+
+
+def testar_nome_do_grupo_tambem_dispara():
+    grupo = mat._mat_parse_parties([("Holdings XYZ S/A", "")])
+    alertas = mat._mat_detectar_alertas(
+        _transmissao(para_nome="Holdings XYZ S A"), [], grupo, None
+    )
+    assert alertas == {"amarelo"}
+
+
+def testar_nome_curto_nao_casa_por_conteudo():
+    """"Ana" não pode casar com "Ana Paula Rodrigues" — só igualdade exata."""
+    partes = mat._mat_parse_parties([("Ana", "")])
+    assert not mat._mat_detectar_alertas(
+        _transmissao(de_nome="Ana Paula Rodrigues"), partes, [], None
+    )
+    assert mat._mat_detectar_alertas(_transmissao(de_nome="ANA"), partes, [], None)
+
+
+def testar_nome_parecido_de_terceiro_nao_dispara():
+    partes = mat._mat_parse_parties([("Agropecuária Teste Ltda", "")])
+    assert not mat._mat_detectar_alertas(
+        _transmissao(de_nome="Agropecuária Bandeirantes Ltda"), partes, [], None
+    )
+
+
+def testar_campos_achatados_viram_dois_blocos():
+    """A UI manda nomes de devedor, docs de devedor, nomes do grupo, docs do grupo."""
+    campos = ("Devedor 1", "Devedor 2", "111", "222",
+              "Grupo 1", "Grupo 2", "333", "444")
+    devedores, grupo = mat._mat_pares_dos_campos(campos)
+    assert devedores == [("Devedor 1", "111"), ("Devedor 2", "222")]
+    assert grupo == [("Grupo 1", "333"), ("Grupo 2", "444")]
+    assert mat._mat_pares_dos_campos(()) == ([], [])
