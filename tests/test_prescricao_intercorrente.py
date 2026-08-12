@@ -6,10 +6,12 @@ ele erra em silêncio.
 """
 from __future__ import annotations
 
+import json
 import sys
 from datetime import date
 from pathlib import Path
 
+import gradio as gr
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -158,17 +160,37 @@ def testar_sem_marcos_o_painel_orienta_em_vez_de_quebrar():
     assert "timeline-empty" in cronologia.render_html(cronologia.analisar({}))
 
 
-def testar_edicao_reaplica_o_enquadramento_sem_reordenar_o_que_se_digita():
-    linhas = [["02/02/2023", "arquivamento", "Autos ao arquivo", "Mov. 70"],
-              ["10/03/2014", "distribuicao", "Execução distribuída", "fls. 1"],
-              ["", "", "", ""]]
-    dados, html_gerado = cronologia.aplicar_marcos({}, "Nota promissória", linhas)
+def testar_edicao_no_painel_reaplica_o_enquadramento():
+    """O painel é o editor: o JS devolve os marcos em "eventos" e o servidor refaz a
+    conta com o título novo."""
+    arvore = json.dumps({"titulo": "Nota promissória", "eventos": [
+        {"data": "02/02/2023", "tipo": "arquivamento", "descricao": "Arquivo",
+         "referencia": "Mov. 70"},
+        {"data": "10/03/2014", "tipo": "distribuicao", "descricao": "Distribuída",
+         "referencia": "fls. 1"},
+        {"data": "", "tipo": "", "descricao": "", "referencia": ""},
+    ], "_extra": {"vencimento_titulo": "01/01/2013"}}, ensure_ascii=False)
+    _m, _p, dados, html_gerado, _b = cronologia.cronologia_aplicar_html("0", arvore)
 
-    assert [m["data"] for m in dados["marcos"]] == ["02/02/2023", "10/03/2014"], \
-        "a ordem digitada é preservada; quem ordena é o desenho"
+    assert len(dados["marcos"]) == 2, "linha em branco não vira marco"
+    assert dados["vencimento_titulo"] == "01/01/2013", "campo fora do painel sobrevive"
     assert "3 anos" in html_gerado, "o prazo do título novo foi reaplicado"
-    assert html_gerado.index("10/03/2014") < html_gerado.index("02/02/2023"), \
-        "o desenho sai em ordem cronológica"
+    assert html_gerado.index("10/03/2014") < html_gerado.index("02/02/2023"),         "o desenho sai em ordem cronológica"
+
+
+def testar_painel_da_cronologia_e_editavel():
+    html_gerado = cronologia.render_html(cronologia.analisar(DADOS))
+    for marca in ("data-tl-raiz", "data-tl-evento", chr(39)+'data-tl-campo="titulo"'+chr(39),
+                  chr(39)+'data-tl-campo="descricao"'+chr(39), "data-tl-remover-ato",
+                  "+ Adicionar marco"):
+        assert marca.strip(chr(39)) in html_gerado, marca
+
+
+def testar_json_torto_da_cronologia_nao_derruba():
+    for entrada in ("", "{", "[]", None):
+        assert cronologia.aplicar_edicao_html(entrada) is None
+    saida = cronologia.cronologia_aplicar_html("0", "{")
+    assert saida[0] == "0" and isinstance(saida[2], type(gr.skip()))
 
 
 def testar_exportar_html_e_autocontido():

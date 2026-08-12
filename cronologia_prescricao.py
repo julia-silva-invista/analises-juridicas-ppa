@@ -36,7 +36,6 @@ from prescricao_intercorrente import (
 from timeline_societaria import TL2_CSS
 from utils import _retry
 
-COLUNAS_MARCOS = ["Data", "Tipo", "Descrição", "Referência"]
 
 # Cor por natureza do marco, na mesma paleta da timeline societária.
 _CORES_MARCO = {
@@ -209,12 +208,20 @@ def _coluna(item: dict) -> str:
               f'{html.escape(regime["rotulo"])}</strong></div>') if regime else ""
 
     return (
-        '<article class="tl2-col">'
+        '<article class="tl2-col" data-tl-evento data-tl-extra="{}">'
         '<div class="tl2-col-head">'
-        f'<strong>{html.escape(str(marco.get("data") or "—"))}</strong>'
-        f"<span>{html.escape(rotulo)}</span></div>"
+        f'<strong data-tl-campo="data" data-tl-rotulo="Data">'
+        f'{html.escape(str(marco.get("data") or "—"))}</strong>'
+        f'<span data-tl-campo="tipo" data-tl-rotulo="tipo">{html.escape(tipo)}</span>'
+        '<button type="button" class="tl2-rm tl2-rm-ato" data-tl-remover-ato '
+        'title="Remover marco">×</button></div>'
         '<div class="tl2-axis"><span class="tl2-pin"></span></div>'
-        f'<div class="tl2-moves">{"".join(cards)}</div>{rodape}</article>'
+        f'<div class="tl2-moves">{"".join(cards)}</div>'
+        f'<div class="tl2-quadro">Descrição<strong data-tl-campo="descricao" '
+        f'data-tl-rotulo="Descrição">{html.escape(str(marco.get("descricao") or ""))}</strong>'
+        f'<br>Referência <span data-tl-campo="referencia" data-tl-rotulo="Referência">'
+        f'{html.escape(str(marco.get("referencia") or ""))}</span></div>'
+        f"{rodape}</article>"
     )
 
 
@@ -335,6 +342,13 @@ _CSS_VEREDITO = """
 """
 
 
+def _extra_raiz(analise: dict) -> str:
+    """Campos que o painel não desenha, para o round-trip não os perder."""
+    return html.escape(json.dumps(
+        {c: analise.get(c, "") for c in ("vencimento_titulo", "processo")},
+        ensure_ascii=False), quote=True)
+
+
 def render_html(analise: dict) -> str:
     itens = analise.get("itens") or []
     if not itens:
@@ -351,11 +365,11 @@ def render_html(analise: dict) -> str:
         resumo.append(str(analise["processo"]))
 
     return f"""
-    <section class="tl2-shell" id="cronologia-prescricao-area">
+    <section class="tl2-shell" id="cronologia-prescricao-area" data-tl-raiz data-tl-extra="{_extra_raiz(analise)}">
       <style id="presc-export-style">{TL2_CSS}{_CSS_VEREDITO}</style>
       <div class="tl2-head">
         <span class="tl2-kicker">Cronologia processual · prescrição intercorrente</span>
-        <h2>{html.escape(analise.get("titulo") or "Execução analisada")}</h2>
+        <h2 data-tl-campo="titulo" data-tl-rotulo="Título / lastro">{html.escape(analise.get("titulo") or "Execução analisada")}</h2>
         <p>{html.escape(" · ".join(resumo)) if resumo else ""}</p>
         {_painel_prazo(analise)}
         {_painel_veredito(analise.get("veredito") or {})}
@@ -363,46 +377,17 @@ def render_html(analise: dict) -> str:
       <div class="tl2-scroll">
         <div class="tl2-track" style="--tl2-cols:{len(itens)}">{"".join(_coluna(i) for i in itens)}</div>
       </div>
+      <button type="button" class="tl2-add tl2-add-ato" data-tl-adicionar-ato>+ Adicionar marco</button>
     </section>
     """
 
 
 # ── Ponte com a interface ────────────────────────────────────────────────────
 
-def marcos_para_linhas(dados: dict) -> list[list[str]]:
-    linhas = [
-        [str(m.get("data", "") or ""), str(m.get("tipo", "") or ""),
-         str(m.get("descricao", "") or ""), str(m.get("referencia", "") or "")]
-        for m in (dados or {}).get("marcos", []) if isinstance(m, dict)
-    ]
-    return linhas or [["", "", "", ""]]
 
 
-def linhas_para_marcos(linhas) -> list[dict]:
-    if hasattr(linhas, "values"):
-        linhas = linhas.values.tolist()
-    marcos = []
-    for linha in linhas or []:
-        valores = [str(v).strip() if v is not None and str(v) != "nan" else "" for v in linha]
-        valores += [""] * (4 - len(valores))
-        if not any(valores):
-            continue
-        marcos.append({"data": valores[0], "tipo": valores[1],
-                       "descricao": valores[2], "referencia": valores[3]})
-    return marcos
 
 
-def aplicar_marcos(dados: dict, titulo: str, linhas):
-    """Reaplica o enquadramento a cada edição — é o preview ao vivo da cronologia.
-
-    Não devolve as linhas de volta ao dataframe de propósito: reescrevê-lo a cada tecla
-    reordenaria as linhas embaixo do cursor. A ordenação por data acontece só na
-    montagem do desenho (`analisar`), não no que está sendo editado.
-    """
-    dados = dict(dados or {})
-    dados["titulo"] = str(titulo or "").strip()
-    dados["marcos"] = linhas_para_marcos(linhas)
-    return dados, render_html(analisar(dados))
 
 
 def exportar_html(dados: dict) -> str:
@@ -419,3 +404,50 @@ def exportar_html(dados: dict) -> str:
     with open(caminho, "w", encoding="utf-8") as arquivo:
         arquivo.write(documento)
     return caminho
+
+
+def aplicar_edicao_html(bruto: str):
+    """Reconstrói os marcos a partir do painel editado.
+
+    O JS é o mesmo da timeline societária e devolve a unidade repetida em "eventos";
+    aqui cada uma delas é um marco. O título do lastro vem na raiz e é o que define o
+    prazo aplicado, então mudá-lo refaz a conta inteira.
+    """
+    if not isinstance(bruto, str) or not bruto.strip():
+        return None
+    try:
+        editado = json.loads(bruto)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(editado, dict):
+        return None
+
+    marcos = []
+    for recebido in editado.get("eventos") or []:
+        if not isinstance(recebido, dict):
+            continue
+        marco = {campo: re.sub(r"\s+", " ", str(recebido.get(campo, "") or "")).strip()
+                 for campo in ("data", "tipo", "descricao", "referencia")}
+        if marco["data"] in ("—", "-"):
+            marco["data"] = ""
+        if any(marco.values()):
+            marcos.append(marco)
+    extra = editado.get("_extra") if isinstance(editado.get("_extra"), dict) else {}
+    return {"titulo": str(editado.get("titulo", "") or "").strip(), "marcos": marcos,
+            "vencimento_titulo": str(extra.get("vencimento_titulo", "") or ""),
+            "processo": str(extra.get("processo", "") or "")}
+
+
+def cronologia_aplicar_html(modo: str, bruto: str):
+    """Liga e desliga a edição do painel da cronologia."""
+    if str(modo or "0") == "1":
+        return ("1", "", gr.skip(), gr.skip(),
+                gr.update(value="Concluir edição", variant="primary"))
+
+    novo = aplicar_edicao_html(bruto)
+    if novo is None:
+        return ("0", "", gr.skip(), gr.skip(),
+                gr.update(value="Editar cronologia", variant="secondary"))
+    # O vencimento e o nº do processo não são desenhados; vieram em data-tl-extra.
+    return ("0", "", novo, render_html(analisar(novo)),
+            gr.update(value="Editar cronologia", variant="secondary"))

@@ -588,6 +588,31 @@ def _detalhe_modal(index: int, event: dict) -> str:
 
 
 
+CAMPOS_CAIXINHA = ["rotulo", "nome", "extra", "tipo"]
+_ROTULOS_CAIXINHA = ["Rótulo", "Texto principal", "Detalhe", "tipo (cor)"]
+
+
+def _caixinha(mov: dict) -> str:
+    """Uma caixa do ato — editável célula a célula, como as do Painel de Deals.
+
+    "tipo" é a chave da cor (entrada, saida, cessao, imovel, admin, capital-up...);
+    fica visível só no modo de edição, para dar de trocar a cor sem sair do painel.
+    """
+    tipo = str(mov.get("tipo", "") or "outros")
+    return (
+        f'<div class="tl2-move tl2-move-{html.escape(tipo)}" data-tl-item>'
+        f'<button type="button" class="tl2-rm" data-tl-remover title="Remover caixa">×</button>'
+        f'<span class="tl2-move-label" data-tl-campo="rotulo" data-tl-rotulo="Rótulo">'
+        f'{html.escape(str(mov.get("rotulo", "") or ""))}</span>'
+        f'<strong data-tl-campo="nome" data-tl-rotulo="Texto principal">'
+        f'{html.escape(str(mov.get("nome", "") or "—"))}</strong>'
+        f'<small data-tl-campo="extra" data-tl-rotulo="Detalhe">'
+        f'{html.escape(str(mov.get("extra", "") or ""))}</small>'
+        f'<small class="tl2-tipo" data-tl-campo="tipo" data-tl-rotulo="tipo">'
+        f"{html.escape(tipo)}</small></div>"
+    )
+
+
 def render_timeline_html(data: dict) -> str:
     events = data.get("eventos", []) or []
     if not events:
@@ -596,14 +621,18 @@ def render_timeline_html(data: dict) -> str:
     colunas = []
     for index, event in enumerate(events):
         prev = events[index - 1] if index else None
-        blocos = "".join(
-            f'<div class="tl2-move tl2-move-{m["tipo"]}">'
-            f'<span class="tl2-move-label">{html.escape(m["rotulo"])}</span>'
-            f'<strong>{html.escape(m["nome"] or "—")}</strong>'
-            + (f'<small>{html.escape(m["extra"])}</small>' if m.get("extra") else "")
-            + "</div>"
-            for m in movimentos_do_ato(event, prev)
+        # As caixinhas nascem derivadas (movimentos_do_ato compara o ato com o anterior),
+        # mas viram DADO na primeira vez que são desenhadas. Só assim dá para editá-las,
+        # acrescentar e remover caixinha: derivado não se escreve de volta. Depois de
+        # editadas, o que vale é o que está gravado.
+        movimentos = event.get("movimentos")
+        if not isinstance(movimentos, list) or not movimentos:
+            movimentos = movimentos_do_ato(event, prev)
+        blocos = "".join(_caixinha(m) for m in movimentos) + (
+            '<button type="button" class="tl2-add" data-tl-adicionar>+ caixa</button>'
         )
+        modelo_caixinha = html.escape(json.dumps(
+            list(zip(CAMPOS_CAIXINHA, _ROTULOS_CAIXINHA)), ensure_ascii=False), quote=True)
         # Campos do JSON que o painel não desenha viajam aqui, para o round-trip não
         # perdê-los — e para o servidor não precisar do estado anterior na volta, o que
         # obrigaria a passar um gr.State pelo JavaScript.
@@ -620,7 +649,7 @@ def render_timeline_html(data: dict) -> str:
                     title="Remover este ato">×</button>
           </div>
           <div class="tl2-axis"><i class="tl2-pin"></i></div>
-          <div class="tl2-moves">{blocos}</div>
+          <div class="tl2-moves" data-tl-lista="movimentos" data-tl-modelo="{modelo_caixinha}">{blocos}</div>
           <div class="tl2-quadro">Quadro após o ato<strong>{html.escape(_quadro_resumo(event))}</strong></div>
           {_detalhe_modal(index, event)}
         </article>
@@ -689,6 +718,7 @@ CAMPOS_TEXTO_DO_EVENTO = [
 
 # Listas do evento e os campos de cada item, na ordem em que o HTML as desenha.
 LISTAS_DO_EVENTO = {
+    "movimentos": CAMPOS_CAIXINHA,
     "socios_apos": ["nome", "participacao", "quotas"],
     "cessoes": ["cedente", "cessionario", "participacao", "valor", "observacao"],
     "imoveis": ["matricula", "cartorio", "cidade", "valor", "movimento", "descricao"],
@@ -983,6 +1013,18 @@ TL2_CSS = """
 }
 .tl2-rm:hover { background: #fdeee8; }
 .tl2-rm-ato { float: right; }
+
+/* A chave da cor da caixa só aparece quando se está editando. */
+.tl2-tipo { display: none; }
+.tl2-edit-mode .tl2-tipo {
+    display: inline-block; margin-top: 4px; font-size: 9px !important;
+    letter-spacing: .06em; text-transform: uppercase; color: #92948f !important;
+}
+.tl2-move { position: relative; }
+.tl2-edit-mode .tl2-move .tl2-rm {
+    position: absolute; top: 4px; right: 4px; margin: 0; padding: 0 4px; font-size: 11px;
+}
+.tl2-edit-mode .tl2-moves { padding-bottom: 4px; }
 """
 
 

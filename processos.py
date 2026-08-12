@@ -35,7 +35,6 @@ from prescricao_intercorrente import bloco_prompt as bloco_prompt_prescricao
 from cronologia_prescricao import (
     analisar as analisar_prescricao,
     extrair_marcos as extrair_marcos_prescricao,
-    marcos_para_linhas as marcos_prescricao_para_linhas,
     render_html as render_cronologia_html,
 )
 from legal_prompts import (
@@ -1020,10 +1019,10 @@ def proc_gerar_cronologia(relatorio: str, extracao: str = ""):
     """
     fonte = extracao.strip() if extracao and extracao.strip() else (relatorio or "").strip()
     if not fonte:
-        yield {}, '<div class="timeline-empty">Gere uma análise primeiro.</div>', [["", "", "", ""]], ""
+        yield {}, '<div class="timeline-empty">Gere uma análise primeiro.</div>'
         return
-    yield ({}, '<div class="timeline-loading">Localizando os marcos da prescrição…</div>',
-           [["", "", "", ""]], "")
+    yield {}, '<div class="timeline-loading">Localizando os marcos da prescrição…</div>'
+
     try:
         dados = _executar_com_failover_gemini(
             _get_gemini_clients(),
@@ -1033,10 +1032,9 @@ def proc_gerar_cronologia(relatorio: str, extracao: str = ""):
         )
     except Exception:
         aviso = html_lib.escape("Erro ao montar a cronologia: " + traceback.format_exc())
-        yield {}, f'<div class="timeline-empty">{aviso}</div>', [["", "", "", ""]], ""
+        yield {}, f'<div class="timeline-empty">{aviso}</div>'
         return
-    yield (dados, render_cronologia_html(analisar_prescricao(dados)),
-           marcos_prescricao_para_linhas(dados), str(dados.get("titulo", "") or ""))
+    yield dados, render_cronologia_html(analisar_prescricao(dados))
 
 
 def proc_responder(pergunta: str, relatorio: str):

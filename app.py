@@ -16,11 +16,9 @@ from processos import (
     proc_gerar_cronologia, proc_responder,
 )
 from cronologia_prescricao import (
-    COLUNAS_MARCOS,
-    aplicar_marcos as presc_aplicar_marcos,
+    cronologia_aplicar_html,
     exportar_html as presc_exportar_html,
 )
-from prescricao_intercorrente import TIPOS_DE_MARCO
 from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores, rj_gerar_checklist, rj_gerar_checklist_creditos
 from matriculas import mat_gerar_excel, mat_responder
 from coleta import coleta_gerar, coleta_gerar_dossie_dispatch
@@ -309,6 +307,10 @@ async (ligado, _ponte) => {
     if (cabecalho) arvore.empresa = texto(cabecalho);
     const cnpj = raiz.querySelector('[data-tl-campo="cnpj"]');
     if (cnpj) arvore.cnpj = texto(cnpj);
+    const titulo = raiz.querySelector('[data-tl-campo="titulo"]');
+    if (titulo) arvore.titulo = texto(titulo);
+    try { arvore._extra = JSON.parse(raiz.getAttribute("data-tl-extra") || "{}"); }
+    catch (e) { arvore._extra = {}; }
 
     raiz.querySelectorAll("[data-tl-evento]").forEach((col) => {
         const evento = {};
@@ -437,18 +439,12 @@ with gr.Blocks(
                 )
             proc_presc_state = gr.State({})
             proc_presc_html = gr.HTML()
-            with gr.Accordion("Editar cronologia", open=False, elem_classes=["mat-accordion"]):
-                proc_presc_titulo = gr.Textbox(
-                    label="Título / lastro (define o prazo aplicado)",
-                    placeholder="Ex: Cédula de Crédito Bancário (CCB) nº 123",
-                )
-                proc_presc_marcos = gr.Dataframe(
-                    headers=COLUNAS_MARCOS, col_count=(len(COLUNAS_MARCOS), "fixed"),
-                    row_count=(1, "dynamic"), interactive=True, wrap=True,
-                    label=f"Marcos (tipos: {' · '.join(TIPOS_DE_MARCO)})",
-                    elem_classes=["tl-editor-table"],
-                )
-                proc_presc_export_btn = gr.DownloadButton("Exportar cronologia (HTML)", variant="secondary")
+            with gr.Row():
+                proc_presc_editar_btn = gr.Button("Editar cronologia", variant="secondary")
+                proc_presc_export_btn = gr.DownloadButton("Exportar cronologia (HTML)",
+                                                          variant="secondary")
+            proc_presc_editando = gr.Textbox(value="0", visible=False)
+            proc_presc_ponte = gr.Textbox(visible=False)
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Column(elem_classes=["qa-section"]):
@@ -818,18 +814,20 @@ with gr.Blocks(
     proc_cronologia_btn.click(
         fn=proc_gerar_cronologia,
         inputs=[proc_relatorio_state, proc_extracao_state],
-        outputs=[proc_presc_state, proc_presc_html, proc_presc_marcos, proc_presc_titulo],
+        outputs=[proc_presc_state, proc_presc_html],
         concurrency_limit=2,
     )
-    # Editar título ou marcos refaz o enquadramento na hora. `.input` e não `.change`:
-    # o preenchimento programático do dataframe reescreveria o estado sozinho.
-    for _campo in (proc_presc_titulo, proc_presc_marcos):
-        _campo.input(
-            fn=presc_aplicar_marcos,
-            inputs=[proc_presc_state, proc_presc_titulo, proc_presc_marcos],
-            outputs=[proc_presc_state, proc_presc_html],
-            show_progress="hidden",
-        )
+    # Edição no próprio painel, igual à da timeline: o JS liga o contenteditable e
+    # devolve a árvore; o servidor refaz o enquadramento e o cálculo.
+    proc_presc_editar_btn.click(
+        fn=cronologia_aplicar_html,
+        # Sem gr.State atravessando o JS: o que o painel não desenha
+        # (vencimento do título, nº do processo) viaja em data-tl-extra na raiz.
+        inputs=[proc_presc_editando, proc_presc_ponte],
+        outputs=[proc_presc_editando, proc_presc_ponte, proc_presc_state,
+                 proc_presc_html, proc_presc_editar_btn],
+        js=_EDITAR_CRONOLOGIA_JS,
+    )
     proc_presc_export_btn.click(
         fn=presc_exportar_html, inputs=[proc_presc_state], outputs=[proc_presc_export_btn]
     )
