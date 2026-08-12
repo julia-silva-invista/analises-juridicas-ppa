@@ -25,6 +25,7 @@ from google.genai import types
 
 from prescricao_intercorrente import (
     MARCOS_LEGAIS,
+    avaliar,
     TIPOS_DE_MARCO,
     _para_data,
     bloco_prompt,
@@ -166,6 +167,8 @@ def analisar(dados: dict) -> dict:
         return None
 
     return {
+        "veredito": avaliar(marcos, (dados or {}).get("titulo"),
+                            (dados or {}).get("vencimento_titulo")),
         "processo": (dados or {}).get("processo", ""),
         "titulo": (dados or {}).get("titulo", ""),
         "vencimento_titulo": (dados or {}).get("vencimento_titulo", ""),
@@ -231,6 +234,107 @@ def _painel_prazo(analise: dict) -> str:
     )
 
 
+def _anos(valor: float) -> str:
+    anos = int(valor)
+    meses = round((valor - anos) * 12)
+    if meses == 12:
+        anos, meses = anos + 1, 0
+    partes = []
+    if anos:
+        partes.append(f"{anos} ano" + ("s" if anos != 1 else ""))
+    if meses:
+        partes.append(f"{meses} mês" if meses == 1 else f"{meses} meses")
+    return " e ".join(partes) or "menos de um mês"
+
+
+def _linha_lapso(trecho: dict) -> str:
+    if trecho["de"] == trecho["ate"]:
+        return (f'<li class="presc-zera">{trecho["de"].strftime("%d/%m/%Y")} — '
+                f'{html.escape(trecho["motivo"])}</li>')
+    corre = "corre" if trecho["corre"] else f'não corre ({html.escape(trecho["motivo"])})'
+    return (f'<li>{trecho["de"].strftime("%d/%m/%Y")} → {trecho["ate"].strftime("%d/%m/%Y")}'
+            f' · {_anos(trecho["anos"])} · <b>{corre}</b>'
+            f' · acumulado {_anos(trecho["acumulado"])}</li>')
+
+
+def _painel_veredito(veredito: dict) -> str:
+    """A conta, aberta: termo inicial, lapsos de inércia e resultado por cenário.
+
+    O risco é apresentado como risco. "Lapso superior ao prazo" quer dizer que a conta
+    fecha — não que a prescrição esteja declarada. Os mitigantes e a leitura dos autos
+    continuam sendo do analista.
+    """
+    termo = veredito.get("termo")
+    if not termo or not termo.get("data"):
+        return ('<div class="presc-veredito"><h4>Contagem</h4><p>Não foi possível fixar o '
+                'termo inicial: não há nos autos decisão de suspensão do art. 921, III nem '
+                'ciência de tentativa infrutífera de localização. É a data que falta para '
+                'fechar a conta.</p></div>')
+
+    regime = termo.get("regime") or {}
+    cabecalho = (
+        f'<h4>Contagem</h4>'
+        f'<p><b>Termo inicial:</b> {termo["data"].strftime("%d/%m/%Y")} — '
+        f'{html.escape(termo["regra"])}'
+        + (f' <i>({html.escape(regime.get("rotulo", ""))})</i>' if regime else "")
+        + f' Marco de origem: {html.escape(str(termo["marco"].get("descricao") or ""))}'
+        + (f' ({html.escape(str(termo["marco"].get("referencia") or ""))})'
+           if termo["marco"].get("referencia") else "") + "</p>"
+    )
+    if veredito.get("extincao"):
+        cabecalho += (f'<p><b>Contagem encerrada em</b> {veredito["fim"].strftime("%d/%m/%Y")}'
+                      f' pela extinção registrada nos autos.</p>')
+
+    blocos = []
+    for cenario in veredito.get("cenarios", []):
+        classe = "presc-consumado" if cenario["consumado"] else "presc-corrente"
+        titulo = f'Prazo de {_anos(cenario["anos"])}'
+        if cenario["consumado"]:
+            situacao = (f'<b>Lapso de inércia de {_anos(cenario["corrido"])} — SUPERIOR ao '
+                        f'prazo.</b> Pela contagem, o prazo se completaria em '
+                        f'{cenario["data_limite"].strftime("%d/%m/%Y")}.')
+        else:
+            situacao = (f'Lapso de inércia de {_anos(cenario["corrido"])}; faltam '
+                        f'{_anos(cenario["faltam"])}'
+                        + (f', completando em {cenario["data_limite"].strftime("%d/%m/%Y")}'
+                           if cenario.get("data_limite") else "") + ".")
+        lapsos = "".join(_linha_lapso(t) for t in cenario.get("trechos", []))
+        blocos.append(
+            f'<div class="presc-cenario {classe}"><h5>{titulo}</h5>'
+            f'<p class="presc-regra">{html.escape(cenario["regra"])}</p>'
+            f"<p>{situacao}</p>"
+            + (f'<ul class="presc-lapsos">{lapsos}</ul>' if lapsos else "")
+            + "</div>"
+        )
+
+    aviso = ('<p class="tl2-fonte">Duas contas porque o prazo do título é divergente: o '
+             'resultado muda conforme a posição adotada.</p>') if veredito.get("divergente") else ""
+    return (f'<div class="presc-veredito">{cabecalho}{"".join(blocos)}{aviso}'
+            '<p class="tl2-fonte">Modelo de contagem: penhora efetivada, localização de bens, '
+            'parcelamento e retomada zeram o acumulado; recuperação judicial e embargos '
+            'pausam sem zerar. Risco é risco — confira os mitigantes e a leitura dos autos '
+            'antes de concluir.</p></div>')
+
+
+_CSS_VEREDITO = """
+.presc-veredito { margin-top: 16px; padding: 14px 16px; background: #fbfbfa;
+    border: 1px solid #e4e4e0; }
+.presc-veredito h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .08em; color: #1A56A0; }
+.presc-veredito p { margin: 4px 0; font-size: 12px; color: #4a4d48; line-height: 1.6; }
+.presc-cenario { margin-top: 10px; padding: 10px 12px; border-left: 3px solid #77817a;
+    background: #fff; }
+.presc-cenario h5 { margin: 0 0 4px; font-size: 12px; font-weight: 800; color: #1f211f; }
+.presc-corrente { border-left-color: #2F6B3A; }
+.presc-consumado { border-left-color: #DC4405; background: rgba(220, 68, 5, .05); }
+.presc-regra { font-style: italic; color: #737670 !important; }
+.presc-lapsos { margin: 6px 0 0; padding-left: 18px; font-size: 11px; color: #4a4d48;
+    line-height: 1.7; }
+.presc-lapsos .presc-zera { list-style: none; margin-left: -18px; color: #2F6B3A;
+    font-weight: 700; }
+"""
+
+
 def render_html(analise: dict) -> str:
     itens = analise.get("itens") or []
     if not itens:
@@ -248,14 +352,13 @@ def render_html(analise: dict) -> str:
 
     return f"""
     <section class="tl2-shell" id="cronologia-prescricao-area">
-      <style id="presc-export-style">{TL2_CSS}</style>
+      <style id="presc-export-style">{TL2_CSS}{_CSS_VEREDITO}</style>
       <div class="tl2-head">
         <span class="tl2-kicker">Cronologia processual · prescrição intercorrente</span>
         <h2>{html.escape(analise.get("titulo") or "Execução analisada")}</h2>
         <p>{html.escape(" · ".join(resumo)) if resumo else ""}</p>
         {_painel_prazo(analise)}
-        <p class="tl2-fonte">O enquadramento por regime é calculado pelas datas dos atos.
-        Risco é risco: confira os mitigantes antes de concluir.</p>
+        {_painel_veredito(analise.get("veredito") or {})}
       </div>
       <div class="tl2-scroll">
         <div class="tl2-track" style="--tl2-cols:{len(itens)}">{"".join(_coluna(i) for i in itens)}</div>
@@ -309,7 +412,7 @@ def exportar_html(dados: dict) -> str:
         "<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
         "<title>Cronologia — prescrição intercorrente</title>"
         f"<style>body{{margin:0;padding:24px;background:#f5f4f1;"
-        f"font-family:Arial,Helvetica,sans-serif}}{TL2_CSS}</style></head>"
+        f"font-family:Arial,Helvetica,sans-serif}}{TL2_CSS}{_CSS_VEREDITO}</style></head>"
         f"<body>{corpo}</body></html>"
     )
     caminho = os.path.join(tempfile.gettempdir(), "cronologia_prescricao.html")

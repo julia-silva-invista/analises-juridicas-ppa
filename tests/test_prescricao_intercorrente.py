@@ -177,3 +177,144 @@ def testar_exportar_html_e_autocontido():
     assert conteudo.startswith("<!doctype html>")
     assert ".tl2-shell" in conteudo, "o CSS vai embutido, como no export da societária"
     assert "cronologia-prescricao-area" in conteudo
+
+
+# ── Cálculo ──────────────────────────────────────────────────────────────────
+# Sair do rótulo: quando começou a correr, quanto correu e se o lapso superou o prazo.
+
+HOJE = date(2026, 8, 11)
+
+MARCOS_CPC1973 = [
+    {"data": "10/03/2012", "tipo": "distribuicao", "descricao": "Distribuída"},
+    {"data": "20/09/2013", "tipo": "tentativa_infrutifera", "descricao": "Sem bens"},
+    {"data": "11/11/2013", "tipo": "suspensao_921", "descricao": "Suspensa"},
+]
+
+
+def testar_iac1_sem_prazo_fixado_conta_um_ano_da_suspensao():
+    """IAC 1/STJ: não havendo prazo fixado pelo juiz, o prazo começa um ano depois."""
+    termo = pi.termo_inicial_intercorrente(MARCOS_CPC1973)
+    assert termo["data"] == date(2014, 11, 11)
+    assert "IAC 1" in termo["regra"] and "não houve prazo" in termo["regra"]
+
+
+def testar_iac1_respeita_o_prazo_fixado_pelo_juiz():
+    marcos = [dict(m, duracao="6 meses") if m["tipo"] == "suspensao_921" else m
+              for m in MARCOS_CPC1973]
+    termo = pi.termo_inicial_intercorrente(marcos)
+    assert termo["data"] == date(2014, 5, 11)
+    assert "fixado pelo juiz" in termo["regra"]
+
+
+def testar_lei_14195_conta_da_primeira_tentativa_infrutifera():
+    marcos = [{"data": "10/06/2022", "tipo": "tentativa_infrutifera", "descricao": "Sisbajud"},
+              {"data": "01/09/2022", "tipo": "suspensao_921", "descricao": "Suspensa"}]
+    termo = pi.termo_inicial_intercorrente(marcos)
+    assert termo["data"] == date(2022, 6, 10), "no regime novo o termo antecipa"
+    assert "14.195" in termo["regra"]
+
+
+def testar_cpc2015_original_conta_do_fim_do_ano_de_suspensao():
+    marcos = [{"data": "05/05/2018", "tipo": "suspensao_921", "descricao": "Suspensa"}]
+    termo = pi.termo_inicial_intercorrente(marcos)
+    assert termo["data"] == date(2019, 5, 5)
+    assert "921" in termo["regra"]
+
+
+def testar_sem_marco_de_inercia_nao_ha_termo_inicial():
+    assert pi.termo_inicial_intercorrente(
+        [{"data": "10/03/2012", "tipo": "distribuicao", "descricao": "x"}]) is None
+
+
+# ── Transição do art. 2.028 ──────────────────────────────────────────────────
+
+def testar_mais_da_metade_corrida_mantem_os_20_anos_do_cc1916():
+    """Vencimento em 1990: em 11/01/2003 já haviam corrido 12,6 dos 20 anos."""
+    prazos = pi.prazo_com_transicao("01/06/1990", "instrumento_particular")
+    assert len(prazos) == 1
+    assert prazos[0]["anos"] == 20
+    assert prazos[0]["conta_de"] == date(1990, 6, 1)
+    assert "CC/1916" in prazos[0]["regra"] and "art. 2.028" in prazos[0]["regra"]
+
+
+def testar_menos_da_metade_corrida_aplica_o_cc2002_de_2003():
+    """Vencimento em 2000: só 2,6 anos corridos — vale o prazo novo, de 11/01/2003."""
+    prazos = pi.prazo_com_transicao("01/06/2000", "instrumento_particular")
+    assert prazos[0]["anos"] == 5
+    assert prazos[0]["conta_de"] == pi.VIGENCIA_CC_2002
+    assert "menos da metade" in prazos[0]["regra"]
+
+
+def testar_vencimento_depois_de_2003_nao_passa_pela_transicao():
+    prazos = pi.prazo_com_transicao("10/01/2010", "instrumento_particular")
+    assert prazos[0]["anos"] == 5 and prazos[0]["conta_de"] == date(2010, 1, 10)
+    assert "art. 2.028" not in prazos[0]["regra"]
+
+
+def testar_ccb_gera_dois_cenarios():
+    prazos = pi.prazo_com_transicao("10/01/2010", "ccb")
+    assert sorted(p["anos"] for p in prazos) == [3, 5]
+
+
+# ── Lapsos de inércia ────────────────────────────────────────────────────────
+
+def testar_penhora_zera_o_acumulado():
+    marcos = MARCOS_CPC1973 + [
+        {"data": "01/03/2020", "tipo": "penhora", "descricao": "Penhora do imóvel"}]
+    resultado = pi.avaliar(marcos, "CCB", vencimento="10/01/2010", hoje=HOJE)
+    corrido = resultado["cenarios"][0]["corrido"]
+    assert corrido < 7, "a contagem recomeça da penhora, não do termo inicial"
+    assert any("zera" in t["motivo"] for t in resultado["cenarios"][0]["trechos"])
+
+
+def testar_recuperacao_judicial_pausa_sem_zerar():
+    marcos = MARCOS_CPC1973 + [
+        {"data": "01/01/2016", "tipo": "recuperacao_judicial", "descricao": "RJ deferida"},
+        {"data": "01/01/2020", "tipo": "retomada", "descricao": "Execução retomada"}]
+    trechos = pi.lapsos_de_inercia(marcos, date(2014, 11, 11), HOJE)
+    pausados = [t for t in trechos if not t["corre"] and t["de"] != t["ate"]]
+    assert pausados, "o período de RJ não pode correr contra o credor"
+
+
+def testar_veredito_consumado_quando_o_lapso_supera_o_prazo():
+    resultado = pi.avaliar(MARCOS_CPC1973, "CCB", vencimento="10/01/2010", hoje=HOJE)
+    for cenario in resultado["cenarios"]:
+        assert cenario["consumado"], f"{cenario['anos']} anos deveriam estar superados"
+        assert cenario["data_limite"] == pi._somar_anos(date(2014, 11, 11), cenario["anos"])
+
+
+def testar_extincao_encerra_a_contagem():
+    marcos = MARCOS_CPC1973 + [
+        {"data": "01/06/2016", "tipo": "extincao", "descricao": "Execução extinta"}]
+    resultado = pi.avaliar(marcos, "CCB", vencimento="10/01/2010", hoje=HOJE)
+    assert resultado["fim"] == date(2016, 6, 1)
+    assert resultado["cenarios"][0]["corrido"] < 2
+
+
+def testar_meses_da_duracao():
+    assert pi.meses_da_duracao("1 ano") == 12
+    assert pi.meses_da_duracao("6 meses") == 6
+    assert pi.meses_da_duracao("90 dias") == 3
+    assert pi.meses_da_duracao("sem prazo") is None
+
+
+# ── O cálculo aparece no HTML ────────────────────────────────────────────────
+
+def testar_html_mostra_a_conta_aberta():
+    dados = {"titulo": "Cédula de Crédito Bancário (CCB) nº 1",
+             "vencimento_titulo": "10/01/2010", "marcos": MARCOS_CPC1973}
+    html_gerado = cronologia.render_html(cronologia.analisar(dados))
+    assert "Termo inicial" in html_gerado
+    assert "IAC 1" in html_gerado
+    assert "Lapso de inércia" in html_gerado
+    assert "Prazo de 3 anos" in html_gerado and "Prazo de 5 anos" in html_gerado
+    assert "presc-consumado" in html_gerado
+    assert "Modelo de contagem" in html_gerado, "as escolhas do modelo têm que estar à vista"
+
+
+def testar_html_diz_qual_data_falta_quando_nao_da_para_contar():
+    dados = {"titulo": "CCB", "marcos": [
+        {"data": "10/03/2012", "tipo": "distribuicao", "descricao": "Distribuída"}]}
+    html_gerado = cronologia.render_html(cronologia.analisar(dados))
+    assert "Não foi possível fixar o termo inicial" in html_gerado
+    assert "É a data que falta" in html_gerado

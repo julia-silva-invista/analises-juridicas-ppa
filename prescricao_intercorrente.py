@@ -415,3 +415,224 @@ def bloco_prompt() -> str:
         "",
     ]
     return "\n".join(partes)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Cálculo
+#
+# A base acima é o que a lei diz. Aqui a lei vira conta: quando a prescrição começou a
+# correr, quanto correu de fato e se o lapso já superou o prazo. Determinístico, em
+# Python — o modelo só entrega fatos datados.
+#
+# É um MODELO de contagem, com escolhas declaradas abaixo. Mostra a conta e onde ela
+# pode virar; não substitui a leitura do analista.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Prazo da pretensão executiva, em anos. A CCB traz as duas posições em disputa: a
+# diferença de 2 anos é o que decide o caso, então as duas contas são feitas.
+ANOS_POR_TITULO = {
+    "nota_promissoria": [3], "letra_de_cambio": [3], "duplicata": [3],
+    "cedula_rural": [3], "cpr": [3], "alugueis": [3],
+    "cheque": [0.5],
+    "instrumento_particular": [5], "honorarios_advocaticios": [5],
+    "ccb": [3, 5],
+}
+
+# CC/1916, art. 177: as ações pessoais prescreviam em 20 anos.
+ANOS_CC_1916 = 20
+
+# Duração da suspensão do art. 921 quando o juiz não fixa prazo — é o que o IAC 1/STJ
+# (REsp 1.604.412/SC) assentou para a execução comum sob o CPC/1973.
+MESES_SUSPENSAO_PADRAO = 12
+
+_RE_DURACAO = re.compile(r"(\d+)\s*(anos?|m[eê]s|meses|dias?)", re.IGNORECASE)
+
+
+def meses_da_duracao(texto):
+    """"1 ano" -> 12, "6 meses" -> 6, "90 dias" -> 3. Sem duração legível, None."""
+    achado = _RE_DURACAO.search(str(texto or ""))
+    if not achado:
+        return None
+    quantidade, unidade = int(achado.group(1)), achado.group(2).lower()
+    if unidade.startswith("ano"):
+        return quantidade * 12
+    if unidade.startswith("dia"):
+        return max(1, round(quantidade / 30))
+    return quantidade
+
+
+_DIAS_NO_MES = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+
+def _somar_meses(quando: date, meses: int) -> date:
+    ano = quando.year + (quando.month - 1 + meses) // 12
+    mes = (quando.month - 1 + meses) % 12 + 1
+    limite = _DIAS_NO_MES[mes - 1]
+    if mes == 2 and (ano % 4 == 0 and (ano % 100 != 0 or ano % 400 == 0)):
+        limite = 29
+    return date(ano, mes, min(quando.day, limite))
+
+
+def _somar_anos(quando: date, anos: float) -> date:
+    return _somar_meses(quando, round(anos * 12))
+
+
+def prazo_com_transicao(vencimento, chave_titulo=None) -> list:
+    """Prazo aplicável ao título, já resolvida a transição do art. 2.028 do CC/2002.
+
+    Antes de 11/01/2003 a dívida particular prescrevia em 20 anos (CC/1916, art. 177).
+    O art. 2.028 manda manter o prazo antigo só quando o novo o REDUZIU e já havia
+    corrido MAIS DA METADE do prazo velho na entrada em vigor. Fora disso vale o prazo
+    novo, contado de 11/01/2003 — e é isso que muda o resultado em execução antiga.
+    """
+    anos_novos = ANOS_POR_TITULO.get(chave_titulo or "", [5])
+    inicio = _para_data(vencimento)
+    if inicio is None or inicio >= VIGENCIA_CC_2002:
+        return [{"anos": a, "conta_de": inicio,
+                 "regra": "Prazo do CC/2002, contado do vencimento do título.",
+                 "status": "confirmado"} for a in anos_novos]
+
+    corridos = (VIGENCIA_CC_2002 - inicio).days / 365.25
+    if corridos > ANOS_CC_1916 / 2:
+        return [{
+            "anos": ANOS_CC_1916, "conta_de": inicio,
+            "regra": (f"Vale o prazo do CC/1916 (20 anos): em 11/01/2003 já haviam corrido "
+                      f"{corridos:.1f} anos, mais da metade dos 20 (CC/2002, art. 2.028)."),
+            "status": "confirmado",
+        }]
+    return [{
+        "anos": a, "conta_de": VIGENCIA_CC_2002,
+        "regra": (f"Vale o prazo do CC/2002: em 11/01/2003 haviam corrido só {corridos:.1f} "
+                  f"anos dos 20 do CC/1916 — menos da metade —, então o prazo novo corre "
+                  f"a partir de 11/01/2003 (art. 2.028)."),
+        "status": "confirmado",
+    } for a in anos_novos]
+
+
+def termo_inicial_intercorrente(marcos: list):
+    """Quando a intercorrente começou a correr, pelo regime vigente no ato.
+
+    - Lei 14.195/2021: da ciência da primeira tentativa infrutífera.
+    - CPC/2015 original: do fim do ano de suspensão do art. 921, §1º.
+    - CPC/1973 (IAC 1/STJ): do fim do prazo de suspensão FIXADO pelo juiz; não havendo
+      prazo fixado, um ano depois da decisão que suspendeu.
+    """
+    def _primeiro(tipo):
+        return next((m for m in marcos
+                     if m.get("tipo") == tipo and _para_data(m.get("data"))), None)
+
+    suspensao, tentativa = _primeiro("suspensao_921"), _primeiro("tentativa_infrutifera")
+
+    if suspensao:
+        quando = _para_data(suspensao["data"])
+        regime = regime_aplicavel(quando)
+        if regime and regime["id"] == "lei14195" and tentativa:
+            return {"data": _para_data(tentativa["data"]), "marco": tentativa, "regime": regime,
+                    "regra": "Lei 14.195/2021: conta da ciência da primeira tentativa "
+                             "infrutífera de localizar o devedor ou bens penhoráveis."}
+        fixados = meses_da_duracao(suspensao.get("duracao"))
+        meses = fixados or MESES_SUSPENSAO_PADRAO
+        if regime and regime["id"] == "cpc1973":
+            regra = (f"IAC 1/STJ: conta do fim do prazo de suspensão fixado pelo juiz "
+                     f"({meses} meses)." if fixados else
+                     "IAC 1/STJ: não houve prazo de suspensão fixado nos autos, então "
+                     "conta um ano depois da decisão que suspendeu.")
+        else:
+            regra = f"Art. 921, §1º: conta do fim do ano de suspensão ({meses} meses)."
+        return {"data": _somar_meses(quando, meses), "marco": suspensao,
+                "regime": regime, "regra": regra}
+
+    if tentativa:
+        quando = _para_data(tentativa["data"])
+        regime = regime_aplicavel(quando)
+        if regime and regime["id"] == "lei14195":
+            return {"data": quando, "marco": tentativa, "regime": regime,
+                    "regra": "Lei 14.195/2021: conta da ciência da primeira tentativa "
+                             "infrutífera, independentemente de decisão de suspensão."}
+        return {"data": _somar_meses(quando, MESES_SUSPENSAO_PADRAO), "marco": tentativa,
+                "regime": regime,
+                "regra": "Não há decisão de suspensão nos autos; contado um ano da ciência "
+                         "da não localização, por analogia ao art. 921, §1º. Conferir."}
+    return None
+
+
+# Efeito de cada marco sobre a contagem, a partir do termo inicial.
+_ZERA = {"penhora", "bens_localizados", "parcelamento", "retomada", "citacao"}
+_PAUSA = {"recuperacao_judicial", "embargos"}
+_RETOMA = {"retomada", "tentativa_infrutifera", "suspensao_921"}
+
+
+def lapsos_de_inercia(marcos: list, inicio: date, fim: date) -> list:
+    """Quebra o período em trechos e diz, de cada um, se a prescrição corre.
+
+    Modelo de contagem, declarado: penhora efetivada, localização de bens, parcelamento
+    e retomada ZERAM o acumulado — a execução deixa de estar na hipótese do art. 921,
+    III, que é o pressuposto da intercorrente. Recuperação judicial e embargos PAUSAM
+    sem zerar. Nos demais trechos, corre.
+    """
+    pontos = [(inicio, None)]
+    for marco in marcos:
+        quando = _para_data(marco.get("data"))
+        if quando and inicio < quando <= fim:
+            pontos.append((quando, marco))
+    pontos.append((fim, None))
+    pontos.sort(key=lambda p: p[0])
+
+    trechos, pausado, acumulado = [], False, 0.0
+    for (de, _), (ate, marco_fim) in zip(pontos, pontos[1:]):
+        if ate > de:
+            anos = (ate - de).days / 365.25
+            if not pausado:
+                acumulado += anos
+            trechos.append({"de": de, "ate": ate, "anos": anos, "corre": not pausado,
+                            "acumulado": acumulado,
+                            "motivo": "" if not pausado else "suspenso"})
+        tipo = (marco_fim or {}).get("tipo")
+        if tipo in _ZERA:
+            acumulado, pausado = 0.0, False
+            trechos.append({"de": ate, "ate": ate, "anos": 0.0, "corre": False,
+                            "acumulado": 0.0, "motivo": f"zera a contagem ({tipo})"})
+        elif tipo in _PAUSA:
+            pausado = True
+        elif tipo in _RETOMA:
+            pausado = False
+    return trechos
+
+
+def avaliar(marcos: list, titulo=None, vencimento=None, hoje=None) -> dict:
+    """Termo inicial, lapsos e veredito — um cenário por prazo em disputa."""
+    hoje = hoje or date.today()
+    marcos = [m for m in (marcos or []) if isinstance(m, dict)]
+    entrada = prazo_do_titulo(titulo)
+    chave = (entrada or {}).get("id")
+
+    termo = termo_inicial_intercorrente(marcos)
+    extincao = next((m for m in marcos
+                     if m.get("tipo") == "extincao" and _para_data(m.get("data"))), None)
+    fim = _para_data(extincao["data"]) if extincao else hoje
+
+    if vencimento:
+        prazos = prazo_com_transicao(vencimento, chave)
+    else:
+        prazos = [{"anos": a, "conta_de": None, "status": "a_revisar",
+                   "regra": "Sem data de vencimento nos autos, a transição do art. 2.028 "
+                            "não pôde ser conferida."}
+                  for a in ANOS_POR_TITULO.get(chave or "", [5])]
+
+    cenarios = []
+    for prazo in prazos:
+        item = dict(prazo)
+        if termo and termo["data"] and fim > termo["data"]:
+            trechos = lapsos_de_inercia(marcos, termo["data"], fim)
+            corrido = trechos[-1]["acumulado"] if trechos else 0.0
+            item.update({"trechos": trechos, "corrido": corrido,
+                         "consumado": corrido >= prazo["anos"],
+                         "faltam": max(0.0, prazo["anos"] - corrido),
+                         "data_limite": _somar_anos(termo["data"], prazo["anos"])})
+        else:
+            item.update({"trechos": [], "corrido": 0.0, "consumado": False,
+                         "faltam": prazo["anos"], "data_limite": None})
+        cenarios.append(item)
+
+    return {"termo": termo, "fim": fim, "extincao": extincao, "titulo": entrada,
+            "cenarios": cenarios, "divergente": len(cenarios) > 1}
