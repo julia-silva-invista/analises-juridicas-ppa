@@ -28,6 +28,7 @@ from legal_prompts import (
     REGRA_INDICES_E_ADITAMENTOS,
     REGRA_CRONOLOGIA_PROCESSUAL,
     REGRA_AUDITORIA_FINAL,
+    bloco_instrucao_adicional,
     normalizar_referencias_objeto,
 )
 
@@ -510,7 +511,13 @@ def _kv_label_table(doc, rows, w_label=5.9, w_value=11.0):
 def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
     """Tabela multi-coluna: header laranja + linhas brancas (+ TOTAL cinza opcional)."""
     t = doc.add_table(rows=0, cols=len(headers))
-    t.style = "Table Grid"
+    try:
+        t.style = "Table Grid"
+    except KeyError:
+        # O template oficial do PPA não declara esse estilo — documentos abertos a
+        # partir dele levantariam KeyError. As bordas não dependem disso: _set_borders
+        # pinta célula a célula logo abaixo.
+        pass
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _lock_widths(t, ws)
     _orange_header(t, headers, ws)
@@ -765,8 +772,22 @@ def _montar_material_prioritario(
     return "\n\n".join(partes)
 
 
-def _extrair_dados(texto_completo: str, relatorio: str, client, model: str) -> dict:
-    prompt = _PROMPT_DOSSIE + _montar_material_prioritario(relatorio, texto_completo)
+_INSTRUCAO_QUADROS_EXTRAS = """\
+
+Se — e somente se — a instrução acima pedir um quadro/tabela que não existe na estrutura
+deste JSON, acrescente a chave "quadros_extras" no nível raiz, no formato:
+  "quadros_extras": [{"titulo": "", "colunas": ["", ""], "linhas": [["", ""]]}]
+Cada linha precisa ter o mesmo número de células que "colunas". Sem pedido de tabela,
+NÃO inclua essa chave. Ela nunca substitui os quadros já previstos — só acrescenta.
+"""
+
+
+def _extrair_dados(texto_completo: str, relatorio: str, client, model: str,
+                   instrucoes: str = "") -> dict:
+    bloco = bloco_instrucao_adicional(instrucoes, permite_secao_nova=False)
+    if bloco:
+        bloco += _INSTRUCAO_QUADROS_EXTRAS + "\n"
+    prompt = _PROMPT_DOSSIE + bloco + _montar_material_prioritario(relatorio, texto_completo)
     try:
         config = types.GenerateContentConfig(response_mime_type="application/json")
 
@@ -2052,18 +2073,49 @@ def _build_doc(dados: dict) -> str:
     _preencher_visao_ativos_template(doc, dados)
     _preencher_teses_template(doc, dados)
     _preencher_creditos_template(doc, dados.get("creditos") or [])
+    _acrescentar_quadros_extras(doc, dados.get("quadros_extras"))
 
     doc.save(caminho)
     return caminho
+
+
+def _acrescentar_quadros_extras(doc, quadros) -> None:
+    """Quadros pedidos pela instrução adicional, ao fim do documento.
+
+    O template oficial tem estrutura fixa; quando a analista pede uma tabela que não
+    existe nele, ela entra aqui em vez de deformar um quadro previsto. Só é chamado
+    quando a extração devolveu a chave — sem pedido, nada muda no documento.
+    """
+    for quadro in quadros or []:
+        if not isinstance(quadro, dict):
+            continue
+        colunas = [str(c or "") for c in (quadro.get("colunas") or [])]
+        if not colunas:
+            continue
+        linhas = [
+            [str(celula or "") for celula in linha][:len(colunas)]
+            for linha in (quadro.get("linhas") or [])
+            if isinstance(linha, (list, tuple))
+        ]
+        linhas = [linha for linha in linhas if any(c.strip() for c in linha)]
+        if not linhas:
+            continue
+
+        # Larguras iguais dentro da área útil do A4 (16,9 cm com as margens do modelo).
+        largura = round(16.9 / len(colunas), 2)
+        _spacer(doc)
+        _sub_orange(doc, str(quadro.get("titulo") or "Quadro complementar"))
+        _grid_table(doc, colunas, linhas, [largura] * len(colunas))
 
 
 # ══════════════════════════════════════════════════════════════════════════
 # Entry point
 # ══════════════════════════════════════════════════════════════════════════
 
-def gerar_dossie_word(texto_completo: str, relatorio: str, client, model: str) -> str:
+def gerar_dossie_word(texto_completo: str, relatorio: str, client, model: str,
+                      instrucoes: str = "") -> str:
     """Extrai dados do texto OCR completo (+ relatório de apoio) e gera o Word PPA v3.0."""
-    dados = _extrair_dados(texto_completo, relatorio, client, model)
+    dados = _extrair_dados(texto_completo, relatorio, client, model, instrucoes)
     # Passada final: confere campos vazios contra o relatório e completa o que faltou
     dados = _completar_com_relatorio(dados, relatorio, client, model)
     nomes_pdf = set(re.findall(r"(?:arquivo:\s*|^---\s*)([^\n—]+)", texto_completo or "", re.MULTILINE))

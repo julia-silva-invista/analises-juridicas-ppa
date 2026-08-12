@@ -653,8 +653,10 @@ with gr.Blocks(
         concurrency_id="analises_pdf",
     )
     proc_word_btn.click(fn=proc_gerar_word, inputs=[proc_relatorio_state], outputs=[proc_word_file])
-    proc_previa_btn.click(fn=proc_gerar_previa, inputs=[proc_relatorio_state, proc_extracao_state], outputs=[proc_previa_file, proc_previa_status])
-    proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state, proc_extracao_state], outputs=[proc_dossie_file, proc_dossie_status])
+    # A instrução adicional vai junto: é o que permite pedir um campo ou uma tabela
+    # que o template do dossiê não prevê.
+    proc_previa_btn.click(fn=proc_gerar_previa, inputs=[proc_relatorio_state, proc_extracao_state, proc_instrucoes], outputs=[proc_previa_file, proc_previa_status])
+    proc_dossie_btn.click(fn=proc_gerar_dossie, inputs=[proc_relatorio_state, proc_extracao_state, proc_instrucoes], outputs=[proc_dossie_file, proc_dossie_status])
     proc_perguntar_btn.click(
         fn=proc_responder, inputs=[proc_pergunta, proc_relatorio_state], outputs=[proc_resposta]
     )

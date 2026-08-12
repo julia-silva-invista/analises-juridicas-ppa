@@ -176,6 +176,40 @@ RASTREABILIDADE DA MATRÍCULA
 """
 
 
+def bloco_instrucao_adicional(texto: str, permite_secao_nova: bool = True) -> str:
+    """Instrução do usuário como seção nomeada, com precedência sobre o template.
+
+    Antes o texto entrava como um parágrafo solto no fim do prompt, competindo com um
+    template que enumera as seções e manda segui-lo à risca — pedir "abra uma seção
+    nova" era simplesmente ignorado. Aqui a instrução é rotulada e a autorização é
+    explícita, sem afrouxar a regra que importa: continua proibido inventar fato.
+    """
+    pedido = str(texto or "").strip()
+    if not pedido:
+        return ""
+
+    regras = [
+        "- Atenda ao pedido acima integralmente, além de tudo o que o template já exige.",
+        "- O pedido NÃO autoriza inventar, estimar ou presumir fato algum. Se o material "
+        "não trouxer o que foi pedido, diga expressamente que não consta.",
+        "- Toda informação trazida por causa do pedido leva referência (fls./Mov./Evento/ID) "
+        "como qualquer outra.",
+    ]
+    if permite_secao_nova:
+        regras.append(
+            "- Se o pedido não couber em nenhum item previsto, ACRESCENTE um item novo ao "
+            "fim da subseção do processo, com título próprio, em vez de espremer a "
+            "informação num item que não é dela ou de omiti-la."
+        )
+
+    return (
+        "═══ INSTRUÇÃO ADICIONAL DA ANALISTA (PRIORITÁRIA) ═══\n"
+        f"{pedido}\n\n"
+        + "\n".join(regras)
+        + "\n\n"
+    )
+
+
 def contexto_fonte_pdf(nome_arquivo: str, pagina_inicial: int, pagina_final: int,
                        paginas_digitalizadas=None) -> str:
     """Contexto determinístico que vincula páginas locais às páginas originais."""

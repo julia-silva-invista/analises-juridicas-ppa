@@ -357,9 +357,10 @@ def _build_previa(dados: dict) -> str:
     return caminho
 
 
-def gerar_previa_word(texto_completo: str, relatorio: str, client, model: str) -> str:
+def gerar_previa_word(texto_completo: str, relatorio: str, client, model: str,
+                      instrucoes: str = "") -> str:
     """Extrai os dados do processo e devolve o caminho do Dossiê Prévia em Word."""
-    dados = _extrair_dados(texto_completo, relatorio, client, model)
+    dados = _extrair_dados(texto_completo, relatorio, client, model, instrucoes)
     dados = _completar_com_relatorio(dados, relatorio, client, model)
     nomes_pdf = set(re.findall(r"(?:arquivo:\s*|^---\s*)([^\n—]+)", texto_completo or "", re.MULTILINE))
     dados = normalizar_referencias_objeto(dados, multiplos_pdfs=len(nomes_pdf) > 1)

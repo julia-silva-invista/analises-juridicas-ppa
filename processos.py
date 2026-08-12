@@ -35,6 +35,7 @@ from legal_prompts import (
     REGRA_INDICES_E_ADITAMENTOS,
     REGRA_CRONOLOGIA_PROCESSUAL,
     REGRAS_CONSOLIDACAO_PROCESSUAL,
+    bloco_instrucao_adicional,
     contexto_fonte_pdf,
     normalizar_referencias_relatorio,
 )
@@ -337,7 +338,7 @@ def _proc_obter_cache(client, model_cons: str) -> Optional[str]:
             cache = client.caches.create(
                 model=model_cons,
                 config=types.CreateCachedContentConfig(
-                    display_name="invista_proc_template_v1",
+                    display_name="invista_proc_template_v2",
                     system_instruction=SYSTEM_PROMPT_PROC,
                     contents=[types.Content(
                         role="user",
@@ -363,7 +364,7 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
 
     if versao_resumida:
         # Skip cache (cache contains full template), use only resumo template
-        instrucoes_extras = f"\n\nINSTRUCOES ADICIONAIS: {instrucoes.strip()}" if instrucoes.strip() else ""
+        instrucoes_extras = bloco_instrucao_adicional(instrucoes)
         prompt_full = (
             SYSTEM_PROMPT_PROC + "\n\n"
             + REGRAS_CONSOLIDACAO_PROCESSUAL + "\n\n"
@@ -386,7 +387,7 @@ def _proc_consolidar(client, parciais: list, instrucoes: str, cache_name, model_
             ).text
         return _retry(_fn)
 
-    _instrucoes_extra = f"INSTRUCOES ADICIONAIS: {instrucoes.strip()}\n\n" if instrucoes.strip() else ""
+    _instrucoes_extra = bloco_instrucao_adicional(instrucoes)
     _aviso_multiplos = (
         f"ATENCAO: foram carregados {len(parciais)} fragmentos de arquivo(s). "
         "Verifique se compartilham o mesmo numero de processo — se sim, trate como UM UNICO PROCESSO CONTINUO. "
@@ -585,8 +586,7 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
             "- IDPJs, Paulianas, Embargos de Terceiro: crie secoes B proprias\n\n"
             f"PROCESSOS RELACIONADOS:\n{texto_relacionados}\n\n"
         )
-        if instrucoes.strip():
-            prompt += f"INSTRUCOES: {instrucoes.strip()}\n\n"
+        prompt += bloco_instrucao_adicional(instrucoes, permite_secao_nova=False)
         prompt += "Gere APENAS as secoes de processos relacionados."
 
         def _consolidar_com(client, indice):
@@ -936,7 +936,7 @@ def proc_gerar_word(relatorio: str):
     return gr.update(value=_gerar_docx(relatorio, "Analise de Processo Judicial"), visible=True)
 
 
-def proc_gerar_dossie(relatorio: str, extracao: str = ""):
+def proc_gerar_dossie(relatorio: str, extracao: str = "", instrucoes: str = ""):
     # Prioriza o texto OCR completo; o relatório resumido omite campos do dossiê
     fonte = extracao.strip() if extracao and extracao.strip() else (relatorio or "").strip()
     if not fonte:
@@ -949,7 +949,7 @@ def proc_gerar_dossie(relatorio: str, extracao: str = ""):
         caminho = _executar_com_failover_gemini(
             _get_gemini_clients(),
             lambda client, _indice: gerar_dossie_word(
-                extracao or "", relatorio or "", client, GEMINI_MODEL_ESTRUTURADO
+                extracao or "", relatorio or "", client, GEMINI_MODEL_ESTRUTURADO, instrucoes
             ),
         )
         yield gr.update(value=caminho, visible=True), "✅ Dossiê gerado — clique no arquivo para baixar."
@@ -957,7 +957,7 @@ def proc_gerar_dossie(relatorio: str, extracao: str = ""):
         yield gr.update(value=None, visible=False), "❌ Erro ao gerar dossiê:\n\n" + traceback.format_exc()
 
 
-def proc_gerar_previa(relatorio: str, extracao: str = ""):
+def proc_gerar_previa(relatorio: str, extracao: str = "", instrucoes: str = ""):
     """Dossiê Prévia — triagem de viabilidade, mais enxuta que o desalinhado.
 
     Mesma fonte e mesma extração do dossiê desalinhado; muda o documento montado.
@@ -971,7 +971,7 @@ def proc_gerar_previa(relatorio: str, extracao: str = ""):
         caminho = _executar_com_failover_gemini(
             _get_gemini_clients(),
             lambda client, _indice: gerar_previa_word(
-                extracao or "", relatorio or "", client, GEMINI_MODEL_ESTRUTURADO
+                extracao or "", relatorio or "", client, GEMINI_MODEL_ESTRUTURADO, instrucoes
             ),
         )
         yield gr.update(value=caminho, visible=True), "✅ Dossiê Prévia gerado — clique no arquivo para baixar."
