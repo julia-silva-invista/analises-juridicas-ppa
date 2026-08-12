@@ -18,11 +18,21 @@ from coleta import coleta_gerar, coleta_gerar_dossie_dispatch
 from analysis_runtime import environment_status_json
 from timeline_societaria import (
     timeline_analisar,
-    timeline_toggle_edicao,
     timeline_salvar_imagem,
     timeline_gerar_word,
     timeline_exportar_html,
-    EDITOR_HEADERS,
+    aplicar_cabecalho as timeline_aplicar_cabecalho,
+    aplicar_edicao as timeline_aplicar_edicao,
+    adicionar_evento as timeline_adicionar_evento,
+    ordenar_eventos as timeline_ordenar_eventos,
+    remover_evento as timeline_remover_evento,
+    selecionar_evento as timeline_selecionar_evento,
+    COLUNAS_ADMINISTRADORES,
+    COLUNAS_CESSOES,
+    COLUNAS_FILIAIS,
+    COLUNAS_IMOVEIS,
+    COLUNAS_SOCIOS,
+    MOVIMENTOS_IMOVEL,
 )
 
 os.makedirs("resultados", exist_ok=True)
@@ -551,20 +561,73 @@ with gr.Blocks(
             )
             tl_timeline_html = gr.HTML()
             tl_data_state = gr.State({})
-            tl_editando_state = gr.State(False)
+            tl_evento_idx = gr.State(0)
 
-            tl_editor = gr.Dataframe(
-                headers=EDITOR_HEADERS,
-                interactive=True,
-                visible=False,
-                wrap=True,
-                label="Edição dos eventos",
-                elem_classes=["tl-editor-table"],
-            )
-            tl_edicao_status = gr.Markdown("")
+            # Edição por ato: campos rotulados, uma tabelinha por lista do JSON.
+            # A grade de 12 colunas anterior exigia decorar uma sintaxe ("Nome | 50%;
+            # Outro | 40%", "Cedente > Cessionário | % | valor") e perdia campos no
+            # caminho de volta.
+            with gr.Accordion("Editar timeline", open=False, elem_classes=["mat-accordion"]):
+                with gr.Row():
+                    tl_empresa = gr.Textbox(label="Empresa", scale=3)
+                    tl_cnpj = gr.Textbox(label="CNPJ", scale=2)
+
+                tl_evento_sel = gr.Dropdown(
+                    label="Ato em edição", choices=[], value=None,
+                    interactive=True, filterable=False,
+                )
+                with gr.Row():
+                    tl_add_evento_btn = gr.Button("+ Adicionar ato", variant="secondary")
+                    tl_del_evento_btn = gr.Button("Remover ato", variant="secondary")
+                    tl_ordenar_btn = gr.Button("Ordenar por data", variant="secondary")
+
+                with gr.Row():
+                    tl_f_data = gr.Textbox(label="Data", placeholder="DD/MM/AAAA", scale=1)
+                    tl_f_ato = gr.Textbox(label="Ato / ACS", placeholder="Ex: 2ª Alteração", scale=2)
+                    tl_f_arquivamento = gr.Textbox(label="Nº de arquivamento", scale=1)
+                tl_f_detalhamento = gr.Textbox(label="Detalhamento", lines=3)
+                with gr.Row():
+                    tl_f_cap_ant = gr.Textbox(label="Capital social anterior")
+                    tl_f_cap_apos = gr.Textbox(label="Capital social após o ato")
+                with gr.Row():
+                    tl_f_sede = gr.Textbox(label="Sede após o ato")
+                    tl_f_objeto = gr.Textbox(label="Objeto social após o ato")
+                tl_f_fonte = gr.Textbox(label="Fonte")
+
+                tl_t_socios = gr.Dataframe(
+                    headers=COLUNAS_SOCIOS, col_count=(len(COLUNAS_SOCIOS), "fixed"),
+                    row_count=(1, "dynamic"), interactive=True, wrap=True,
+                    label="Sócios após o ato", elem_classes=["tl-editor-table"],
+                )
+                tl_t_admin = gr.Dataframe(
+                    headers=COLUNAS_ADMINISTRADORES, col_count=(len(COLUNAS_ADMINISTRADORES), "fixed"),
+                    row_count=(1, "dynamic"), interactive=True, wrap=True,
+                    label="Administração após o ato", elem_classes=["tl-editor-table"],
+                )
+                tl_t_cessoes = gr.Dataframe(
+                    headers=COLUNAS_CESSOES, col_count=(len(COLUNAS_CESSOES), "fixed"),
+                    row_count=(1, "dynamic"), interactive=True, wrap=True,
+                    label="Cessões de quotas", elem_classes=["tl-editor-table"],
+                )
+                tl_t_imoveis = gr.Dataframe(
+                    headers=COLUNAS_IMOVEIS, col_count=(len(COLUNAS_IMOVEIS), "fixed"),
+                    row_count=(1, "dynamic"), interactive=True, wrap=True,
+                    label=f"Imóveis (movimento: {' · '.join(MOVIMENTOS_IMOVEL)})",
+                    elem_classes=["tl-editor-table"],
+                )
+                tl_t_filiais = gr.Dataframe(
+                    headers=COLUNAS_FILIAIS, col_count=(len(COLUNAS_FILIAIS), "fixed"),
+                    row_count=(1, "dynamic"), interactive=True, wrap=True,
+                    label="Filiais existentes após o ato", elem_classes=["tl-editor-table"],
+                )
+                tl_t_filiais_novas = gr.Dataframe(
+                    headers=COLUNAS_FILIAIS, col_count=(len(COLUNAS_FILIAIS), "fixed"),
+                    row_count=(1, "dynamic"), interactive=True, wrap=True,
+                    label="Filiais abertas NESTE ato (é o que gera o card 'Filial aberta')",
+                    elem_classes=["tl-editor-table"],
+                )
 
             with gr.Row():
-                tl_editar_btn = gr.Button("Editar", variant="secondary")
                 tl_exportar_html_btn = gr.DownloadButton("Exportar HTML", variant="secondary")
                 tl_gerar_tabela_btn = gr.Button("Gerar tabela (Word)", variant="secondary")
                 tl_exportar_img_btn = gr.Button("Exportar imagem", variant="secondary")
@@ -741,17 +804,68 @@ with gr.Blocks(
     )
 
     # Timeline Societária
+    # Campos do editor, na MESMA ordem que timeline_societaria espera
+    # (CAMPOS_TEXTO_DO_EVENTO seguido de LISTAS_DO_EVENTO).
+    tl_campos_evento = [
+        tl_f_data, tl_f_ato, tl_f_arquivamento, tl_f_detalhamento,
+        tl_f_cap_ant, tl_f_cap_apos, tl_f_sede, tl_f_objeto, tl_f_fonte,
+        tl_t_socios, tl_t_admin, tl_t_cessoes, tl_t_imoveis,
+        tl_t_filiais, tl_t_filiais_novas,
+    ]
+
     tl_analisar_btn.click(
         fn=timeline_analisar,
         inputs=[tl_arquivos],
-        outputs=[tl_status, tl_timeline_html, tl_editor, tl_data_state],
+        outputs=[tl_status, tl_timeline_html, tl_evento_sel, tl_data_state],
         concurrency_limit=2,
+    ).then(
+        fn=timeline_selecionar_evento,
+        inputs=[tl_data_state, tl_evento_idx],
+        outputs=[tl_evento_idx] + tl_campos_evento,
+    ).then(
+        fn=lambda data: (data.get("empresa", ""), data.get("cnpj", "")),
+        inputs=[tl_data_state],
+        outputs=[tl_empresa, tl_cnpj],
     )
-    tl_editar_btn.click(
-        fn=timeline_toggle_edicao,
-        inputs=[tl_editando_state, tl_editor, tl_data_state],
-        outputs=[tl_editando_state, tl_editar_btn, tl_editor, tl_timeline_html, tl_data_state, tl_edicao_status],
+
+    # Preview ao vivo: cada campo grava no ato selecionado e redesenha o HTML na hora,
+    # em vez de só ao fechar um modo de edição.
+    #
+    # `.input` e não `.change`: change dispara também quando o Gradio preenche o campo
+    # por conta própria. Ao trocar de ato, os 15 campos seriam reescritos — e, se algum
+    # deles rodasse antes de tl_evento_idx chegar ao valor novo, gravaria os dados do
+    # ato recém-aberto por cima do anterior.
+    for _campo in tl_campos_evento:
+        _campo.input(
+            fn=timeline_aplicar_edicao,
+            inputs=[tl_data_state, tl_evento_idx] + tl_campos_evento,
+            outputs=[tl_data_state, tl_timeline_html, tl_evento_sel],
+            show_progress="hidden",
+        )
+
+    for _campo in (tl_empresa, tl_cnpj):
+        _campo.input(
+            fn=timeline_aplicar_cabecalho,
+            inputs=[tl_data_state, tl_empresa, tl_cnpj],
+            outputs=[tl_data_state, tl_timeline_html],
+            show_progress="hidden",
+        )
+
+    tl_evento_sel.select(
+        fn=lambda data, evt: timeline_selecionar_evento(data, evt.index),
+        inputs=[tl_data_state, tl_evento_sel],
+        outputs=[tl_evento_idx] + tl_campos_evento,
     )
+
+    for _botao, _fn in ((tl_add_evento_btn, timeline_adicionar_evento),
+                        (tl_del_evento_btn, timeline_remover_evento),
+                        (tl_ordenar_btn, timeline_ordenar_eventos)):
+        _entradas = [tl_data_state] if _fn is timeline_adicionar_evento else [tl_data_state, tl_evento_idx]
+        _botao.click(
+            fn=_fn,
+            inputs=_entradas,
+            outputs=[tl_data_state, tl_timeline_html, tl_evento_sel, tl_evento_idx] + tl_campos_evento,
+        )
     # Um único evento: o JS roda antes e o que ele devolve vira o argumento do Python.
     tl_exportar_img_btn.click(
         fn=timeline_salvar_imagem,

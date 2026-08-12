@@ -7,6 +7,7 @@ inteira caía com um traceback cru de `google.genai.errors.ClientError: 429`.
 from __future__ import annotations
 
 import base64
+import copy
 import io
 import sys
 import types as pytypes
@@ -221,3 +222,137 @@ def testar_captura_js_recebe_um_argumento_e_devolve_lista():
     # Um evento só: encadear backend depois de um evento só-JS depende de comportamento
     # que varia entre a versão de desenvolvimento e a do Space.
     assert ".then(" not in fonte.split("tl_exportar_img_btn.click(", 1)[1].split(")\n", 1)[0]
+
+
+# ── Edição por evento ────────────────────────────────────────────────────────
+# A grade de 12 colunas achatava cinco listas do JSON numa mini-linguagem por célula
+# ("Nome | 50%; Outro | 40%", "Cedente > Cessionário | % | valor"). Os joins omitiam
+# campos vazios e os parses liam por posição, então um imóvel sem cartório voltava com
+# o valor no lugar do cartório e o movimento trocado pelo default "integralizacao".
+
+EVENTO_COMPLETO = {
+    "data": "05/06/2015",
+    "ato": "2ª Alteração",
+    "numero_arquivamento": "20155551234",
+    "detalhamento": "Cessão de quotas e integralização de imóvel.",
+    "categorias": ["Sócios", "Imóvel"],
+    "socios_apos": [{"nome": "Maria Souza", "participacao": "100%", "quotas": "100.000"}],
+    "administradores_apos": [{"nome": "Maria Souza", "cargo": "Administradora"}],
+    "capital_social_anterior": "R$ 100.000,00",
+    "capital_social_apos": "R$ 1.000.000,00",
+    "sede_apos": "Londrina/PR",
+    "objeto_apos": "Agropecuária e holding",
+    "cessoes": [{"cedente": "João da Silva", "cessionario": "Maria Souza",
+                 "participacao": "50%", "valor": "R$ 1,00", "observacao": "valor simbólico"}],
+    "imoveis": [{"matricula": "12.345", "cartorio": "1º CRI Curitiba", "cidade": "Curitiba",
+                 "valor": "R$ 900.000,00", "movimento": "integralizacao",
+                 "descricao": "Fazenda São Jorge"}],
+    "filiais_apos": [{"nome": "Filial Maringá", "local": "Maringá/PR"}],
+    "filiais_adicionadas": [{"nome": "Filial Maringá", "local": "Maringá/PR"}],
+    "fonte": "2ª alteração, p. 1-3",
+}
+
+DADOS_EDICAO = {"empresa": "Agropecuária Teste Ltda", "cnpj": "12.345.678/0001-90",
+                "eventos": [EVENTO_COMPLETO]}
+
+
+def _round_trip(dados, indice=0):
+    """Carrega o evento no editor e aplica de volta sem alterar nada."""
+    campos = timeline.campos_do_evento(dados, indice)
+    novo, _html, _rotulos = timeline.aplicar_edicao(dados, indice, *campos)
+    return novo
+
+
+def testar_round_trip_nao_perde_nenhum_campo():
+    resultado = _round_trip(DADOS_EDICAO)["eventos"][0]
+    for chave, valor in EVENTO_COMPLETO.items():
+        assert resultado[chave] == valor, f"campo {chave} mudou no round-trip"
+
+
+def testar_campo_fora_do_editor_sobrevive():
+    """"categorias" era zerada a cada edição."""
+    assert _round_trip(DADOS_EDICAO)["eventos"][0]["categorias"] == ["Sócios", "Imóvel"]
+
+
+def testar_corrigir_a_data_nao_apaga_nada():
+    """A reconciliação antiga era pela chave "data|ato": mudar a data fazia o lookup
+    falhar e apagava capital_social_anterior e filiais_adicionadas — e, com elas, o
+    card "Filial aberta" sumia da timeline sem explicação."""
+    campos = timeline.campos_do_evento(DADOS_EDICAO, 0)
+    campos[0] = "06/06/2015"          # data
+    campos[1] = "2ª Alteração Contratual"  # ato
+    evento = timeline.aplicar_edicao(DADOS_EDICAO, 0, *campos)[0]["eventos"][0]
+
+    assert evento["data"] == "06/06/2015"
+    assert evento["capital_social_anterior"] == "R$ 100.000,00"
+    assert evento["filiais_adicionadas"] == [{"nome": "Filial Maringá", "local": "Maringá/PR"}]
+
+
+def testar_imovel_sem_cartorio_nao_desloca_campos():
+    """O caso que corrompia: campo vazio no meio da lista."""
+    dados = copy.deepcopy(DADOS_EDICAO)
+    dados["eventos"][0]["imoveis"] = [{"matricula": "12.345", "cartorio": "", "cidade": "",
+                                       "valor": "R$ 800.000,00", "movimento": "saida",
+                                       "descricao": ""}]
+    imovel = _round_trip(dados)["eventos"][0]["imoveis"][0]
+    assert imovel["valor"] == "R$ 800.000,00", "o valor escorregou para outra coluna"
+    assert imovel["movimento"] == "saida", "o movimento virou o default silencioso"
+    assert imovel["cartorio"] == ""
+
+
+def testar_cessao_sem_participacao_preserva_o_valor():
+    dados = copy.deepcopy(DADOS_EDICAO)
+    dados["eventos"][0]["cessoes"] = [{"cedente": "A", "cessionario": "B", "participacao": "",
+                                       "valor": "R$ 1,00", "observacao": ""}]
+    cessao = _round_trip(dados)["eventos"][0]["cessoes"][0]
+    assert cessao["participacao"] == "" and cessao["valor"] == "R$ 1,00"
+
+
+def testar_linha_em_branco_da_tabelinha_e_descartada():
+    campos = timeline.campos_do_evento(DADOS_EDICAO, 0)
+    campos[9] = [["Maria Souza", "100%", "100.000"], ["", "", ""], [None, None, None]]
+    socios = timeline.aplicar_edicao(DADOS_EDICAO, 0, *campos)[0]["eventos"][0]["socios_apos"]
+    assert socios == [{"nome": "Maria Souza", "participacao": "100%", "quotas": "100.000"}]
+
+
+def testar_empresa_e_cnpj_agora_sao_editaveis():
+    """Não havia nenhuma via de correção: apareciam no cabeçalho do HTML e da imagem."""
+    dados, html_gerado = timeline.aplicar_cabecalho(DADOS_EDICAO, "Outra Empresa Ltda", "99.999.999/0001-99")
+    assert dados["empresa"] == "Outra Empresa Ltda"
+    assert dados["cnpj"] == "99.999.999/0001-99"
+    assert "Outra Empresa Ltda" in html_gerado
+    assert dados["eventos"] == DADOS_EDICAO["eventos"], "editar o cabeçalho não toca nos atos"
+
+
+def testar_adicionar_remover_e_ordenar_atos():
+    dados, _html, _sel, indice, *campos = timeline.adicionar_evento(DADOS_EDICAO)
+    assert len(dados["eventos"]) == 2 and indice == 1
+    assert campos[1] == "Novo ato", "o ato novo já entra selecionado no editor"
+
+    dados2, _h, _s, indice2, *_ = timeline.remover_evento(dados, 1)
+    assert len(dados2["eventos"]) == 1 and indice2 == 0
+
+    fora_de_ordem = {"empresa": "X", "cnpj": "", "eventos": [
+        dict(EVENTO_COMPLETO, data="05/06/2015", ato="Segundo"),
+        dict(EVENTO_COMPLETO, data="10/03/2010", ato="Primeiro"),
+    ]}
+    ordenado, _h, _s, indice3, *_ = timeline.ordenar_eventos(fora_de_ordem, 0)
+    assert [e["ato"] for e in ordenado["eventos"]] == ["Primeiro", "Segundo"]
+    assert indice3 == 1, "o ato que estava aberto continua aberto depois de reordenar"
+
+
+def testar_rotulos_do_seletor_identificam_o_ato():
+    assert timeline.rotulos_dos_eventos(DADOS_EDICAO) == ["1. 05/06/2015 — 2ª Alteração"]
+
+
+def testar_indice_invalido_nao_quebra():
+    for indice in (None, -5, 99, "abc"):
+        assert timeline.campos_do_evento(DADOS_EDICAO, indice)
+        timeline.aplicar_edicao(DADOS_EDICAO, indice, *timeline.campos_do_evento(DADOS_EDICAO, 0))
+
+
+def testar_renderizadores_pil_orfaos_foram_removidos():
+    """Eram três implementações paralelas do mesmo layout; duas nunca eram chamadas."""
+    for morto in ("timeline_exportar_imagem", "timeline_exportar_imagem_vertical",
+                  "timeline_ver_tabela", "MOV_CORES"):
+        assert not hasattr(timeline, morto), f"{morto} deveria ter sido removido"

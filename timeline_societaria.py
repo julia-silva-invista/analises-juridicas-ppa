@@ -24,7 +24,6 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 from google import genai
 from google.genai import types
-from PIL import Image, ImageDraw, ImageFont
 
 from utils import (
     _codigo_http_gemini,
@@ -38,20 +37,6 @@ from utils import (
 
 MODEL_TIMELINE = os.getenv("GEMINI_MODEL_TIMELINE", "gemini-2.5-pro")
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "cronologia_societaria.docx"
-EDITOR_HEADERS = [
-    "Data",
-    "Ato / ACS",
-    "Detalhamento",
-    "Sócios após o ato (Nome | %)",
-    "Administração",
-    "Capital social",
-    "Sede",
-    "Objeto social",
-    "Cessões de quotas (Cedente > Cessionário | % | valor)",
-    "Imóveis (Matrícula | Cartório | Valor | Movimento)",
-    "Filiais",
-    "Fonte",
-]
 
 PROMPT_TIMELINE = """\
 Você é um analista jurídico societário sênior. Analise TODOS os atos societários
@@ -335,210 +320,7 @@ def _joined_filiais(items: list[dict]) -> str:
     )
 
 
-def _joined_cessoes(items: list[dict]) -> str:
-    values = []
-    for item in items or []:
-        cedente = str(item.get("cedente", "")).strip()
-        cessionario = str(item.get("cessionario", "")).strip()
-        if not (cedente or cessionario):
-            continue
-        extra = " | ".join(
-            x
-            for x in [
-                str(item.get("participacao", "")).strip(),
-                str(item.get("valor", "")).strip(),
-                str(item.get("observacao", "")).strip(),
-            ]
-            if x
-        )
-        base = f"{cedente} > {cessionario}"
-        values.append(f"{base} | {extra}" if extra else base)
-    return "; ".join(values)
 
-
-def _parse_cessoes(value: str) -> list[dict]:
-    result = []
-    for chunk in re.split(r"\s*;\s*", str(value or "").strip()):
-        if not chunk:
-            continue
-        parts = [p.strip() for p in chunk.split("|")]
-        pessoas = re.split(r"\s*(?:>|→|para)\s*", parts[0], maxsplit=1)
-        result.append(
-            {
-                "cedente": pessoas[0].strip(),
-                "cessionario": pessoas[1].strip() if len(pessoas) > 1 else "",
-                "participacao": parts[1] if len(parts) > 1 else "",
-                "valor": parts[2] if len(parts) > 2 else "",
-                "observacao": " | ".join(parts[3:]) if len(parts) > 3 else "",
-            }
-        )
-    return result
-
-
-def _joined_imoveis(items: list[dict]) -> str:
-    values = []
-    for item in items or []:
-        matricula = str(item.get("matricula", "")).strip()
-        if not matricula and not item.get("cartorio"):
-            continue
-        values.append(
-            " | ".join(
-                x
-                for x in [
-                    matricula,
-                    str(item.get("cartorio", "")).strip() or str(item.get("cidade", "")).strip(),
-                    str(item.get("valor", "")).strip(),
-                    str(item.get("movimento", "")).strip(),
-                ]
-                if x
-            )
-        )
-    return "; ".join(values)
-
-
-def _parse_imoveis(value: str) -> list[dict]:
-    result = []
-    for chunk in re.split(r"\s*;\s*", str(value or "").strip()):
-        if not chunk:
-            continue
-        parts = [p.strip() for p in chunk.split("|")]
-        parts += [""] * (4 - len(parts))
-        result.append(
-            {
-                "matricula": parts[0],
-                "cartorio": parts[1],
-                "cidade": parts[1],
-                "valor": parts[2],
-                "movimento": parts[3] or "integralizacao",
-                "descricao": "",
-            }
-        )
-    return result
-
-
-def data_to_rows(data: dict) -> list[list[str]]:
-    rows = []
-    for event in data.get("eventos", []):
-        ato = str(event.get("ato", "")).strip()
-        number = str(event.get("numero_arquivamento", "")).strip()
-        if number and number not in ato:
-            ato = f"{ato} | Arquiv. {number}" if ato else f"Arquiv. {number}"
-        rows.append(
-            [
-                str(event.get("data", "")),
-                ato,
-                str(event.get("detalhamento", "")),
-                _joined_people(event.get("socios_apos", []), include_share=True),
-                _joined_people(event.get("administradores_apos", [])),
-                str(event.get("capital_social_apos", "")),
-                str(event.get("sede_apos", "")),
-                str(event.get("objeto_apos", "")),
-                _joined_cessoes(event.get("cessoes", [])),
-                _joined_imoveis(event.get("imoveis", [])),
-                _joined_filiais(event.get("filiais_apos", [])),
-                str(event.get("fonte", "")),
-            ]
-        )
-    return rows
-
-
-def _parse_people(value: str, administrators: bool = False) -> list[dict]:
-    result = []
-    for chunk in re.split(r"\s*;\s*", str(value or "").strip()):
-        if not chunk:
-            continue
-        if administrators:
-            m = re.match(r"(.+?)\s*\(([^()]*)\)\s*$", chunk)
-            result.append(
-                {
-                    "nome": (m.group(1) if m else chunk).strip(),
-                    "cargo": (m.group(2) if m else "Administrador").strip(),
-                }
-            )
-        else:
-            parts = [p.strip() for p in chunk.split("|", 1)]
-            result.append(
-                {
-                    "nome": parts[0],
-                    "participacao": parts[1] if len(parts) > 1 else "",
-                    "quotas": "",
-                }
-            )
-    return result
-
-
-def _parse_filiais(value: str) -> list[dict]:
-    result = []
-    for chunk in re.split(r"\s*;\s*", str(value or "").strip()):
-        if not chunk:
-            continue
-        parts = re.split(r"\s+[—-]\s+", chunk, maxsplit=1)
-        result.append({"nome": parts[0].strip(), "local": parts[1].strip() if len(parts) > 1 else ""})
-    return result
-
-
-def rows_to_data(rows: Any, previous: dict | None = None) -> dict:
-    if hasattr(rows, "values"):
-        rows = rows.values.tolist()
-    anteriores = {
-        str(e.get("data", "")) + "|" + str(e.get("ato", "")): e
-        for e in (previous or {}).get("eventos", [])
-    }
-    result = {
-        "empresa": (previous or {}).get("empresa", ""),
-        "cnpj": (previous or {}).get("cnpj", ""),
-        "eventos": [],
-    }
-    for row in rows or []:
-        values = list(row) + [""] * (len(EDITOR_HEADERS) - len(row))
-        if not any(str(v or "").strip() for v in values):
-            continue
-        ato_raw = str(values[1] or "").strip()
-        number = ""
-        m = re.search(r"\|\s*Arquiv\.\s*(.+)$", ato_raw, flags=re.IGNORECASE)
-        if m:
-            number = m.group(1).strip()
-            ato_raw = ato_raw[: m.start()].strip()
-        anterior = anteriores.get(str(values[0] or "").strip() + "|" + ato_raw, {})
-        result["eventos"].append(
-            {
-                "data": str(values[0] or "").strip(),
-                "ato": ato_raw,
-                "numero_arquivamento": number,
-                "detalhamento": str(values[2] or "").strip(),
-                "categorias": [],
-                "socios_apos": _parse_people(values[3]),
-                "administradores_apos": _parse_people(values[4], administrators=True),
-                "capital_social_anterior": str(anterior.get("capital_social_anterior", "")).strip(),
-                "capital_social_apos": str(values[5] or "").strip(),
-                "sede_apos": str(values[6] or "").strip(),
-                "objeto_apos": str(values[7] or "").strip(),
-                "cessoes": _parse_cessoes(values[8]),
-                "imoveis": _parse_imoveis(values[9]),
-                "filiais_apos": _parse_filiais(values[10]),
-                "filiais_adicionadas": anterior.get("filiais_adicionadas", []),
-                "fonte": str(values[11] or "").strip(),
-            }
-        )
-    result["eventos"].sort(key=lambda e: _date_key(e.get("data", "")))
-    return result
-
-
-MOV_CORES = {
-    "entrada": "#235472",
-    "saida": "#DC4405",
-    "cessao": "#1C6E8C",
-    "imovel": "#A6486A",
-    "imovel-saida": "#DC4405",
-    "admin": "#1C6E8C",
-    "capital-up": "#2F6B3A",
-    "capital-down": "#DC4405",
-    "sede": "#DC4405",
-    "objeto": "#9A7B2F",
-    "filial": "#77636A",
-    "base": "#77817A",
-    "constituicao": "#2F6B3A",
-}
 
 
 def _share(socio: dict) -> str:
@@ -830,7 +612,7 @@ def timeline_analisar(files):
     yield (
         "Preparando os atos societários...",
         '<div class="timeline-loading">Lendo os documentos e reconstruindo a evolução societária…</div>',
-        [],
+        gr.update(choices=[], value=None),
         {},
     )
     try:
@@ -841,360 +623,203 @@ def timeline_analisar(files):
         raise gr.Error(str(exc)) from exc
     except Exception as exc:
         mensagem = _mensagem_erro_gemini(exc, getattr(exc, "clients_gemini", None))
-        yield (mensagem, f'<div class="timeline-empty">{html.escape(mensagem)}</div>', [], {})
+        yield (mensagem, f'<div class="timeline-empty">{html.escape(mensagem)}</div>',
+               gr.update(choices=[], value=None), {})
         raise gr.Error(mensagem) from exc
+    rotulos = rotulos_dos_eventos(data)
     yield (
         f"Concluído: {len(data.get('eventos', []))} evento(s) societário(s) identificado(s).",
         render_timeline_html(data),
-        data_to_rows(data),
+        gr.update(choices=rotulos, value=(rotulos[0] if rotulos else None)),
         data,
     )
 
 
-def timeline_toggle_edicao(editando: bool, rows: Any, data: dict):
-    if not editando:
-        return (
-            True,
-            gr.update(value="Concluir edição"),
-            gr.update(visible=True, interactive=True, value=data_to_rows(data or {})),
-            gr.update(),
-            data,
-            "Modo de edição ativo. Corrija os campos na tabela abaixo.",
-        )
-    updated = rows_to_data(rows, data or {})
-    return (
-        False,
-        gr.update(value="Editar"),
-        gr.update(visible=False, value=data_to_rows(updated)),
-        render_timeline_html(updated),
-        updated,
-        "Edições salvas e visualização atualizada.",
-    )
+# ══════════════════════════════════════════════════════════════════════════════
+# Edição por evento
+#
+# A grade de 12 colunas foi substituída por campos rotulados: cada lista do JSON
+# (sócios, administração, cessões, imóveis, filiais) ganhou uma tabelinha com uma
+# coluna por campo. Não existe mais mini-linguagem dentro da célula — nada de "|",
+# ";", ">" ou " — " para a usuária decorar, e nada de parse posicional, que deslocava
+# campos quando um valor vinha vazio (um imóvel sem cartório virava um imóvel com o
+# valor no lugar do cartório e o movimento trocado por "integralizacao").
+#
+# Também some a reconciliação por chave "data|ato": o evento é editado no lugar, pelo
+# índice, então corrigir a data não apaga mais capital_social_anterior nem
+# filiais_adicionadas.
+# ══════════════════════════════════════════════════════════════════════════════
+
+COLUNAS_SOCIOS = ["Nome", "Participação", "Quotas"]
+COLUNAS_ADMINISTRADORES = ["Nome", "Cargo"]
+COLUNAS_CESSOES = ["Cedente", "Cessionário", "Participação", "Valor", "Observação"]
+COLUNAS_IMOVEIS = ["Matrícula", "Cartório", "Cidade", "Valor", "Movimento", "Descrição"]
+COLUNAS_FILIAIS = ["Nome", "Local"]
+
+# (chave no JSON, colunas da tabelinha, campos do dict na ordem das colunas)
+LISTAS_DO_EVENTO = [
+    ("socios_apos", COLUNAS_SOCIOS, ["nome", "participacao", "quotas"]),
+    ("administradores_apos", COLUNAS_ADMINISTRADORES, ["nome", "cargo"]),
+    ("cessoes", COLUNAS_CESSOES, ["cedente", "cessionario", "participacao", "valor", "observacao"]),
+    ("imoveis", COLUNAS_IMOVEIS, ["matricula", "cartorio", "cidade", "valor", "movimento", "descricao"]),
+    ("filiais_apos", COLUNAS_FILIAIS, ["nome", "local"]),
+    ("filiais_adicionadas", COLUNAS_FILIAIS, ["nome", "local"]),
+]
+
+# Campos de texto simples, na ordem em que a interface os envia.
+CAMPOS_TEXTO_DO_EVENTO = [
+    "data", "ato", "numero_arquivamento", "detalhamento",
+    "capital_social_anterior", "capital_social_apos", "sede_apos", "objeto_apos", "fonte",
+]
+
+MOVIMENTOS_IMOVEL = ["integralizacao", "saida", "aquisicao"]
 
 
-def timeline_ver_tabela(data: dict):
-    events = (data or {}).get("eventos", [])
-    rows = [
-        [
-            event.get("data", ""),
-            event.get("ato", ""),
-            " ".join(detalhamento_word(event, events[index - 1] if index else None)),
-        ]
-        for index, event in enumerate(events)
+def _linhas_de_lista(itens, campos: list) -> list[list[str]]:
+    """Lista de dicts → linhas da tabelinha, uma coluna por campo."""
+    linhas = [
+        [str(item.get(campo, "") or "") for campo in campos]
+        for item in (itens or []) if isinstance(item, dict)
     ]
-    return gr.update(visible=True, value=rows)
+    return linhas or [[""] * len(campos)]
 
 
-def _font(size: int, bold: bool = False):
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-    ]
-    for candidate in candidates:
-        if Path(candidate).exists():
-            return ImageFont.truetype(candidate, size)
-    return ImageFont.load_default()
+def _lista_de_linhas(linhas: Any, campos: list) -> list[dict]:
+    """Tabelinha → lista de dicts. Linha inteiramente vazia é descartada."""
+    if hasattr(linhas, "values"):
+        linhas = linhas.values.tolist()
+    resultado = []
+    for linha in linhas or []:
+        valores = [str(v).strip() if v is not None and str(v) != "nan" else "" for v in linha]
+        valores += [""] * (len(campos) - len(valores))
+        if not any(valores):
+            continue
+        resultado.append(dict(zip(campos, valores[:len(campos)])))
+    return resultado
 
 
-def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines: int = 4) -> list[str]:
-    words = str(text or "").split()
-    if not words:
-        return []
-    lines, current = [], ""
-    for word in words:
-        trial = f"{current} {word}".strip()
-        if draw.textbbox((0, 0), trial, font=font)[2] <= max_width or not current:
-            current = trial
-        else:
-            lines.append(current)
-            current = word
-    if current:
-        lines.append(current)
-    return lines[:max_lines]
+def rotulos_dos_eventos(data: dict) -> list[str]:
+    """Rótulos do seletor de ato, na ordem em que os eventos estão em `data`."""
+    rotulos = []
+    for indice, evento in enumerate((data or {}).get("eventos", []), 1):
+        data_evento = str(evento.get("data", "") or "s/ data")
+        ato = str(evento.get("ato", "") or "ato sem nome")
+        rotulos.append(f"{indice}. {data_evento} — {ato}")
+    return rotulos
 
 
-def _hex(value: str) -> tuple[int, int, int]:
-    value = value.lstrip("#")
-    return tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))
+def _evento_em(data: dict, indice) -> dict:
+    eventos = (data or {}).get("eventos", [])
+    try:
+        return eventos[int(indice)]
+    except (TypeError, ValueError, IndexError):
+        return {}
 
 
-def _tint(value: str, alpha: float = 0.09) -> tuple[int, int, int]:
-    r, g, b = _hex(value)
-    return (
-        int(r * alpha + 255 * (1 - alpha)),
-        int(g * alpha + 255 * (1 - alpha)),
-        int(b * alpha + 255 * (1 - alpha)),
-    )
+def campos_do_evento(data: dict, indice) -> list:
+    """Valores de todos os campos do editor para o evento selecionado."""
+    evento = _evento_em(data, indice)
+    textos = [str(evento.get(campo, "") or "") for campo in CAMPOS_TEXTO_DO_EVENTO]
+    tabelas = [_linhas_de_lista(evento.get(chave), campos) for chave, _cols, campos in LISTAS_DO_EVENTO]
+    return textos + tabelas
 
 
-def timeline_exportar_imagem(data: dict) -> str:
-    """Cronologia enxuta, em alta resolução, para colar no dossiê."""
-    events = (data or {}).get("eventos", [])
-    if not events:
-        raise gr.Error("Gere a timeline antes de exportar.")
+def _update_seletor(data: dict, posicao: int):
+    """Rótulos do seletor refeitos, mantendo o ato aberto selecionado.
 
-    scale = 2
-    col_w = 250 * scale
-    gap = 14 * scale
-    pad = 34 * scale
-    header_h = 128 * scale
-    axis_h = 46 * scale
-    inner_w = col_w - 26 * scale
-
-    text, muted, line = "#2C302C", "#737670", "#E4E4E0"
-
-    probe = Image.new("RGB", (10, 10))
-    draw = ImageDraw.Draw(probe)
-    f_titulo = _font(19 * scale, True)
-    f_meta = _font(11 * scale)
-    f_data = _font(13 * scale, True)
-    f_ato = _font(9 * scale, True)
-    f_rotulo = _font(8 * scale, True)
-    f_nome = _font(10 * scale, True)
-    f_extra = _font(8 * scale)
-    f_quadro = _font(9 * scale)
-
-    colunas = []
-    for index, event in enumerate(events):
-        prev = events[index - 1] if index else None
-        blocos = []
-        altura = 0
-        for mov in movimentos_do_ato(event, prev):
-            nome_linhas = _wrap(draw, mov["nome"], f_nome, inner_w - 16 * scale, 4)
-            extra_linhas = _wrap(draw, mov.get("extra", ""), f_extra, inner_w - 16 * scale, 3)
-            bloco_h = (
-                9 * scale
-                + 12 * scale
-                + len(nome_linhas) * 14 * scale
-                + (len(extra_linhas) * 12 * scale + 3 * scale if extra_linhas else 0)
-                + 9 * scale
-            )
-            blocos.append(
-                {
-                    "cor": MOV_CORES.get(mov["tipo"], "#77817A"),
-                    "rotulo": mov["rotulo"].upper(),
-                    "nome": nome_linhas,
-                    "extra": extra_linhas,
-                    "altura": bloco_h,
-                }
-            )
-            altura += bloco_h + 8 * scale
-        quadro_linhas = _wrap(draw, _quadro_resumo(event), f_quadro, inner_w, 4)
-        altura += 16 * scale + len(quadro_linhas) * 13 * scale
-        colunas.append({"event": event, "blocos": blocos, "quadro": quadro_linhas, "altura": altura})
-
-    corpo_h = max(c["altura"] for c in colunas)
-    width = pad * 2 + len(events) * col_w + (len(events) - 1) * gap
-    height = header_h + axis_h + corpo_h + pad
-    image = Image.new("RGB", (width, height), "#FFFFFF")
-    draw = ImageDraw.Draw(image)
-
-    draw.text((pad, 30 * scale), "CRONOLOGIA SOCIETÁRIA", fill="#DC4405", font=_font(9 * scale, True))
-    draw.text((pad, 46 * scale), str(data.get("empresa", "") or "Sociedade analisada"), fill="#1F211F", font=f_titulo)
-    meta = " · ".join(
-        x
-        for x in [
-            ("CNPJ " + str(data.get("cnpj", ""))) if data.get("cnpj") else "",
-            f"{len(events)} atos",
-            _periodo(events),
-        ]
-        if x
-    )
-    draw.text((pad, 78 * scale), meta, fill=muted, font=f_meta)
-    draw.line((pad, header_h - 22 * scale, width - pad, header_h - 22 * scale), fill="#1F211F", width=2 * scale)
-
-    axis_y = header_h + axis_h // 2
-    draw.line((pad, axis_y, width - pad, axis_y), fill=line, width=2 * scale)
-
-    for index, coluna in enumerate(colunas):
-        x = pad + index * (col_w + gap)
-        event = coluna["event"]
-        draw.text((x, header_h - 4 * scale), str(event.get("data", "") or "—"), fill=text, font=f_data)
-        draw.text(
-            (x, header_h + 16 * scale),
-            str(event.get("ato", "") or "ATO SOCIETÁRIO").upper(),
-            fill=muted,
-            font=f_ato,
-        )
-        raio = 6 * scale
-        draw.ellipse((x - raio, axis_y - raio, x + raio, axis_y + raio), fill="#DC4405")
-
-        y = header_h + axis_h
-        for bloco in coluna["blocos"]:
-            draw.rectangle((x, y, x + col_w, y + bloco["altura"]), fill=_tint(bloco["cor"]))
-            draw.rectangle((x, y, x + 3 * scale, y + bloco["altura"]), fill=bloco["cor"])
-            ty = y + 9 * scale
-            draw.text((x + 12 * scale, ty), bloco["rotulo"], fill=bloco["cor"], font=f_rotulo)
-            ty += 14 * scale
-            for linha_texto in bloco["nome"]:
-                draw.text((x + 12 * scale, ty), linha_texto, fill="#1F211F", font=f_nome)
-                ty += 14 * scale
-            if bloco["extra"]:
-                ty += 2 * scale
-                for linha_texto in bloco["extra"]:
-                    draw.text((x + 12 * scale, ty), linha_texto, fill=muted, font=f_extra)
-                    ty += 12 * scale
-            y += bloco["altura"] + 8 * scale
-
-        y += 6 * scale
-        draw.line((x, y, x + col_w, y), fill=line, width=1 * scale)
-        y += 8 * scale
-        draw.text((x, y), "QUADRO APÓS O ATO", fill="#A9ABA6", font=f_rotulo)
-        y += 13 * scale
-        for linha_texto in coluna["quadro"]:
-            draw.text((x, y), linha_texto, fill="#3F423E", font=f_quadro)
-            y += 13 * scale
-
-    output = Path(tempfile.gettempdir()) / "timeline_societaria_alta_resolucao.png"
-    image.save(output, format="PNG", optimize=True, dpi=(192, 192))
-    return str(output)
+    Precisa ser um gr.update: devolver a lista crua trocaria o VALOR do dropdown pela
+    lista inteira, em vez de repovoar as opções.
+    """
+    rotulos = rotulos_dos_eventos(data)
+    valor = rotulos[posicao] if 0 <= posicao < len(rotulos) else None
+    return gr.update(choices=rotulos, value=valor)
 
 
+def aplicar_edicao(data: dict, indice, *valores):
+    """Grava os campos no evento selecionado e devolve (data, html, seletor).
 
-def _medir_timeline_vertical(events: list[dict], scale: float, width: int):
-    pad = 34 * scale
-    axis_x = pad + 6 * scale
-    content_x = axis_x + 26 * scale
-    content_w = width - content_x - pad
-    header_h = 118 * scale
-    gap_evento = 22 * scale
+    Edita o dict no lugar, preservando as chaves que o editor não expõe (por exemplo
+    "categorias"), em vez de reconstruir o evento a partir de texto.
+    """
+    data = copy.deepcopy(data or {})
+    eventos = data.setdefault("eventos", [])
+    try:
+        posicao = int(indice)
+        evento = eventos[posicao]
+    except (TypeError, ValueError, IndexError):
+        return data, render_timeline_html(data), _update_seletor(data, -1)
 
-    probe = Image.new("RGB", (10, 10))
-    draw = ImageDraw.Draw(probe)
-    fontes = {
-        "kicker": _font(round(9 * scale), True),
-        "titulo": _font(round(19 * scale), True),
-        "meta": _font(round(11 * scale)),
-        "data": _font(round(13 * scale), True),
-        "ato": _font(round(9 * scale), True),
-        "rotulo": _font(round(8 * scale), True),
-        "nome": _font(round(10 * scale), True),
-        "extra": _font(round(8 * scale)),
-        "quadro": _font(round(9 * scale)),
-    }
+    n_textos = len(CAMPOS_TEXTO_DO_EVENTO)
+    for campo, valor in zip(CAMPOS_TEXTO_DO_EVENTO, valores[:n_textos]):
+        evento[campo] = str(valor or "").strip()
+    for (chave, _colunas, campos), tabela in zip(LISTAS_DO_EVENTO, valores[n_textos:]):
+        evento[chave] = _lista_de_linhas(tabela, campos)
 
-    itens = []
-    for idx, event in enumerate(events):
-        prev = events[idx - 1] if idx else None
-        blocos = []
-        for mov in movimentos_do_ato(event, prev):
-            nome_linhas = _wrap(draw, mov["nome"], fontes["nome"], content_w - 16 * scale, 4)
-            extra_linhas = _wrap(draw, mov.get("extra", ""), fontes["extra"], content_w - 16 * scale, 3)
-            bloco_h = (
-                9 * scale
-                + 12 * scale
-                + len(nome_linhas) * 14 * scale
-                + (len(extra_linhas) * 12 * scale + 3 * scale if extra_linhas else 0)
-                + 9 * scale
-            )
-            blocos.append(
-                {
-                    "cor": MOV_CORES.get(mov["tipo"], "#77817A"),
-                    "rotulo": mov["rotulo"].upper(),
-                    "nome": nome_linhas,
-                    "extra": extra_linhas,
-                    "altura": bloco_h,
-                }
-            )
-        quadro_linhas = _wrap(draw, _quadro_resumo(event), fontes["quadro"], content_w, 4)
-        altura = 20 * scale + sum(b["altura"] + 8 * scale for b in blocos) + 16 * scale + len(quadro_linhas) * 13 * scale
-        itens.append({"event": event, "blocos": blocos, "quadro": quadro_linhas, "altura": altura})
-
-    body_h = sum(item["altura"] for item in itens) + gap_evento * max(0, len(itens) - 1)
-    height = header_h + body_h + pad
-    return {
-        "scale": scale, "width": width, "height": height, "pad": pad, "axis_x": axis_x,
-        "content_x": content_x, "content_w": content_w, "header_h": header_h,
-        "gap_evento": gap_evento, "body_h": body_h, "itens": itens, "fontes": fontes,
-    }
+    # O rótulo do seletor carrega data e ato — editar qualquer um dos dois muda o rótulo.
+    return data, render_timeline_html(data), _update_seletor(data, posicao)
 
 
-def timeline_exportar_imagem_vertical(data: dict) -> str:
-    """Cronologia em layout vertical (cards coloridos, mesma linguagem visual da versão horizontal),
-    dimensionada para caber em uma página A4 vertical do Word."""
-    events = (data or {}).get("eventos", [])
-    if not events:
-        raise gr.Error("Gere a timeline antes de exportar.")
+def aplicar_cabecalho(data: dict, empresa: str, cnpj: str):
+    """Empresa e CNPJ não tinham nenhuma via de correção na interface."""
+    data = copy.deepcopy(data or {})
+    data["empresa"] = str(empresa or "").strip()
+    data["cnpj"] = str(cnpj or "").strip()
+    return data, render_timeline_html(data)
 
-    width = 2000
-    info = _medir_timeline_vertical(events, 2.0, width)
-    a4_ratio = 297 / 210  # altura/largura de uma folha A4 vertical
-    limite = width * a4_ratio
-    if info["height"] > limite:
-        fator = max(0.45, limite / info["height"])
-        info = _medir_timeline_vertical(events, 2.0 * fator, width)
 
-    scale = info["scale"]
-    pad, axis_x, content_x, content_w = info["pad"], info["axis_x"], info["content_x"], info["content_w"]
-    header_h, gap_evento, body_h, itens, fontes = (
-        info["header_h"], info["gap_evento"], info["body_h"], info["itens"], info["fontes"]
-    )
-    f_kicker, f_titulo, f_meta = fontes["kicker"], fontes["titulo"], fontes["meta"]
-    f_data, f_ato = fontes["data"], fontes["ato"]
-    f_rotulo, f_nome, f_extra, f_quadro = fontes["rotulo"], fontes["nome"], fontes["extra"], fontes["quadro"]
+def _indice_valido(data: dict, indice) -> int:
+    total = len((data or {}).get("eventos", []))
+    try:
+        posicao = int(indice)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(posicao, total - 1)) if total else 0
 
-    text, muted, line, azul = "#2C302C", "#737670", "#E4E4E0", "#1A56A0"
 
-    image = Image.new("RGB", (width, round(info["height"])), "#FFFFFF")
-    draw = ImageDraw.Draw(image)
+def selecionar_evento(data: dict, indice):
+    """Carrega um ato no editor. O ato anterior já foi salvo pelo .change de cada campo."""
+    posicao = _indice_valido(data, indice)
+    return [posicao] + campos_do_evento(data, posicao)
 
-    draw.text((pad, 30 * scale), "CRONOLOGIA SOCIETÁRIA", fill=azul, font=f_kicker)
-    draw.text((pad, 46 * scale), str(data.get("empresa", "") or "Sociedade analisada"), fill="#1F211F", font=f_titulo)
-    meta = " · ".join(
-        x
-        for x in [
-            ("CNPJ " + str(data.get("cnpj", ""))) if data.get("cnpj") else "",
-            f"{len(events)} atos",
-            _periodo(events),
-        ]
-        if x
-    )
-    draw.text((pad, 78 * scale), meta, fill=muted, font=f_meta)
-    draw.line((pad, header_h - 22 * scale, width - pad, header_h - 22 * scale), fill="#1F211F", width=max(1, round(2 * scale)))
-    draw.line((axis_x, header_h, axis_x, header_h + body_h), fill=line, width=max(1, round(2 * scale)))
 
-    y = header_h
-    for item in itens:
-        event = item["event"]
-        r = 6 * scale
-        draw.ellipse((axis_x - r, y + 10 * scale - r, axis_x + r, y + 10 * scale + r), fill=azul)
+def adicionar_evento(data: dict):
+    """Ato novo no fim da lista, já selecionado para edição."""
+    data = copy.deepcopy(data or {})
+    eventos = data.setdefault("eventos", [])
+    novo = {campo: "" for campo in CAMPOS_TEXTO_DO_EVENTO}
+    novo["ato"] = "Novo ato"
+    novo["categorias"] = []
+    for chave, _colunas, _campos in LISTAS_DO_EVENTO:
+        novo[chave] = []
+    eventos.append(novo)
+    posicao = len(eventos) - 1
+    return ([data, render_timeline_html(data), _update_seletor(data, posicao), posicao]
+            + campos_do_evento(data, posicao))
 
-        draw.text((content_x, y), str(event.get("data", "") or "—"), fill=text, font=f_data)
-        data_w = draw.textbbox((0, 0), str(event.get("data", "") or "—"), font=f_data)[2]
-        draw.text(
-            (content_x + data_w + 10 * scale, y + 2 * scale),
-            str(event.get("ato", "") or "Ato societário").upper(),
-            fill=muted,
-            font=f_ato,
-        )
-        yy = y + 20 * scale
 
-        for bloco in item["blocos"]:
-            draw.rectangle((content_x, yy, content_x + content_w, yy + bloco["altura"]), fill=_tint(bloco["cor"]))
-            draw.rectangle((content_x, yy, content_x + 3 * scale, yy + bloco["altura"]), fill=bloco["cor"])
-            ty = yy + 9 * scale
-            draw.text((content_x + 12 * scale, ty), bloco["rotulo"], fill=bloco["cor"], font=f_rotulo)
-            ty += 14 * scale
-            for linha_texto in bloco["nome"]:
-                draw.text((content_x + 12 * scale, ty), linha_texto, fill="#1F211F", font=f_nome)
-                ty += 14 * scale
-            if bloco["extra"]:
-                ty += 2 * scale
-                for linha_texto in bloco["extra"]:
-                    draw.text((content_x + 12 * scale, ty), linha_texto, fill=muted, font=f_extra)
-                    ty += 12 * scale
-            yy += bloco["altura"] + 8 * scale
+def remover_evento(data: dict, indice):
+    data = copy.deepcopy(data or {})
+    eventos = data.setdefault("eventos", [])
+    posicao = _indice_valido(data, indice)
+    if eventos:
+        eventos.pop(posicao)
+    posicao = _indice_valido(data, posicao)
+    return ([data, render_timeline_html(data), _update_seletor(data, posicao), posicao]
+            + campos_do_evento(data, posicao))
 
-        yy += 6 * scale
-        for linha_texto in item["quadro"]:
-            draw.text((content_x, yy), linha_texto, fill="#3F423E", font=f_quadro)
-            yy += 13 * scale
 
-        y += item["altura"] + gap_evento
+def ordenar_eventos(data: dict, indice):
+    """Reordena por data sem perder o ato que está aberto no editor."""
+    data = copy.deepcopy(data or {})
+    eventos = data.get("eventos", [])
+    posicao = _indice_valido(data, indice)
+    atual = eventos[posicao] if eventos else None
+    eventos.sort(key=lambda e: _date_key(e.get("data", "")))
+    posicao = eventos.index(atual) if atual in eventos else 0
+    return ([data, render_timeline_html(data), _update_seletor(data, posicao), posicao]
+            + campos_do_evento(data, posicao))
 
-    output = Path(tempfile.gettempdir()) / "timeline_societaria_vertical.png"
-    image.save(output, format="PNG", optimize=True, dpi=(192, 192))
-    return str(output)
+
 
 
 def timeline_salvar_imagem(captura: str) -> str:
