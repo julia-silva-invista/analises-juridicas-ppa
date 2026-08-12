@@ -194,6 +194,37 @@ def _erro_gemini_e_teto_de_gasto(exc: Exception) -> bool:
     return "spend cap" in msg or "spending cap" in msg
 
 
+# Exceções de transporte do httpx/socket usadas pelo google-genai. Classificar pelo TIPO
+# é necessário porque a mensagem não carrega o nome da classe: str(httpx.ConnectError())
+# é só "[Errno -3] Temporary failure in name resolution", então o token "connecterror"
+# abaixo nunca casava. Comparar por nome evita importar httpx aqui.
+_TIPOS_ERRO_DE_REDE = {
+    "ConnectError", "ConnectTimeout", "ReadError", "ReadTimeout", "WriteError",
+    "WriteTimeout", "PoolTimeout", "NetworkError", "TransportError",
+    "RemoteProtocolError", "ProxyError", "ConnectionError", "gaierror",
+    "ServerDisconnectedError", "ClientConnectorError",
+}
+
+# Trechos de mensagem de falha de rede transitória. "name resolution" é o caso que
+# derrubava análise inteira: um piscar de DNS no container matava um chunk de 400
+# páginas e o guarda de cobertura bloqueava o relatório, jogando fora minutos e cota.
+_TRECHOS_ERRO_DE_REDE = [
+    "name resolution", "getaddrinfo", "temporary failure",
+    "errno -3", "errno -2", "network is unreachable", "no route to host",
+    "connection refused", "connection aborted", "connection reset",
+    "connection error", "connecterror",
+    "server disconnected", "remote end closed", "handshake",
+]
+
+
+def _erro_de_rede(exc: Exception) -> bool:
+    """Falha de transporte, não de conteúdo — vale insistir."""
+    if type(exc).__name__ in _TIPOS_ERRO_DE_REDE:
+        return True
+    msg = str(exc).lower()
+    return any(trecho in msg for trecho in _TRECHOS_ERRO_DE_REDE)
+
+
 def _retry(fn, tentativas=5, espera_base=20):
     for t in range(1, tentativas + 1):
         try:
@@ -204,10 +235,10 @@ def _retry(fn, tentativas=5, espera_base=20):
             msg = str(e)
             msg_low = msg.lower()
             retryable = (
-                any(c in msg for c in ["503", "500", "504", "429", "UNAVAILABLE", "overloaded"])
+                _erro_de_rede(e)
+                or any(c in msg for c in ["503", "500", "504", "429", "UNAVAILABLE", "overloaded"])
                 or any(c in msg_low for c in [
                     "timeout", "timed out", "deadline", "deadlineexceeded",
-                    "connection reset", "connection error", "connecterror",
                     "read timed out", "readtimeout",
                     "resource_exhausted", "rate limit", "quota",
                     "json_invalid", "eof while parsing",

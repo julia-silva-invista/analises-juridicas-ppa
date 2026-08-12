@@ -20,6 +20,7 @@ from utils import (
     _retry, _gerar_docx, _responder_pergunta_generica, _get_gemini_clients,
     _executar_com_failover_gemini,
     _barra_progresso, _filtrar_arquivos_existentes, _paginas_digitalizadas_pdf,
+    _erro_de_rede,
     GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_OCR, GEMINI_MODEL_RELATORIO,
     GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
 )
@@ -105,6 +106,19 @@ PROMPT_EXTR_PROC = (
     + "\n"
     + REGRA_CRONOLOGIA_PROCESSUAL
 )
+
+
+def _sufixo_falha_de_rede(erros: list) -> str:
+    """Distingue "tente de novo" de "tem algo errado com o PDF".
+
+    Quando TODOS os chunks falharam por transporte (DNS, conexão recusada), o material
+    não tem problema nenhum — a rede do container piscou. Isso já é retentado dentro do
+    _retry; se chegou aqui, foi instabilidade prolongada.
+    """
+    if erros and all(_erro_de_rede(RuntimeError(str(e))) for e in erros):
+        return (" A causa foi falha de rede do servidor ao falar com a API, não o conteúdo"
+                " dos PDFs — reenviar os mesmos arquivos costuma resolver.")
+    return ""
 
 
 def _proc_dividir_pdf(pdf_path: str) -> list:
@@ -581,8 +595,9 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
 
         if erros_chunks:
             raise RuntimeError(
-                "Extração incompleta dos processos relacionados; nenhum relatório parcial foi gerado. "
-                + " | ".join(erros_chunks)
+                "Extração incompleta dos processos relacionados; nenhum relatório parcial foi gerado."
+                + _sufixo_falha_de_rede(erros_chunks)
+                + " " + " | ".join(erros_chunks)
             )
 
         texto_relacionados = ""
@@ -885,8 +900,9 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
 
         if erros_chunks:
             raise RuntimeError(
-                "A extração não cobriu todos os trechos; o relatório parcial foi bloqueado. "
-                + " | ".join(erros_chunks)
+                "A extração não cobriu todos os trechos; o relatório parcial foi bloqueado."
+                + _sufixo_falha_de_rede(erros_chunks)
+                + " " + " | ".join(erros_chunks)
             )
 
         # Configurar cache (apenas para versao normal — resumida nao usa)

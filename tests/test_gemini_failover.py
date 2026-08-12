@@ -22,6 +22,7 @@ sys.modules.setdefault("google", google_mod)
 sys.modules.setdefault("google.genai", genai_mod)
 sys.modules.setdefault("google.genai.types", genai_types_mod)
 
+import utils  # noqa: E402
 from utils import (  # noqa: E402
     _codigo_http_gemini,
     _detalhe_erro_gemini,
@@ -115,3 +116,71 @@ if __name__ == "__main__":
     testar_codigo_http_vem_do_status_e_nao_de_substring()
     testar_detalhe_do_erro_e_uma_linha_legivel()
     print("OK — failover Gemini")
+
+
+# ── Falha de rede é transitória, não é conteúdo ──────────────────────────────
+# Um piscar de DNS no container derrubava a análise inteira: o chunk falhava, o guarda
+# de cobertura bloqueava o relatório parcial (corretamente) e minutos de processamento
+# iam embora. O _retry via "[Errno -3] Temporary failure in name resolution" e não
+# reconhecia como retentável.
+
+def testar_dns_agora_e_retentado(monkeypatch):
+    monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_k: None)
+    tentativas = []
+
+    def _falha_dns():
+        tentativas.append(1)
+        raise RuntimeError("[Errno -3] Temporary failure in name resolution")
+
+    try:
+        utils._retry(_falha_dns, tentativas=4, espera_base=1)
+    except RuntimeError:
+        pass
+    assert len(tentativas) == 4, "erro de DNS tem que esgotar as tentativas"
+
+
+def testar_erro_de_transporte_e_reconhecido_pelo_tipo():
+    """str(httpx.ConnectError(...)) não contém o nome da classe — casar só por texto
+    deixava passar a família inteira de erros de transporte."""
+    class ConnectError(Exception):
+        pass
+
+    class ReadTimeout(Exception):
+        pass
+
+    assert utils._erro_de_rede(ConnectError("qualquer mensagem"))
+    assert utils._erro_de_rede(ReadTimeout(""))
+    assert utils._erro_de_rede(RuntimeError("getaddrinfo failed"))
+    assert utils._erro_de_rede(RuntimeError("Connection refused"))
+
+
+def testar_erro_de_conteudo_continua_sem_retry(monkeypatch):
+    monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_k: None)
+    tentativas = []
+
+    def _schema_ruim():
+        tentativas.append(1)
+        raise ValueError("schema local incompatível")
+
+    try:
+        utils._retry(_schema_ruim, tentativas=4, espera_base=1)
+    except ValueError:
+        pass
+    assert len(tentativas) == 1, "erro de programação não pode ser mascarado por retry"
+    assert not utils._erro_de_rede(ValueError("JSON inválido produzido localmente"))
+
+
+def testar_teto_de_gasto_continua_sem_retry(monkeypatch):
+    """Não virou erro de rede por engano — insistir não devolve cota."""
+    monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_k: None)
+    tentativas = []
+
+    def _teto():
+        tentativas.append(1)
+        raise RuntimeError("429 RESOURCE_EXHAUSTED: exceeded its monthly spending cap")
+
+    try:
+        utils._retry(_teto, tentativas=4, espera_base=1)
+    except RuntimeError:
+        pass
+    assert len(tentativas) == 1
