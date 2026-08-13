@@ -7,6 +7,7 @@ ele erra em silêncio.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -146,14 +147,23 @@ def testar_marcos_fora_de_ordem_sao_ordenados():
     assert datas == ["10/03/2014", "20/09/2017", "11/11/2018", "02/02/2023"]
 
 
-def testar_html_usa_id_proprio_e_mostra_a_divergencia():
+def testar_html_usa_id_proprio():
     """Duas cronologias na mesma página não podem disputar o mesmo elemento — a
     societária usa #timeline-export-area."""
     html_gerado = cronologia.render_html(cronologia.analisar(DADOS))
     assert "cronologia-prescricao-area" in html_gerado
     assert "timeline-export-area" not in html_gerado
-    assert "DIVERGENTE" in html_gerado and "conferir" in html_gerado
     assert "Mov. 41" in html_gerado, "a referência processual acompanha o marco"
+
+
+def testar_painel_e_so_a_linha_do_tempo():
+    """O painel voltou a ser cronologia. A contagem continua existindo — em `avaliar` —,
+    mas não é desenhada: o que se vê são os atos da execução."""
+    html_gerado = cronologia.render_html(cronologia.analisar(DADOS))
+    for sumido in ("presc-veredito", "Termo inicial", "Lapso de inércia",
+                   "Regime aplicável", "Modelo de contagem"):
+        assert sumido not in html_gerado, sumido
+    assert cronologia.analisar(DADOS)["veredito"], "a conta continua sendo calculada"
 
 
 def testar_sem_marcos_o_painel_orienta_em_vez_de_quebrar():
@@ -174,7 +184,7 @@ def testar_edicao_no_painel_reaplica_o_enquadramento():
 
     assert len(dados["marcos"]) == 2, "linha em branco não vira marco"
     assert dados["vencimento_titulo"] == "01/01/2013", "campo fora do painel sobrevive"
-    assert "3 anos" in html_gerado, "o prazo do título novo foi reaplicado"
+    assert "3 anos" in cronologia.analisar(dados)["prazo"]["prazo"],         "o prazo do título novo foi reaplicado no cálculo"
     assert html_gerado.index("10/03/2014") < html_gerado.index("02/02/2023"),         "o desenho sai em ordem cronológica"
 
 
@@ -320,23 +330,53 @@ def testar_meses_da_duracao():
     assert pi.meses_da_duracao("sem prazo") is None
 
 
-# ── O cálculo aparece no HTML ────────────────────────────────────────────────
+# ── Marcas de vigência e edição no painel ────────────────────────────────────
 
-def testar_html_mostra_a_conta_aberta():
-    dados = {"titulo": "Cédula de Crédito Bancário (CCB) nº 1",
-             "vencimento_titulo": "10/01/2010", "marcos": MARCOS_CPC1973}
-    html_gerado = cronologia.render_html(cronologia.analisar(dados))
-    assert "Termo inicial" in html_gerado
-    assert "IAC 1" in html_gerado
-    assert "Lapso de inércia" in html_gerado
-    assert "Prazo de 3 anos" in html_gerado and "Prazo de 5 anos" in html_gerado
-    assert "presc-consumado" in html_gerado
-    assert "Modelo de contagem" in html_gerado, "as escolhas do modelo têm que estar à vista"
+def _sem_css(marcacao: str) -> str:
+    return re.sub(r"<style.*?</style>", "", marcacao, flags=re.DOTALL)
 
 
-def testar_html_diz_qual_data_falta_quando_nao_da_para_contar():
-    dados = {"titulo": "CCB", "marcos": [
-        {"data": "10/03/2012", "tipo": "distribuicao", "descricao": "Distribuída"}]}
-    html_gerado = cronologia.render_html(cronologia.analisar(dados))
-    assert "Não foi possível fixar o termo inicial" in html_gerado
-    assert "É a data que falta" in html_gerado
+def testar_vigencia_de_lei_e_marca_na_trilha_e_nao_ato_do_processo():
+    """Entrada em vigor não é fato dos autos: fica ENTRE as colunas, nunca dentro de uma."""
+    corpo = _sem_css(cronologia.render_html(cronologia.analisar(DADOS)))
+    assert "CPC/2015 · em vigor 18/03/2016" in corpo
+    assert "Lei 14.195/2021 · em vigor 27/08/2021" in corpo
+    for coluna in re.findall(r"<article.*?</article>", corpo, flags=re.DOTALL):
+        assert "presc-lei" not in coluna, "a marca vazou para dentro de um ato"
+
+
+def testar_so_marca_a_lei_que_virou_no_meio_da_execucao():
+    """Execução toda posterior a 2003: marcar o CC/2002 ali seria ruído."""
+    corpo = cronologia.render_html(cronologia.analisar(DADOS))
+    assert "CC/2002 ·" not in corpo
+
+
+def testar_a_trilha_reserva_largura_propria_para_a_marca():
+    """A grade deixou de ter coluna de tamanho único: ato tem 200px, marca tem 44px."""
+    corpo = _sem_css(cronologia.render_html(cronologia.analisar(DADOS)))
+    trilha = re.search(r'grid-template-columns:([^"]*)"', corpo).group(1).split()
+    assert trilha == ["200px", "44px", "200px", "200px", "44px", "200px"]
+
+
+def testar_numero_do_processo_e_editavel_e_volta_pelo_painel():
+    corpo = cronologia.render_html(cronologia.analisar(DADOS))
+    assert 'data-tl-campo="processo"' in corpo
+    arvore = json.dumps({"titulo": "CCB", "processo": "9999999-88.2020.8.16.0001",
+                         "eventos": [{"data": "10/03/2014", "tipo": "distribuicao",
+                                      "descricao": "D", "referencia": "1"}]})
+    assert cronologia.aplicar_edicao_html(arvore)["processo"] == "9999999-88.2020.8.16.0001"
+
+
+def testar_processo_de_html_antigo_ainda_vem_do_extra():
+    """Painel gerado antes de o nº do processo ser desenhado o mandava em data-tl-extra."""
+    arvore = json.dumps({"titulo": "CCB", "eventos": [], "_extra": {"processo": "123"}})
+    assert cronologia.aplicar_edicao_html(arvore)["processo"] == "123"
+
+
+def testar_html_exportado_nao_da_para_editar():
+    """No Space o painel é editor; o arquivo exportado é registro e não tem onde salvar."""
+    corpo = _sem_css(Path(cronologia.exportar_html(DADOS)).read_text(encoding="utf-8"))
+    assert "data-tl-" not in corpo
+    assert "tl2-add" not in corpo and "tl2-rm" not in corpo
+    assert "tl2-dica" not in corpo
+    assert "Sisbajud negativo" in corpo, "o conteúdo continua inteiro"

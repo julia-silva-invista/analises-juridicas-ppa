@@ -35,6 +35,7 @@ MARCOS_LEGAIS = [
     {
         "data": VIGENCIA_CC_2002,
         "titulo": "Código Civil de 2002 entra em vigor",
+        "curto": "CC/2002",
         "detalhe": "Novos prazos prescricionais. A transição é regida pelo art. 2.028: "
                    "permanece o prazo da lei anterior quando o novo o reduziu E já havia "
                    "transcorrido mais da metade do prazo antigo em 11/01/2003.",
@@ -43,6 +44,7 @@ MARCOS_LEGAIS = [
     {
         "data": VIGENCIA_CPC_2015,
         "titulo": "CPC/2015 entra em vigor — art. 921 disciplina a intercorrente",
+        "curto": "CPC/2015",
         "detalhe": "Pela primeira vez a execução comum ganha disciplina expressa: suspensão "
                    "de 1 ano sem correr prescrição (§1º), arquivamento (§2º) e, decorrido o "
                    "prazo sem localização de bens, curso da prescrição intercorrente (§4º), "
@@ -52,6 +54,7 @@ MARCOS_LEGAIS = [
     {
         "data": VIGENCIA_LEI_14195,
         "titulo": "Lei 14.195/2021 altera o art. 921",
+        "curto": "Lei 14.195/2021",
         "detalhe": "Muda o TERMO INICIAL: o prazo passa a contar da ciência da primeira "
                    "tentativa infrutífera de localizar o devedor ou bens penhoráveis, e não "
                    "do fim do ano de suspensão. Redação exata e alcance intertemporal devem "

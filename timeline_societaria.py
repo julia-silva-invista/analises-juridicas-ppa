@@ -567,7 +567,11 @@ def _detalhe_modal(index: int, event: dict) -> str:
               <strong data-tl-campo="ato">{html.escape(str(event.get("ato", "")) or "Ato societário")}</strong>
               <small data-tl-campo="numero_arquivamento">{html.escape(str(event.get("numero_arquivamento", "")) or "—")}</small>
             </div>
-            <label class="tl2-close" for="tl2-det-{index}">Fechar</label>
+            <div class="tl2-modal-acoes">
+              <button type="button" class="tl2-rm tl2-rm-modal" data-tl-remover-ato
+                      title="Excluir este ato inteiro">Excluir ato</button>
+              <label class="tl2-close" for="tl2-det-{index}">Fechar</label>
+            </div>
           </div>
           <div class="tl2-modal-body">
             <h4>Detalhamento do ato</h4>
@@ -666,6 +670,11 @@ def render_timeline_html(data: dict) -> str:
         <h2 data-tl-campo="empresa">{html.escape(data.get("empresa", "") or "Sociedade analisada")}</h2>
         <p>CNPJ <span data-tl-campo="cnpj">{html.escape(data.get("cnpj", "") or "—")}</span>
            · {len(events)} atos · {_periodo(events)}</p>
+        <p class="tl2-dica">Modo de edição: clique em qualquer texto para reescrever —
+           inclusive dentro de <b>Ver detalhamento</b>, onde ficam o quadro societário, as
+           cessões e os imóveis. <b>×</b> remove o ato, a caixa ou a linha; <b>+</b>
+           acrescenta. Data e ato aparecem na coluna e no pop-up: alterar um atualiza o
+           outro na hora.</p>
       </div>
       <div class="tl2-scroll">
         <div class="tl2-track" style="--tl2-cols:{len(events)}">{"".join(colunas)}</div>
@@ -980,7 +989,13 @@ TL2_CSS = """
 /* ── Modo de edição — mesma linguagem do Painel de Deals ─────────────────── */
 /* Fora do modo de edição, nada disso aparece: os botões somem e os campos não
    mostram contorno nenhum. */
-.tl2-add, .tl2-rm { display: none; }
+.tl2-add, .tl2-rm, .tl2-dica { display: none; }
+.tl2-edit-mode .tl2-dica {
+    display: block; margin-top: 12px; padding: 8px 11px; background: #FBF6E7;
+    border: 1px solid #E8D9A0; font-size: 11px !important; line-height: 1.6;
+    color: #8A6D1F !important;
+}
+.tl2-edit-mode .tl2-dica b { color: #6f571a; }
 .tl2-bloco > h4 { margin-top: 14px; }
 .tl2-bloco .tl2-celula:not(:last-of-type)::after { content: " · "; color: #b9bbb6; }
 .tl2-bloco .tl2-list { list-style: none; padding-left: 0; }
@@ -1013,6 +1028,11 @@ TL2_CSS = """
 }
 .tl2-rm:hover { background: #fdeee8; }
 .tl2-rm-ato { float: right; }
+.tl2-modal-acoes { flex: none; display: flex; align-items: center; gap: 8px; }
+.tl2-rm-modal {
+    float: none; margin-left: 0; padding: 6px 11px; font-size: 10px; font-weight: 800;
+    letter-spacing: .06em; text-transform: uppercase; line-height: 1.4;
+}
 
 /* A chave da cor da caixa só aparece quando se está editando. */
 .tl2-tipo { display: none; }
@@ -1028,13 +1048,31 @@ TL2_CSS = """
 """
 
 
+_BOTOES_DE_EDICAO = re.compile(
+    r'<button[^>]*class="[^"]*\btl2-(?:add|rm)\b[^"]*"[^>]*>.*?</button>', re.DOTALL)
+_ATRIBUTOS_DE_EDICAO = re.compile(r'\sdata-tl-[a-z-]+(?:="[^"]*")?')
+_DICA_DE_EDICAO = re.compile(r'<p class="tl2-dica">.*?</p>', re.DOTALL)
+
+
+def remover_edicao(marcacao: str) -> str:
+    """Tira do HTML tudo o que só existe para editar no painel.
+
+    O arquivo exportado é registro: os botões de + e ×, os ganchos data-tl-* e a dica do
+    modo de edição não têm para onde salvar fora do Space, então não vão junto. O
+    conteúdo — colunas, caixas, modais de detalhamento — fica intacto.
+    """
+    marcacao = _BOTOES_DE_EDICAO.sub("", marcacao or "")
+    marcacao = _DICA_DE_EDICAO.sub("", marcacao)
+    return _ATRIBUTOS_DE_EDICAO.sub("", marcacao)
+
+
 def timeline_exportar_html(data: dict) -> str:
     """Exporta a timeline interativa (colunas + modais de detalhamento) como um HTML autocontido."""
     events = (data or {}).get("eventos", [])
     if not events:
         raise gr.Error("Gere a timeline antes de exportar.")
     empresa = html.escape(str(data.get("empresa", "") or "Sociedade analisada"))
-    corpo = render_timeline_html(data)
+    corpo = remover_edicao(render_timeline_html(data))
     documento = f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>

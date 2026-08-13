@@ -10,6 +10,7 @@ import base64
 import copy
 import io
 import json
+import re
 import sys
 import types as pytypes
 from pathlib import Path
@@ -374,3 +375,47 @@ def testar_codigo_orfao_foi_removido():
                   "timeline_ver_tabela", "MOV_CORES", "data_to_rows", "rows_to_data",
                   "campos_do_evento", "selecionar_evento"):
         assert not hasattr(timeline, morto), f"{morto} deveria ter sido removido"
+
+
+# ── Editar é do painel; exportar é registro ─────────────────────────────────
+# A edição acontece no Space, onde há para onde salvar. O arquivo exportado sai sem
+# nenhuma afordância: botão de + e ×, ganchos data-tl-* e a dica do modo de edição.
+
+_DADOS_EXPORT = {"empresa": "Alfa Participações Ltda", "cnpj": "11.111.111/0001-11",
+                 "eventos": [
+                     {"data": "01/02/2010", "ato": "Constituição",
+                      "socios_apos": [{"nome": "João", "participacao": "50%"}]},
+                     {"data": "03/04/2015", "ato": "7ª Alteração",
+                      "detalhamento": "Cessão de quotas para Maria.",
+                      "socios_apos": [{"nome": "Maria", "participacao": "50%"}]},
+                 ]}
+
+
+def _sem_css(marcacao: str) -> str:
+    return re.sub(r"<style.*?</style>", "", marcacao, flags=re.DOTALL)
+
+
+def testar_html_exportado_nao_tem_como_editar():
+    corpo = _sem_css(Path(timeline.timeline_exportar_html(_DADOS_EXPORT)).read_text(encoding="utf-8"))
+    assert "data-tl-" not in corpo
+    assert "tl2-add" not in corpo and "tl2-rm" not in corpo
+    assert "tl2-dica" not in corpo
+
+
+def testar_html_exportado_mantem_o_conteudo_e_o_pop_up():
+    corpo = _sem_css(Path(timeline.timeline_exportar_html(_DADOS_EXPORT)).read_text(encoding="utf-8"))
+    for esperado in ("Alfa Participações Ltda", "7ª Alteração", "Ver detalhamento",
+                     "Cessão de quotas para Maria.", "Maria"):
+        assert esperado in corpo, esperado
+
+
+def testar_remover_edicao_nao_come_o_conteudo_das_caixas():
+    """O × mora dentro da caixa; tirar o botão não pode levar a caixa junto."""
+    limpo = timeline.remover_edicao(timeline.render_timeline_html(_DADOS_EXPORT))
+    assert "tl2-move" in limpo and "Constituição" in limpo
+
+
+def testar_o_ato_pode_ser_excluido_de_dentro_do_pop_up():
+    corpo = timeline.render_timeline_html(_DADOS_EXPORT)
+    assert corpo.count("data-tl-remover-ato") == 4, "um × na coluna e um botão no modal, por ato"
+    assert "Excluir ato" in corpo

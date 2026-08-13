@@ -248,6 +248,24 @@ async (ligado, _ponte) => {
 
         if (!raiz.dataset.tlLigado) {
             raiz.dataset.tlLigado = "1";
+            // Data e ato aparecem duas vezes na mesma coluna: no cabecalho e no pop-up
+            // de detalhamento. A serializacao le a primeira ocorrencia, entao editar a
+            // do pop-up sumiria sem aviso. Espelhar enquanto se digita mantem as duas
+            // iguais e faz a duplicata parar de importar.
+            raiz.addEventListener("input", (ev) => {
+                const campo = ev.target && ev.target.closest
+                    ? ev.target.closest("[data-tl-campo]") : null;
+                if (!campo) return;
+                const coluna = campo.closest("[data-tl-evento]");
+                if (!coluna || campo.closest("[data-tl-lista]")) return;
+                const nome = campo.getAttribute("data-tl-campo");
+                coluna.querySelectorAll('[data-tl-campo="' + nome + '"]').forEach((par) => {
+                    if (par !== campo && !par.closest("[data-tl-lista]")
+                        && par.textContent !== campo.textContent) {
+                        par.textContent = campo.textContent;
+                    }
+                });
+            });
             raiz.addEventListener("click", (ev) => {
                 const alvo = ev.target;
                 if (!alvo || !alvo.matches) return;
@@ -303,12 +321,13 @@ async (ligado, _ponte) => {
 
     // Concluindo: lê a árvore inteira do DOM e devolve para o servidor.
     const arvore = {eventos: []};
-    const cabecalho = raiz.querySelector('[data-tl-campo="empresa"]');
-    if (cabecalho) arvore.empresa = texto(cabecalho);
-    const cnpj = raiz.querySelector('[data-tl-campo="cnpj"]');
-    if (cnpj) arvore.cnpj = texto(cnpj);
-    const titulo = raiz.querySelector('[data-tl-campo="titulo"]');
-    if (titulo) arvore.titulo = texto(titulo);
+    // Qualquer campo do cabecalho da secao — empresa, cnpj, titulo do lastro, numero do
+    // processo. Ler por nome, e nao um a um, evita esquecer de ligar o proximo.
+    raiz.querySelectorAll("[data-tl-campo]").forEach((el) => {
+        if (el.closest("[data-tl-evento]")) return;
+        const nome = el.getAttribute("data-tl-campo");
+        if (nome && !(nome in arvore)) arvore[nome] = texto(el);
+    });
     try { arvore._extra = JSON.parse(raiz.getAttribute("data-tl-extra") || "{}"); }
     catch (e) { arvore._extra = {}; }
 
