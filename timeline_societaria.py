@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import base64
-import binascii
 import copy
 import html
 import json
@@ -495,6 +493,11 @@ def _bloco_editavel(chave: str, campos: list, rotulos: list, itens: list,
     Cada linha carrega um <span data-tl-campo> por campo, na ordem de `campos`. A
     serialização lê por POSIÇÃO dentro do bloco, não por índice no atributo — é o que
     permite acrescentar e remover linha sem renumerar nada.
+
+    `data-tl-item-html` leva o molde da linha em branco: o "+" no navegador só clona
+    esse HTML. Antes o JavaScript remontava a linha por conta própria, o que dava duas
+    versões da mesma estrutura para divergirem — e foi assim que o "+ caixa" parou de
+    funcionar, porque a caixinha do ato não é um <li> dentro de <ul>.
     """
     def _linha(item: dict) -> str:
         celulas = "".join(
@@ -508,9 +511,9 @@ def _bloco_editavel(chave: str, campos: list, rotulos: list, itens: list,
                   'title="Remover">×</button></li>')
 
     linhas = "".join(_linha(i) for i in itens if isinstance(i, dict))
-    modelo = html.escape(json.dumps(list(zip(campos, rotulos)), ensure_ascii=False), quote=True)
     return (
-        f'<div class="tl2-bloco" data-tl-lista="{chave}" data-tl-modelo="{modelo}">'
+        f'<div class="tl2-bloco" data-tl-lista="{chave}" '
+        f'data-tl-item-html="{html.escape(_linha({}), quote=True)}">'
         f"<h4>{html.escape(titulo)}</h4>"
         f'<ul class="tl2-list">{linhas}</ul>'
         f'<button type="button" class="tl2-add" data-tl-adicionar>+ {html.escape(singular)}</button>'
@@ -593,14 +596,17 @@ def _detalhe_modal(index: int, event: dict) -> str:
 
 
 CAMPOS_CAIXINHA = ["rotulo", "nome", "extra", "tipo"]
-_ROTULOS_CAIXINHA = ["Rótulo", "Texto principal", "Detalhe", "tipo (cor)"]
 
 
-def _caixinha(mov: dict) -> str:
+def _caixinha(mov: dict, vazio: str = "—") -> str:
     """Uma caixa do ato — editável célula a célula, como as do Painel de Deals.
 
     "tipo" é a chave da cor (entrada, saida, cessao, imovel, admin, capital-up...);
     fica visível só no modo de edição, para dar de trocar a cor sem sair do painel.
+
+    `vazio` é o que aparece no lugar do texto principal quando ele não existe. O molde da
+    caixa nova passa "" de propósito: "—" gravado como conteúdo faria a caixa em branco
+    nascer preenchida.
     """
     tipo = str(mov.get("tipo", "") or "outros")
     return (
@@ -609,7 +615,7 @@ def _caixinha(mov: dict) -> str:
         f'<span class="tl2-move-label" data-tl-campo="rotulo" data-tl-rotulo="Rótulo">'
         f'{html.escape(str(mov.get("rotulo", "") or ""))}</span>'
         f'<strong data-tl-campo="nome" data-tl-rotulo="Texto principal">'
-        f'{html.escape(str(mov.get("nome", "") or "—"))}</strong>'
+        f'{html.escape(str(mov.get("nome", "") or vazio))}</strong>'
         f'<small data-tl-campo="extra" data-tl-rotulo="Detalhe">'
         f'{html.escape(str(mov.get("extra", "") or ""))}</small>'
         f'<small class="tl2-tipo" data-tl-campo="tipo" data-tl-rotulo="tipo">'
@@ -635,8 +641,9 @@ def render_timeline_html(data: dict) -> str:
         blocos = "".join(_caixinha(m) for m in movimentos) + (
             '<button type="button" class="tl2-add" data-tl-adicionar>+ caixa</button>'
         )
-        modelo_caixinha = html.escape(json.dumps(
-            list(zip(CAMPOS_CAIXINHA, _ROTULOS_CAIXINHA)), ensure_ascii=False), quote=True)
+        # Molde da caixa em branco, do mesmo jeito que nas listas do detalhamento: o
+        # navegador clona este HTML em vez de remontar a caixa por conta própria.
+        molde_caixinha = html.escape(_caixinha({"tipo": "outros"}, vazio=""), quote=True)
         # Campos do JSON que o painel não desenha viajam aqui, para o round-trip não
         # perdê-los — e para o servidor não precisar do estado anterior na volta, o que
         # obrigaria a passar um gr.State pelo JavaScript.
@@ -653,15 +660,15 @@ def render_timeline_html(data: dict) -> str:
                     title="Remover este ato">×</button>
           </div>
           <div class="tl2-axis"><i class="tl2-pin"></i></div>
-          <div class="tl2-moves" data-tl-lista="movimentos" data-tl-modelo="{modelo_caixinha}">{blocos}</div>
+          <div class="tl2-moves" data-tl-lista="movimentos" data-tl-item-html="{molde_caixinha}">{blocos}</div>
           <div class="tl2-quadro">Quadro após o ato<strong>{html.escape(_quadro_resumo(event))}</strong></div>
           {_detalhe_modal(index, event)}
         </article>
         """
         )
 
-    # O <style> vai DENTRO da seção de propósito: a exportação de imagem lê esse CSS
-    # pelo próprio DOM para rasterizar a timeline exatamente como ela aparece na tela.
+    # O <style> vai DENTRO da seção de propósito: é o que faz o HTML exportado sair
+    # idêntico ao painel, sem depender do CSS do Space.
     return f"""
     <section class="tl2-shell" id="timeline-export-area" data-tl-raiz>
       <style id="tl2-export-style">{TL2_CSS}</style>
@@ -685,10 +692,17 @@ def render_timeline_html(data: dict) -> str:
 
 
 def timeline_analisar(files):
+    """Analisa os atos e devolve, junto, a visibilidade dos controles do painel.
+
+    Editar e exportar só fazem sentido com timeline na tela, então a barra deles fica
+    escondida até haver eventos — e a caixa do Word de uma análise anterior sai de cena,
+    para não parecer que o arquivo antigo pertence à nova timeline.
+    """
+    escondido = gr.update(visible=False)
     yield (
         "Preparando os atos societários...",
         '<div class="timeline-loading">Lendo os documentos e reconstruindo a evolução societária…</div>',
-        {},
+        {}, escondido, gr.update(value=None, visible=False),
     )
     try:
         data = _extract(files)
@@ -698,12 +712,16 @@ def timeline_analisar(files):
         raise gr.Error(str(exc)) from exc
     except Exception as exc:
         mensagem = _mensagem_erro_gemini(exc, getattr(exc, "clients_gemini", None))
-        yield (mensagem, f'<div class="timeline-empty">{html.escape(mensagem)}</div>', {})
+        yield (mensagem, f'<div class="timeline-empty">{html.escape(mensagem)}</div>',
+               {}, escondido, gr.skip())
         raise gr.Error(mensagem) from exc
+    eventos = data.get("eventos", [])
     yield (
-        f"Concluído: {len(data.get('eventos', []))} evento(s) societário(s) identificado(s).",
+        f"Concluído: {len(eventos)} evento(s) societário(s) identificado(s).",
         render_timeline_html(data),
         data,
+        gr.update(visible=bool(eventos)),
+        gr.skip(),
     )
 
 
@@ -800,8 +818,12 @@ def timeline_aplicar_html(modo: str, bruto: str):
     """Liga e desliga o modo de edição do painel.
 
     Entrando, só troca o rótulo do botão — quem pinta os campos é o JS, e o estado fica
-    intocado via gr.skip(). Saindo, aplica o que foi digitado e redesenha, para os cards
-    derivados refletirem o dado novo.
+    intocado via gr.skip(). Saindo, aplica o que foi digitado, REORDENA por data e
+    redesenha, para os cards derivados refletirem o dado novo.
+
+    A reordenação sai daqui, e não de um botão à parte: o "+ Adicionar ato" nasce no fim
+    da trilha, então um ato de 2012 acrescentado depois ficava depois do de 2024 até
+    alguém lembrar de mandar ordenar. Ato sem data continua indo para o fim.
     """
     if str(modo or "0") == "1":
         return ("1", "", gr.skip(), gr.skip(),
@@ -811,48 +833,26 @@ def timeline_aplicar_html(modo: str, bruto: str):
     if novo is None:   # serialização torta: não mexe no que já estava
         return ("0", "", gr.skip(), gr.skip(),
                 gr.update(value="Editar timeline", variant="secondary"))
+    novo = ordenados_por_data(novo)
     return ("0", "", novo, render_timeline_html(novo),
             gr.update(value="Editar timeline", variant="secondary"))
 
 
-def ordenar_eventos(data: dict):
-    """Reordena os atos por data. Sai do botão da barra, não do painel."""
+def ordenados_por_data(data: dict) -> dict:
+    """Os atos em ordem cronológica. Ato sem data reconhecível vai para o fim."""
     data = copy.deepcopy(data or {})
     data.get("eventos", []).sort(key=lambda e: _date_key(e.get("data", "")))
+    return data
+
+
+def ordenar_eventos(data: dict):
+    """Reordena os atos por data e redesenha."""
+    data = ordenados_por_data(data)
     return data, render_timeline_html(data)
 
 
 
 
-
-
-def timeline_salvar_imagem(captura: str) -> str:
-    """Salva o PNG capturado do próprio HTML da timeline (rasterizado no navegador) e
-    devolve o caminho para o link de download.
-
-    A captura é a imagem exata do que está na tela — mesmo layout, mesmas cores, mesmos
-    cards. Chega como data URL, produzida pelo JS que roda antes desta função no mesmo
-    evento de clique. Quando vier vazia, o motivo quase sempre é não haver timeline na
-    tela; avisar é melhor do que entregar um PNG diferente do que a usuária está vendo.
-    """
-    captura = str(captura or "")
-    if not captura.startswith("data:image/png;base64,"):
-        raise gr.Error(
-            "Não há timeline na tela para exportar. Analise os atos societários primeiro; "
-            "se a timeline já estiver visível, recarregue a página e tente de novo."
-        )
-    try:
-        conteudo = base64.b64decode(captura.split(",", 1)[1], validate=True)
-    except (binascii.Error, ValueError):
-        conteudo = b""
-    if not conteudo:
-        raise gr.Error(
-            "O navegador não conseguiu gerar a imagem da timeline. Recarregue a página e "
-            "tente de novo; se persistir, use Exportar HTML."
-        )
-    output = Path(tempfile.gettempdir()) / "timeline_societaria.png"
-    output.write_bytes(conteudo)
-    return str(output)
 
 
 TL2_CSS = """
@@ -1010,7 +1010,10 @@ TL2_CSS = """
     outline: 2px solid #1A56A0; background: #fff;
 }
 .tl2-edit-mode p[contenteditable="true"], .tl2-edit-mode dd[contenteditable="true"] { display: block; }
-.tl2-edit-mode .tl2-celula[data-tl-rotulo]:empty::before {
+/* Campo em branco mostra o proprio rotulo — e o que faz a caixa nova, que nasce
+   inteiramente vazia, dizer o que vai em cada linha. */
+.tl2-edit-mode .tl2-celula[data-tl-rotulo]:empty::before,
+.tl2-edit-mode .tl2-move [data-tl-rotulo]:empty::before {
     content: attr(data-tl-rotulo); color: #b0b2ad; font-style: italic;
 }
 .tl2-edit-mode .tl2-add, .tl2-edit-mode .tl2-rm { display: inline-block; }

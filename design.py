@@ -743,6 +743,30 @@ body,
     min-height: 76px !important;
 }
 
+/* Botão "Perguntar" centralizado na CAIXA DE TEXTO, e não na coluna inteira: o rótulo
+   "PERGUNTAS SOBRE A ANÁLISE:" fica acima da textarea, então a coluna do botão ganha o
+   mesmo recuo do rótulo e o que sobra é exatamente a altura da caixa. Sem isso o botão
+   nascia grudado no topo, alinhado com o rótulo. */
+.qa-ask-row {
+    align-items: stretch !important;
+}
+
+/* O recuo é a distância medida entre o topo da coluna e o topo da textarea (altura do
+   rótulo + o espaço abaixo dele). Com ele, o espaço que resta na coluna é exatamente a
+   caixa de texto, e centralizar nesse espaço centraliza na caixa. */
+.qa-ask-col {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    align-self: stretch !important;
+    padding-top: 27px !important;
+}
+
+.qa-ask-col > button {
+    width: 100% !important;
+    margin: 0 !important;
+}
+
 .qa-section label span {
     color: var(--invista-charcoal) !important;
 }

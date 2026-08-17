@@ -1016,12 +1016,16 @@ def proc_gerar_cronologia(relatorio: str, extracao: str = ""):
 
     O modelo só extrai marcos datados; o enquadramento por regime é calculado depois,
     em Python, a partir da base de regras.
+
+    A terceira saída é a visibilidade da barra de editar/exportar: sem cronologia na
+    tela, os botões não têm sobre o que agir.
     """
+    escondido = gr.update(visible=False)
     fonte = extracao.strip() if extracao and extracao.strip() else (relatorio or "").strip()
     if not fonte:
-        yield {}, '<div class="timeline-empty">Gere uma análise primeiro.</div>'
+        yield {}, '<div class="timeline-empty">Gere uma análise primeiro.</div>', escondido
         return
-    yield {}, '<div class="timeline-loading">Localizando os marcos da prescrição…</div>'
+    yield {}, '<div class="timeline-loading">Localizando os marcos da prescrição…</div>', escondido
 
     try:
         dados = _executar_com_failover_gemini(
@@ -1032,9 +1036,10 @@ def proc_gerar_cronologia(relatorio: str, extracao: str = ""):
         )
     except Exception:
         aviso = html_lib.escape("Erro ao montar a cronologia: " + traceback.format_exc())
-        yield {}, f'<div class="timeline-empty">{aviso}</div>'
+        yield {}, f'<div class="timeline-empty">{aviso}</div>', escondido
         return
-    yield dados, render_cronologia_html(analisar_prescricao(dados))
+    yield (dados, render_cronologia_html(analisar_prescricao(dados)),
+           gr.update(visible=bool(dados.get("marcos"))))
 
 
 def proc_responder(pergunta: str, relatorio: str):

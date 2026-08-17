@@ -18,6 +18,7 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 from datetime import date
 
 import gradio as gr
@@ -41,6 +42,11 @@ from utils import _retry
 _CORES_MARCO = {
     "distribuicao": "#1A56A0",
     "citacao": "#235472",
+    # Atividade do exequente em roxo: não é resultado (verde) nem frustração (laranja) —
+    # é o que se opõe à inércia, e precisa se distinguir das duas coisas na leitura.
+    "manifestacao_exequente": "#6B4C9A",
+    "pedido_penhora": "#6B4C9A",
+    "pedido_andamento": "#6B4C9A",
     "tentativa_infrutifera": "#DC4405",
     "suspensao_921": "#DC4405",
     "arquivamento": "#DC4405",
@@ -57,6 +63,9 @@ _CORES_MARCO = {
 _ROTULOS_MARCO = {
     "distribuicao": "Distribuição",
     "citacao": "Citação",
+    "manifestacao_exequente": "Manifestação do exequente",
+    "pedido_penhora": "Pedido de penhora",
+    "pedido_andamento": "Pedido de andamento",
     "tentativa_infrutifera": "Tentativa infrutífera",
     "suspensao_921": "Suspensão (art. 921, III)",
     "arquivamento": "Arquivamento",
@@ -69,6 +78,20 @@ _ROTULOS_MARCO = {
     "extincao": "Extinção",
     "outro": "Outro ato",
 }
+
+# Rótulo → chave, para o painel aceitar a categoria escrita em português no modo de
+# edição. Normalizado (sem acento, minúsculo) porque quem digita não repete o acento.
+def _sem_acento(texto: str) -> str:
+    cru = unicodedata.normalize("NFKD", str(texto or ""))
+    return "".join(c for c in cru if not unicodedata.combining(c)).strip().lower()
+
+
+_TIPOS_POR_ROTULO = {_sem_acento(rotulo): chave for chave, rotulo in _ROTULOS_MARCO.items()}
+_TIPOS_POR_ROTULO.update({_sem_acento(chave): chave for chave in _ROTULOS_MARCO})
+
+# As categorias reconhecidas, na dica do modo de edição: sem essa lista à vista, "clique
+# para reescrever a categoria" não diz o que se pode escrever.
+_CATEGORIAS_NA_DICA = " · ".join(html.escape(r) for r in _ROTULOS_MARCO.values())
 
 PROMPT_MARCOS = """\
 Extraia do material abaixo APENAS os marcos processuais que importam para a contagem da
@@ -85,6 +108,20 @@ REGRAS
   penhoráveis (diligência negativa, certidão do oficial, Sisbajud/Renajud sem resultado).
   Registre TODAS, principalmente a PRIMEIRA — ela é o termo inicial no regime atual.
 - "suspensao_921" é a decisão que suspende a execução por não haver bens.
+- Registre TODAS as manifestações do exequente, sem exceção e sem resumir várias numa
+  só — cada petição é um marco, com a sua data. É por elas que se demonstra (ou se
+  afasta) a inércia do credor, e uma que falte é um ano de silêncio aparente que não
+  existiu. Use:
+  · "pedido_penhora" — requerimento de penhora, arresto ou de diligência patrimonial
+    (Sisbajud, Renajud, Infojud, CNIB, penhora no rosto dos autos, quebra de sigilo).
+    É o PEDIDO; a penhora que se efetiva é "penhora".
+  · "pedido_andamento" — petição que só pede impulso: prosseguimento, desarquivamento,
+    reiteração de pedido não apreciado, cumprimento de decisão pendente.
+  · "manifestacao_exequente" — qualquer outra petição do exequente (indicação de bens,
+    atualização de cálculo, ciência de certidão negativa, resposta a intimação,
+    substituição de CDA, pedido de IDPJ, habilitação de crédito).
+- Não confunda o polo: manifestação do EXECUTADO, do Ministério Público ou de terceiro
+  não entra nesses três tipos — se for relevante, use o tipo próprio ou "outro".
 - Em "titulo", descreva o lastro exatamente como consta (ex.: "Cédula de Crédito
   Bancário nº 123", "Contrato de abertura de crédito"), com a referência.
 - Em "vencimento_titulo", a data de vencimento do título, se constar.
@@ -181,34 +218,53 @@ def analisar(dados: dict) -> dict:
 
 # ── Render ───────────────────────────────────────────────────────────────────
 
+def rotulo_do_marco(marco: dict) -> str:
+    """A categoria como ela aparece na tela.
+
+    Categoria fora da lista (escrita à mão no painel) fica gravada em "rotulo" e vence o
+    rótulo padrão do tipo — é o que permite nomear um ato que a lista não previu sem
+    perder a cor que a usuária escolheu.
+    """
+    livre = re.sub(r"\s+", " ", str(marco.get("rotulo") or "")).strip()
+    tipo = str(marco.get("tipo") or "outro")
+    return livre or _ROTULOS_MARCO.get(tipo, tipo)
+
+
 def _coluna(item: dict) -> str:
-    """Um ato da execução: data, natureza e a caixa com descrição e referência.
+    """Um ato da execução: data, categoria e a caixa com descrição e referência.
 
     Tudo o que se vê aqui é o dado bruto do marco — nada derivado —, então tudo é
-    editável no próprio painel. O enquadramento por regime saiu do card: ele agora
-    aparece na linha do tempo como marca de vigência, entre os atos.
+    editável no próprio painel, a CATEGORIA inclusive: ela é desenhada com o rótulo em
+    português e reconvertida em chave na volta (`_tipo_do_texto`). O tipo que a coluna já
+    tinha viaja em data-tl-extra para servir de cor quando o texto digitado não
+    corresponder a nenhuma categoria da lista.
+
+    O enquadramento por regime saiu do card: ele agora aparece na linha do tempo como
+    marca de vigência, entre os atos.
     """
     marco = item["marco"]
     tipo = str(marco.get("tipo") or "outro")
     cor = _CORES_MARCO.get(tipo, _CORES_MARCO["outro"])
-    rotulo = _ROTULOS_MARCO.get(tipo, tipo)
+    rotulo = rotulo_do_marco(marco)
     referencia = str(marco.get("referencia") or "")
+    extra = html.escape(json.dumps({"tipo": tipo}, ensure_ascii=False), quote=True)
 
     return f"""
-        <article class="tl2-col" data-tl-evento data-tl-extra="{{}}">
+        <article class="tl2-col" data-tl-evento data-tl-extra="{extra}">
           <div class="tl2-col-head">
             <strong data-tl-campo="data" data-tl-rotulo="Data">{html.escape(str(marco.get("data") or "—"))}</strong>
-            <span class="presc-natureza">{html.escape(rotulo)}</span>
+            <span class="presc-natureza" data-tl-campo="tipo"
+                  data-tl-rotulo="Categoria">{html.escape(rotulo)}</span>
             <button type="button" class="tl2-rm tl2-rm-ato" data-tl-remover-ato
                     title="Remover este marco">×</button>
           </div>
           <div class="tl2-axis"><span class="tl2-pin" style="background:{cor};box-shadow:0 0 0 1px {cor}"></span></div>
           <div class="tl2-moves">
             <div class="tl2-move" style="border-left-color:{cor};background:{cor}12">
-              <span class="tl2-move-label" style="color:{cor}">{html.escape(rotulo)}</span>
+              <span class="tl2-move-label" style="color:{cor}" data-tl-campo="tipo"
+                    data-tl-rotulo="Categoria">{html.escape(rotulo)}</span>
               <strong data-tl-campo="descricao" data-tl-rotulo="Descrição">{html.escape(str(marco.get("descricao") or ""))}</strong>
               <small data-tl-campo="referencia" data-tl-rotulo="Referência">{html.escape(referencia)}</small>
-              <small class="tl2-tipo" data-tl-campo="tipo" data-tl-rotulo="tipo">{html.escape(tipo)}</small>
             </div>
           </div>
         </article>
@@ -293,8 +349,12 @@ def render_html(analise: dict) -> str:
         <span class="tl2-kicker">Cronologia processual · prescrição intercorrente</span>
         <h2 data-tl-campo="titulo" data-tl-rotulo="Título / lastro">{html.escape(analise.get("titulo") or "Execução analisada")}</h2>
         <p>Execução <span data-tl-campo="processo" data-tl-rotulo="nº do processo">{html.escape(str(analise.get("processo") or "—"))}</span></p>
-        <p class="tl2-dica">Modo de edição: clique em qualquer texto para reescrever.
-           <b>×</b> remove o marco, <b>+ Adicionar marco</b> acrescenta um no fim.
+        <p class="tl2-dica">Modo de edição: clique em qualquer texto para reescrever —
+           a <b>categoria</b> do ato inclusive, na linha sob a data ou no topo da caixa
+           (as duas se atualizam juntas). Escreva uma destas para o robô entender e
+           colorir: {_CATEGORIAS_NA_DICA}. Qualquer outro texto vira nome livre da caixa e
+           a cor não muda. <b>×</b> remove o marco, <b>+ Adicionar marco</b> acrescenta um
+           no fim; ao concluir, os marcos voltam ordenados por data.
            As marcas de vigência de lei saem das datas e não se editam.</p>
       </div>
       <div class="tl2-scroll">
@@ -333,6 +393,25 @@ def exportar_html(dados: dict) -> str:
     return caminho
 
 
+def _tipo_do_texto(texto: str, anterior: str = "") -> tuple[str, str]:
+    """Resolve a categoria escrita no painel e devolve (tipo, rótulo livre).
+
+    Aceita o rótulo em português ("Pedido de penhora"), a chave crua ("pedido_penhora") e
+    qualquer uma das duas com acentuação ou caixa diferentes. Texto que não corresponde a
+    nenhuma categoria da lista não é descartado nem rebaixado a "outro" em silêncio: fica
+    como rótulo do marco, e a cor continua sendo a do tipo que a coluna já tinha — mudar
+    a cor de um ato sem querer é pior do que não reconhecer o nome que se deu a ele.
+    """
+    normalizado = _sem_acento(texto)
+    chave = _TIPOS_POR_ROTULO.get(normalizado)
+    if chave:
+        return chave, ""
+    anterior = str(anterior or "") if str(anterior or "") in _ROTULOS_MARCO else "outro"
+    if not normalizado:
+        return anterior, ""
+    return anterior, re.sub(r"\s+", " ", str(texto)).strip()
+
+
 def aplicar_edicao_html(bruto: str):
     """Reconstrói os marcos a partir do painel editado.
 
@@ -354,10 +433,18 @@ def aplicar_edicao_html(bruto: str):
         if not isinstance(recebido, dict):
             continue
         marco = {campo: re.sub(r"\s+", " ", str(recebido.get(campo, "") or "")).strip()
-                 for campo in ("data", "tipo", "descricao", "referencia")}
+                 for campo in ("data", "descricao", "referencia")}
         if marco["data"] in ("—", "-"):
             marco["data"] = ""
-        if any(marco.values()):
+        # A categoria é desenhada pelo rótulo, então volta como rótulo: o tipo antigo,
+        # que veio em data-tl-extra, é o fallback de cor.
+        extra_col = recebido.get("_extra") if isinstance(recebido.get("_extra"), dict) else {}
+        marco["tipo"], marco["rotulo"] = _tipo_do_texto(
+            recebido.get("tipo"), extra_col.get("tipo"))
+        # "tipo" fica fora do teste de vazio porque ele NUNCA vem vazio (sem categoria
+        # reconhecida, cai em "outro"); quem diz se houve categoria é o texto recebido.
+        if (marco["data"] or marco["descricao"] or marco["referencia"]
+                or marco["rotulo"] or _sem_acento(recebido.get("tipo"))):
             marcos.append(marco)
     extra = editado.get("_extra") if isinstance(editado.get("_extra"), dict) else {}
     # O nº do processo é desenhado no cabeçalho desde que a contagem saiu do painel; o

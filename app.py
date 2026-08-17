@@ -25,10 +25,8 @@ from coleta import coleta_gerar, coleta_gerar_dossie_dispatch
 from analysis_runtime import environment_status_json
 from timeline_societaria import (
     timeline_analisar,
-    timeline_salvar_imagem,
     timeline_gerar_word,
     timeline_exportar_html,
-    ordenar_eventos as timeline_ordenar_eventos,
     timeline_aplicar_html,
 )
 
@@ -126,100 +124,6 @@ _FORCE_LIGHT_JS = """
 }
 """
 
-# Exportação de imagem da Timeline Societária: rasteriza o PRÓPRIO HTML da timeline
-# (o mesmo que está na tela) num canvas, via <foreignObject> de SVG — sem biblioteca
-# externa e sem redesenhar o layout no servidor.
-#
-# Roda como pré-processamento do clique (js + fn no MESMO evento): recebe o valor atual
-# do campo-ponte e devolve `[data URL]`, que o Gradio entrega como argumento de
-# `timeline_salvar_imagem`. Evite `fn=None` + `.then(...)`: encadear um evento de backend
-# depois de um evento só-JS depende de comportamento que muda entre a versão de
-# desenvolvimento (Gradio 6) e a 5.29.1 do Space. O evento único não depende disso.
-# Se qualquer etapa falhar, devolve [""] e o Python explica o que houve.
-_CAPTURAR_TIMELINE_JS = """
-async (_captura) => {
-    const vazio = [""];
-    try {
-        const shell = document.querySelector("#timeline-export-area");
-        if (!shell) return vazio;
-
-        const estilo = shell.querySelector("#tl2-export-style");
-        const css = estilo ? estilo.textContent : "";
-        const overrides = `
-            .tl2-export-clone { width: max-content !important; box-shadow: none !important;
-                                margin: 0 !important; background: #fff !important; }
-            .tl2-export-clone .tl2-scroll { overflow: visible !important; }
-            .tl2-export-clone, .tl2-export-clone * {
-                font-family: Arial, Helvetica, sans-serif !important; }
-            .tl2-export-clone .tl2-btn,
-            .tl2-export-clone .tl2-modal,
-            .tl2-export-clone .tl2-add,
-            .tl2-export-clone .tl2-rm,
-            .tl2-export-clone .tl2-toggle { display: none !important; }
-        `;
-
-        const clone = shell.cloneNode(true);
-        // O modo de edição não pode vazar para a imagem: sai o contorno tracejado
-        // junto com os atributos, como faz o Painel de Deals ao exportar.
-        clone.querySelectorAll("[contenteditable]").forEach((n) => n.removeAttribute("contenteditable"));
-        clone.classList.remove("tl2-edit-mode");
-        clone.removeAttribute("id");
-        clone.classList.add("tl2-export-clone");
-        clone.querySelectorAll("#tl2-export-style, .tl2-btn, .tl2-modal, .tl2-toggle")
-             .forEach((n) => n.remove());
-
-        // Mede fora da tela, com o eixo horizontal inteiro visível (sem a barra de rolagem).
-        const holder = document.createElement("div");
-        holder.style.cssText = "position:fixed;left:-100000px;top:0;width:max-content;background:#fff;";
-        const estiloMedicao = document.createElement("style");
-        estiloMedicao.textContent = css + overrides;
-        holder.appendChild(estiloMedicao);
-        holder.appendChild(clone);
-        document.body.appendChild(holder);
-        const rect = clone.getBoundingClientRect();
-        const largura = Math.ceil(rect.width);
-        const altura = Math.ceil(rect.height) + 8;
-        document.body.removeChild(holder);
-        if (!largura || !altura) return vazio;
-
-        const wrapper = document.createElement("div");
-        wrapper.style.cssText = "width:" + largura + "px;background:#ffffff;";
-        const estiloSvg = document.createElement("style");
-        estiloSvg.textContent = css + overrides;
-        wrapper.appendChild(estiloSvg);
-        wrapper.appendChild(clone);
-        const xhtml = new XMLSerializer().serializeToString(wrapper);
-
-        const escala = Math.max(1, Math.min(2, 3200 / largura));
-        const svg =
-            '<svg xmlns="http://www.w3.org/2000/svg" width="' + Math.round(largura * escala) +
-            '" height="' + Math.round(altura * escala) + '" viewBox="0 0 ' + largura + " " + altura + '">' +
-            '<foreignObject x="0" y="0" width="' + largura + '" height="' + altura + '">' +
-            xhtml + "</foreignObject></svg>";
-
-        const imagem = new Image();
-        imagem.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
-        await new Promise((resolve, reject) => {
-            imagem.onload = resolve;
-            imagem.onerror = () => reject(new Error("svg"));
-            window.setTimeout(() => reject(new Error("timeout")), 20000);
-        });
-
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(largura * escala);
-        canvas.height = Math.round(altura * escala);
-        const ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(imagem, 0, 0, canvas.width, canvas.height);
-        return [canvas.toDataURL("image/png")];
-    } catch (e) {
-        return vazio;
-    }
-}
-"""
-
-
 def _editar_no_html_js(seletor_raiz: str) -> str:
     """Liga/desliga a edição no próprio painel e serializa o resultado.
 
@@ -299,19 +203,23 @@ async (ligado, _ponte) => {
                 } else if (alvo.matches("[data-tl-adicionar]")) {
                     ev.preventDefault();
                     const bloco = alvo.closest("[data-tl-lista]");
-                    const lista = bloco && bloco.querySelector(".tl2-list");
-                    if (!lista) return;
-                    let modelo = [];
-                    try { modelo = JSON.parse(bloco.dataset.tlModelo || "[]"); } catch (e) { return; }
-                    const celulas = modelo.map(([campo, rotulo]) =>
-                        '<span class="tl2-celula" data-tl-campo="' + campo +
-                        '" data-tl-rotulo="' + rotulo + '" contenteditable="true"></span>').join("");
-                    const li = document.createElement("li");
-                    li.setAttribute("data-tl-item", "");
-                    li.innerHTML = celulas +
-                        '<button type="button" class="tl2-rm" data-tl-remover title="Remover">×</button>';
-                    lista.appendChild(li);
-                    const primeiro = li.querySelector("[data-tl-campo]");
+                    // O molde da linha em branco vem do servidor, em data-tl-item-html.
+                    // Remontar a linha aqui era manter uma segunda versao da estrutura,
+                    // e foi por isso que o "+ caixa" nao inseria nada: a caixinha do ato
+                    // e um <div> solto no bloco, nao um <li> dentro de <ul>.
+                    const molde = bloco ? bloco.getAttribute("data-tl-item-html") : "";
+                    if (!molde) return;
+                    const provisorio = document.createElement("div");
+                    provisorio.innerHTML = molde;
+                    const item = provisorio.firstElementChild;
+                    if (!item) return;
+                    // Lista com <ul> propria: entra no fim da <ul>. Bloco sem <ul> (as
+                    // caixinhas): entra antes do proprio botao, que e filho do bloco.
+                    const lista = bloco.querySelector(".tl2-list") || bloco;
+                    lista.insertBefore(item, alvo.parentElement === lista ? alvo : null);
+                    item.querySelectorAll("[data-tl-campo]").forEach(
+                        (c) => { c.contentEditable = "true"; });
+                    const primeiro = item.querySelector("[data-tl-campo]");
                     if (primeiro) primeiro.focus();
                 }
             });
@@ -458,7 +366,9 @@ with gr.Blocks(
                 )
             proc_presc_state = gr.State({})
             proc_presc_html = gr.HTML()
-            with gr.Row():
+            # Igual à timeline societária: editar e exportar só aparecem quando existe
+            # cronologia na tela para editar e exportar.
+            with gr.Row(visible=False) as proc_presc_acoes_row:
                 proc_presc_editar_btn = gr.Button("Editar cronologia", variant="secondary")
                 proc_presc_export_btn = gr.DownloadButton("Exportar cronologia (HTML)",
                                                           variant="secondary")
@@ -467,14 +377,14 @@ with gr.Blocks(
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Column(elem_classes=["qa-section"]):
-                with gr.Row():
+                with gr.Row(elem_classes=["qa-ask-row"]):
                     with gr.Column(scale=4):
                         proc_pergunta = gr.Textbox(
                             label="Perguntas sobre a análise:",
                             lines=3,
                             placeholder="Exemplos: Quando foi realizado o primeiro pedido de penhora? Há risco de prescrição intercorrente? Há risco de sucumbência? Qual o valor atualizado da dívida?"
                         )
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, elem_classes=["qa-ask-col"]):
                         proc_perguntar_btn = gr.Button("Perguntar", variant="primary")
                 proc_resposta = gr.Textbox(label="Resposta", lines=5, interactive=False)
 
@@ -580,14 +490,14 @@ with gr.Blocks(
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Column(elem_classes=["qa-section"]):
-                with gr.Row():
+                with gr.Row(elem_classes=["qa-ask-row"]):
                     with gr.Column(scale=4):
                         rj_pergunta = gr.Textbox(
                             label="Perguntas sobre a análise:",
                             lines=3,
                             placeholder="Exemplos: Qual é o maior credor e qual percentual detém dos créditos? Qual o status atual do stay period? Há risco de prescrição intercorrente nas execuções?"
                         )
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, elem_classes=["qa-ask-col"]):
                         rj_perguntar_btn = gr.Button("Perguntar", variant="primary")
                 rj_resposta = gr.Textbox(label="Resposta", lines=5, interactive=False)
 
@@ -681,14 +591,14 @@ with gr.Blocks(
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Column(elem_classes=["qa-section"]):
-                with gr.Row():
+                with gr.Row(elem_classes=["qa-ask-row"]):
                     with gr.Column(scale=4):
                         mat_pergunta = gr.Textbox(
                             label="Perguntas sobre as matrículas:",
                             lines=3,
                             placeholder="Exemplos: Indique as matrículas que pertencem a determinado devedor. Quais têm penhora vigente? Qual o valor total dos ônus?"
                         )
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, elem_classes=["qa-ask-col"]):
                         mat_perguntar_btn = gr.Button("Perguntar", variant="primary")
                 mat_resposta = gr.Textbox(label="Resposta", lines=5, interactive=False)
 
@@ -707,8 +617,9 @@ with gr.Blocks(
                         "1. Faça upload de todos os atos societários (contrato social, "
                         "alterações, ACS)\n"
                         "2. Clique em **Analisar timeline societária**\n"
-                        "3. Edite os eventos se necessário\n"
-                        "4. Exporte como HTML interativo, imagem (A4) ou tabela em Word\n\n"
+                        "3. Edite os eventos se necessário — ao concluir, os atos são "
+                        "reordenados por data\n"
+                        "4. Exporte como HTML interativo ou tabela em Word\n\n"
                         "_Suporta documentos escaneados (OCR)._"
                     )
 
@@ -732,28 +643,18 @@ with gr.Blocks(
             tl_editando = gr.Textbox(value="0", visible=False)
             tl_edicao_ponte = gr.Textbox(visible=False)
 
-            with gr.Row():
+            # Editar e exportar só existem depois que há timeline na tela: antes disso os
+            # botões não têm sobre o que agir, e a linha vazia só ocupava espaço.
+            with gr.Row(visible=False) as tl_acoes_row:
                 tl_editar_btn = gr.Button("Editar timeline", variant="secondary")
-                tl_ordenar_btn = gr.Button("Ordenar atos por data", variant="secondary")
-
-
-            with gr.Row():
                 tl_exportar_html_btn = gr.DownloadButton("Exportar HTML", variant="secondary")
                 tl_gerar_tabela_btn = gr.Button("Gerar tabela (Word)", variant="secondary")
-                tl_exportar_img_btn = gr.Button("Exportar imagem", variant="secondary")
 
-            with gr.Row():
-                tl_tabela_word_file = gr.File(
-                    label="Tabela em Word", interactive=False, visible=True, height=72,
-                    elem_classes=["compact-file-output"],
-                )
-                tl_imagem_file = gr.File(
-                    label="Imagem da timeline", interactive=False, visible=True, height=72,
-                    elem_classes=["compact-file-output"],
-                )
-
-            # Ponte da captura feita no navegador (data URL PNG) até o Python.
-            tl_imagem_captura = gr.Textbox(visible=False)
+            # A caixa de download aparece com o arquivo, não antes dele.
+            tl_tabela_word_file = gr.File(
+                label="Tabela em Word", interactive=False, visible=False, height=72,
+                elem_classes=["compact-file-output"],
+            )
 
         # ── Tab 5: Coleta de Informações ─────────────────────────────────────
         with gr.Tab("Coleta de Informações"):
@@ -834,7 +735,7 @@ with gr.Blocks(
     proc_cronologia_btn.click(
         fn=proc_gerar_cronologia,
         inputs=[proc_relatorio_state, proc_extracao_state],
-        outputs=[proc_presc_state, proc_presc_html],
+        outputs=[proc_presc_state, proc_presc_html, proc_presc_acoes_row],
         concurrency_limit=2,
     )
     # Edição no próprio painel, igual à da timeline: o JS liga o contenteditable e
@@ -938,7 +839,8 @@ with gr.Blocks(
     tl_analisar_btn.click(
         fn=timeline_analisar,
         inputs=[tl_arquivos],
-        outputs=[tl_status, tl_timeline_html, tl_data_state],
+        outputs=[tl_status, tl_timeline_html, tl_data_state, tl_acoes_row,
+                 tl_tabela_word_file],
         concurrency_limit=2,
     )
 
@@ -956,25 +858,11 @@ with gr.Blocks(
         js=_EDITAR_TIMELINE_JS,
     )
 
-    tl_ordenar_btn.click(
-        fn=timeline_ordenar_eventos,
-        inputs=[tl_data_state],
-        outputs=[tl_data_state, tl_timeline_html],
-    )
-
-
-    # Um único evento: o JS roda antes e o que ele devolve vira o argumento do Python.
-    tl_exportar_img_btn.click(
-        fn=timeline_salvar_imagem,
-        inputs=[tl_imagem_captura],
-        outputs=[tl_imagem_file],
-        js=_CAPTURAR_TIMELINE_JS,
-    )
     tl_exportar_html_btn.click(
         fn=timeline_exportar_html, inputs=[tl_data_state], outputs=[tl_exportar_html_btn]
     )
     tl_gerar_tabela_btn.click(
-        fn=lambda data: timeline_gerar_word(data, None),
+        fn=lambda data: gr.update(value=timeline_gerar_word(data, None), visible=True),
         inputs=[tl_data_state],
         outputs=[tl_tabela_word_file],
     )

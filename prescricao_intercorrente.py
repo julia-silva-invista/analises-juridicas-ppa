@@ -284,7 +284,12 @@ MITIGANTES = [
 
 
 TIPOS_DE_MARCO = [
-    "distribuicao", "citacao", "tentativa_infrutifera", "suspensao_921",
+    "distribuicao", "citacao",
+    # Atividade do exequente. Não mexem na contagem (ver _ZERA/_PAUSA/_RETOMA abaixo),
+    # mas são a prova documental da tese de "ausência de inércia" — sem elas na
+    # cronologia não há como sustentar a diligência do credor data por data.
+    "manifestacao_exequente", "pedido_penhora", "pedido_andamento",
+    "tentativa_infrutifera", "suspensao_921",
     "arquivamento", "penhora", "bens_localizados", "parcelamento", "embargos",
     "recuperacao_judicial", "retomada", "extincao", "outro",
 ]
@@ -560,6 +565,14 @@ def termo_inicial_intercorrente(marcos: list):
 
 
 # Efeito de cada marco sobre a contagem, a partir do termo inicial.
+#
+# Pedido de penhora, pedido de andamento e manifestação do exequente ficam FORA dos três
+# conjuntos de propósito: requerer não retira a execução da hipótese do art. 921, III —
+# quem retira é o resultado (penhora efetivada, bens localizados, parcelamento). Tratá-los
+# como se zerassem faria o robô devolver "não prescreveu" para toda execução em que o
+# credor peticionou de tempo em tempo sem nunca achar nada, que é justamente o caso
+# típico. Eles entram na cronologia como prova da diligência do credor — matéria da tese
+# de ausência de inércia (ver MARCOS_LEGAIS), avaliada no parecer, não na conta.
 _ZERA = {"penhora", "bens_localizados", "parcelamento", "retomada", "citacao"}
 _PAUSA = {"recuperacao_judicial", "embargos"}
 _RETOMA = {"retomada", "tentativa_infrutifera", "suspensao_921"}

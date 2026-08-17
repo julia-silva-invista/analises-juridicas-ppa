@@ -196,6 +196,143 @@ def testar_painel_da_cronologia_e_editavel():
         assert marca.strip(chr(39)) in html_gerado, marca
 
 
+# ── Atividade do exequente ───────────────────────────────────────────────────
+# Pedido de penhora, pedido de andamento e as demais manifestações do exequente entram na
+# cronologia como prova da diligência do credor — e NÃO mexem na contagem: requerer não
+# retira a execução da hipótese do art. 921, III; quem retira é o resultado.
+
+MARCOS_DE_ATIVIDADE = ["pedido_penhora", "pedido_andamento", "manifestacao_exequente"]
+
+
+@pytest.mark.parametrize("tipo", MARCOS_DE_ATIVIDADE)
+def testar_atividade_do_exequente_e_um_tipo_com_rotulo_e_cor(tipo):
+    assert tipo in pi.TIPOS_DE_MARCO
+    assert tipo in cronologia._ROTULOS_MARCO
+    assert tipo in cronologia._CORES_MARCO
+
+
+@pytest.mark.parametrize("tipo", MARCOS_DE_ATIVIDADE)
+def testar_pedido_do_exequente_nao_zera_nem_pausa_a_contagem(tipo):
+    """Execução em que o credor peticiona de tempo em tempo sem nunca achar bem nenhum
+    continua correndo para a intercorrente — é o caso típico, não a exceção."""
+    assert tipo not in pi._ZERA
+    assert tipo not in pi._PAUSA
+    assert tipo not in pi._RETOMA
+
+
+def testar_pedido_de_penhora_aparece_na_cronologia():
+    dados = {"titulo": "Cédula de Crédito Bancário", "marcos": [
+        {"data": "10/03/2014", "tipo": "distribuicao", "descricao": "Distribuída"},
+        {"data": "05/05/2019", "tipo": "pedido_penhora", "descricao": "Sisbajud requerido"},
+        {"data": "06/06/2020", "tipo": "pedido_andamento", "descricao": "Pede prosseguimento"},
+        {"data": "07/07/2021", "tipo": "manifestacao_exequente", "descricao": "Indica bem"},
+    ]}
+    html_gerado = cronologia.render_html(cronologia.analisar(dados))
+    for rotulo in ("Pedido de penhora", "Pedido de andamento", "Manifestação do exequente"):
+        assert rotulo in html_gerado, rotulo
+
+
+def testar_prompt_pede_todas_as_manifestacoes_do_exequente():
+    assert "TODAS as manifestações do exequente" in cronologia.PROMPT_MARCOS
+    for tipo in MARCOS_DE_ATIVIDADE:
+        assert tipo in cronologia.PROMPT_MARCOS, tipo
+
+
+# ── Categoria editável no painel ─────────────────────────────────────────────
+
+def _arvore_de_um_marco(categoria: str, tipo_anterior: str = "") -> str:
+    return json.dumps({"titulo": "Nota promissória", "eventos": [
+        {"data": "05/05/2019", "tipo": categoria, "descricao": "Ato",
+         "referencia": "Mov. 10", "_extra": {"tipo": tipo_anterior}},
+    ]}, ensure_ascii=False)
+
+
+def testar_categoria_e_desenhada_como_campo_editavel():
+    """A caixinha da categoria tem de ser alterável como as outras: ela é desenhada com o
+    rótulo em português e volta convertida em chave."""
+    html_gerado = cronologia.render_html(cronologia.analisar(DADOS))
+    assert html_gerado.count('data-tl-campo="tipo"') >= 2, \
+        "a categoria aparece na coluna e na caixa, e as duas se editam"
+    assert 'class="tl2-tipo"' not in html_gerado, \
+        "a chave crua saiu: quem se edita agora é o próprio rótulo"
+
+
+@pytest.mark.parametrize("escrito, esperado", [
+    ("Pedido de penhora", "pedido_penhora"),
+    ("pedido de penhora", "pedido_penhora"),
+    ("PEDIDO DE ANDAMENTO", "pedido_andamento"),
+    ("Manifestacao do exequente", "manifestacao_exequente"),   # sem acento
+    ("manifestacao_exequente", "manifestacao_exequente"),       # a chave crua
+    ("Suspensão (art. 921, III)", "suspensao_921"),
+])
+def testar_categoria_escrita_no_painel_volta_como_chave(escrito, esperado):
+    dados = cronologia.aplicar_edicao_html(_arvore_de_um_marco(escrito))
+    assert dados["marcos"][0]["tipo"] == esperado
+    assert dados["marcos"][0]["rotulo"] == "", "categoria da lista não vira rótulo livre"
+
+
+def testar_categoria_fora_da_lista_vira_rotulo_e_preserva_a_cor():
+    """Nome que a lista não prevê não é descartado nem rebaixado a "outro" em silêncio:
+    fica como rótulo da caixa, e a cor continua sendo a do tipo que a coluna já tinha."""
+    dados = cronologia.aplicar_edicao_html(
+        _arvore_de_um_marco("Penhora no rosto dos autos", tipo_anterior="pedido_penhora"))
+    marco = dados["marcos"][0]
+    assert marco["tipo"] == "pedido_penhora", "a cor escolhida antes sobrevive"
+    assert marco["rotulo"] == "Penhora no rosto dos autos"
+    assert "Penhora no rosto dos autos" in cronologia.render_html(cronologia.analisar(dados))
+
+
+def testar_categoria_apagada_mantem_o_tipo_anterior():
+    dados = cronologia.aplicar_edicao_html(_arvore_de_um_marco("", tipo_anterior="penhora"))
+    assert dados["marcos"][0]["tipo"] == "penhora"
+
+
+def testar_tipo_anterior_invalido_cai_em_outro():
+    dados = cronologia.aplicar_edicao_html(
+        _arvore_de_um_marco("Coisa nova", tipo_anterior="inventado"))
+    assert dados["marcos"][0]["tipo"] == "outro"
+
+
+def testar_dica_lista_as_categorias_reconhecidas():
+    """"Clique para reescrever a categoria" não diz o que se pode escrever; a dica diz."""
+    html_gerado = cronologia.render_html(cronologia.analisar(DADOS))
+    for rotulo in ("Pedido de penhora", "Tentativa infrutífera", "Penhora efetivada"):
+        assert rotulo in html_gerado, rotulo
+
+
+def testar_round_trip_da_categoria_preserva_o_tipo():
+    """Entrar e sair do modo de edição sem tocar em nada não pode mudar categoria nenhuma.
+
+    É o caminho mais fácil de quebrar: a coluna desenha o rótulo, não a chave.
+    """
+    analise = cronologia.analisar(DADOS)
+    arvore = {"titulo": analise["titulo"], "processo": analise["processo"], "eventos": [
+        {"data": i["marco"].get("data", ""),
+         "tipo": cronologia.rotulo_do_marco(i["marco"]),
+         "descricao": i["marco"].get("descricao", ""),
+         "referencia": i["marco"].get("referencia", ""),
+         "_extra": {"tipo": i["marco"].get("tipo", "")}}
+        for i in analise["itens"]
+    ], "_extra": {"vencimento_titulo": analise["vencimento_titulo"]}}
+
+    voltou = cronologia.aplicar_edicao_html(json.dumps(arvore, ensure_ascii=False))
+    assert ([m["tipo"] for m in voltou["marcos"]]
+            == [m["tipo"] for m in cronologia.ordenar_marcos(DADOS["marcos"])])
+
+
+def testar_barra_de_acoes_da_cronologia_so_aparece_depois_de_gerar():
+    """Sem análise, "Editar cronologia" e "Exportar" não têm sobre o que agir."""
+    import processos
+
+    saidas = list(processos.proc_gerar_cronologia("", ""))
+    assert saidas[-1][2]["visible"] is False
+    assert "Gere uma análise primeiro" in saidas[-1][1]
+
+    fonte = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+    assert "with gr.Row(visible=False) as proc_presc_acoes_row:" in fonte
+    assert "proc_presc_acoes_row" in fonte.split("fn=proc_gerar_cronologia", 1)[1][:400]
+
+
 def testar_json_torto_da_cronologia_nao_derruba():
     for entrada in ("", "{", "[]", None):
         assert cronologia.aplicar_edicao_html(entrada) is None

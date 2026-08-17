@@ -1,14 +1,12 @@
-"""Timeline Societária: falha de credencial vira mensagem acionável (não traceback)
-e a exportação de imagem grava o PNG capturado do próprio HTML.
+"""Timeline Societária: falha de credencial vira mensagem acionável (não traceback),
+o painel renderizado é o editor e concluir a edição reordena os atos por data.
 
 Contexto: quando o projeto da GEMINI_API_KEY_1 estourava o teto de gasto mensal, a aba
 inteira caía com um traceback cru de `google.genai.errors.ClientError: 429`.
 """
 from __future__ import annotations
 
-import base64
 import copy
-import io
 import json
 import re
 import sys
@@ -17,7 +15,6 @@ from pathlib import Path
 
 import gradio as gr
 import pytest
-from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -190,40 +187,53 @@ def testar_retry_nao_insiste_no_teto_de_gasto():
     assert len(tentativas) == 1
 
 
-def testar_exportar_imagem_grava_a_captura_do_html():
-    buffer = io.BytesIO()
-    Image.new("RGB", (40, 30), "red").save(buffer, "PNG")
-    captura = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
+def testar_barra_de_acoes_so_aparece_com_timeline_na_tela(monkeypatch, pdf_qualquer):
+    """Editar e exportar não têm sobre o que agir antes de existir timeline.
 
-    caminho = timeline.timeline_salvar_imagem(captura)
+    A quarta saída é a visibilidade da barra; a quinta limpa a caixa do Word, para o
+    arquivo de uma análise anterior não parecer pertencer à timeline nova.
+    """
+    monkeypatch.setattr(timeline, "_get_gemini_clients", lambda: [
+        _ClienteFalso([], "k1", resposta=JSON_RESPOSTA)])
 
-    assert Image.open(caminho).size == (40, 30)
+    saidas = list(timeline.timeline_analisar([pdf_qualquer]))
 
-
-@pytest.mark.parametrize("captura", ["", None, "nao-e-data-url"])
-def testar_exportar_imagem_sem_timeline_na_tela_avisa(captura):
-    with pytest.raises(gr.Error, match="Não há timeline na tela"):
-        timeline.timeline_salvar_imagem(captura)
-
-
-def testar_exportar_imagem_com_base64_quebrado_avisa():
-    with pytest.raises(gr.Error, match="não conseguiu gerar a imagem"):
-        timeline.timeline_salvar_imagem("data:image/png;base64,!!!invalido!!!")
+    assert saidas[0][3]["visible"] is False, "escondida enquanto analisa"
+    assert saidas[0][4] == {"value": None, "visible": False, "__type__": "update"}
+    assert saidas[-1][3]["visible"] is True, "com eventos na tela, a barra aparece"
 
 
-def testar_captura_js_recebe_um_argumento_e_devolve_lista():
-    """O JS roda como pré-processamento do clique: precisa aceitar o valor atual do
-    campo-ponte e devolver uma lista com os argumentos de timeline_salvar_imagem."""
+def testar_barra_de_acoes_fica_escondida_quando_a_analise_falha(monkeypatch, pdf_qualquer):
+    monkeypatch.setattr(timeline, "_get_gemini_clients", lambda: [
+        _ClienteFalso([], "k1", erro=ERRO_TETO_DE_GASTO)])
+
+    saidas = []
+    with pytest.raises(gr.Error):
+        for saida in timeline.timeline_analisar([pdf_qualquer]):
+            saidas.append(saida)
+
+    assert saidas[-1][3]["visible"] is False
+
+
+def testar_exportacao_de_imagem_foi_removida():
+    """A exportação de imagem saiu de vez: o registro exportável é o HTML e o Word.
+
+    Rasterizar o painel no navegador só existia para produzir um PNG que ninguém usava, e
+    arrastava atrás de si o clone do DOM, o CSS duplicado e a caixa de download que ficava
+    na tela sem arquivo dentro.
+    """
+    assert not hasattr(timeline, "timeline_salvar_imagem")
     fonte = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
-    trecho = fonte.split('_CAPTURAR_TIMELINE_JS = """', 1)[1].split('"""', 1)[0]
+    for morto in ("_CAPTURAR_TIMELINE_JS", "tl_exportar_img_btn", "tl_imagem_file",
+                  "tl_imagem_captura", "timeline_salvar_imagem"):
+        assert morto not in fonte, f"{morto} deveria ter saído de app.py"
 
-    assert trecho.lstrip().startswith("async (_captura) =>")
-    assert 'const vazio = [""];' in trecho
-    assert 'return [canvas.toDataURL("image/png")];' in trecho
-    assert 'return "";' not in trecho, "todo caminho de falha devolve a lista vazia"
-    # Um evento só: encadear backend depois de um evento só-JS depende de comportamento
-    # que varia entre a versão de desenvolvimento e a do Space.
-    assert ".then(" not in fonte.split("tl_exportar_img_btn.click(", 1)[1].split(")\n", 1)[0]
+
+def testar_ordenar_por_data_saiu_do_botao_e_virou_parte_da_edicao():
+    """Ordenar deixou de ser um botão: quem edita não deveria precisar lembrar disso."""
+    fonte = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+    assert "tl_ordenar_btn" not in fonte
+    assert "Ordenar atos por data" not in fonte
 
 
 # ── Edição no próprio painel ─────────────────────────────────────────────────
@@ -367,6 +377,75 @@ def testar_ordenar_atos_por_data():
     ]}
     ordenado, _html = timeline.ordenar_eventos(fora_de_ordem)
     assert [e["ato"] for e in ordenado["eventos"]] == ["Primeiro", "Segundo"]
+
+
+def testar_concluir_edicao_reordena_por_data():
+    """O ato acrescentado nasce no fim da trilha; concluir a edição o põe no lugar.
+
+    Sem isso, um ato de 2012 incluído depois ficava depois do de 2024 até alguém lembrar
+    de mandar ordenar — e a leitura da cronologia é justamente a ordem.
+    """
+    arvore = {"empresa": "X", "cnpj": "", "eventos": [
+        _arvore_do_evento(dict(EVENTO_COMPLETO, data="10/03/2024", ato="Antigo na tela")),
+        _arvore_do_evento(dict(EVENTO_COMPLETO, data="05/06/2012", ato="Acrescentado")),
+    ]}
+    saida = timeline.timeline_aplicar_html("0", json.dumps(arvore, ensure_ascii=False))
+    assert [e["ato"] for e in saida[2]["eventos"]] == ["Acrescentado", "Antigo na tela"]
+
+
+def testar_ato_sem_data_fica_no_fim_ao_concluir():
+    """Ato novo, ainda em branco, não pode saltar para o começo da cronologia."""
+    arvore = {"empresa": "X", "cnpj": "", "eventos": [
+        _arvore_do_evento(dict(EVENTO_COMPLETO, data="", ato="Em branco")),
+        _arvore_do_evento(dict(EVENTO_COMPLETO, data="10/03/2010", ato="Datado")),
+    ]}
+    saida = timeline.timeline_aplicar_html("0", json.dumps(arvore, ensure_ascii=False))
+    assert [e["ato"] for e in saida[2]["eventos"]] == ["Datado", "Em branco"]
+
+
+def testar_todo_bloco_editavel_leva_o_molde_da_linha_em_branco():
+    """O "+" clona `data-tl-item-html`; sem o molde, o botão não insere nada.
+
+    Foi assim que o "+ caixa" ficou inerte: o JavaScript montava um <li> para pôr dentro
+    de uma <ul>, e o bloco das caixinhas do ato não tem nem <li> nem <ul>.
+    """
+    html_gerado = timeline.render_timeline_html(DADOS_EDICAO)
+    blocos = re.findall(r"<(?:div|ul)[^>]*data-tl-lista=[^>]*>", html_gerado)
+    assert blocos, "nenhum bloco editável no painel"
+    for bloco in blocos:
+        assert "data-tl-item-html=" in bloco, bloco
+
+    # O bloco das caixinhas é o caso que quebrava: molde de <div>, não de <li>.
+    caixinhas = next(b for b in blocos if 'data-tl-lista="movimentos"' in b)
+    assert "&lt;div" in caixinhas and "tl2-move" in caixinhas
+    assert "&lt;li" not in caixinhas
+    # E nasce em branco: "—" no molde viraria conteúdo da caixa nova.
+    assert "—" not in caixinhas
+
+
+def testar_js_do_mais_clona_o_molde_do_servidor():
+    """Uma só definição da linha nova, no servidor.
+
+    Enquanto o JavaScript remontava a linha por conta própria, havia duas versões da
+    mesma estrutura para divergirem — e uma delas (a caixinha do ato) divergiu.
+    """
+    fonte = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+    trecho = fonte.split('alvo.matches("[data-tl-adicionar]")', 1)[1].split("}", 1)[0]
+    assert 'getAttribute("data-tl-item-html")' in trecho
+    assert "tl2-celula" not in trecho, "a linha nova não se remonta no navegador"
+    # Bloco com <ul> própria: entra na lista. Bloco sem <ul> (as caixinhas): entra antes
+    # do botão, que é filho do próprio bloco — appendChild puro punha a caixa após o "+".
+    assert 'querySelector(".tl2-list") || bloco' in trecho
+    assert "insertBefore" in trecho
+
+
+def testar_molde_de_linha_de_lista_e_um_li_vazio():
+    html_gerado = timeline.render_timeline_html(DADOS_EDICAO)
+    bloco = re.search(r"<div[^>]*data-tl-lista=\"socios_apos\"[^>]*>", html_gerado).group()
+    assert "&lt;li data-tl-item&gt;" in bloco
+    assert 'data-tl-campo=&quot;nome&quot;' in bloco
+    # Molde é linha em branco: nenhum valor do evento vai junto.
+    assert "Maria Souza" not in bloco
 
 
 def testar_codigo_orfao_foi_removido():
