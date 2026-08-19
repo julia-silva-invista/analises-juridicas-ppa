@@ -1634,10 +1634,14 @@ button[title*="copy"] {
     letter-spacing: 0.055em !important;
 }
 
-/* Simula zoom 80% sem alterar o desenho dos componentes. */
+/* Simula zoom sem alterar o desenho dos componentes: tudo encolhe junto, em vez de
+   ajustar tamanho de fonte e espaçamento componente por componente.
+   0.64 = os 0.8 anteriores reduzidos em mais 20%.
+   A max-width acompanha o zoom para o app seguir ocupando os mesmos 1320px reais
+   (1320 / 0.64 = 2062.5): sem isso, encolher o zoom encolheria também a largura útil. */
 .gradio-container {
-    zoom: 0.8 !important;
-    max-width: 1650px !important;
+    zoom: 0.64 !important;
+    max-width: 2063px !important;
 }
 
 @media (max-width: 620px) {
