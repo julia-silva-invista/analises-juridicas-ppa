@@ -1,18 +1,23 @@
 """Aparencia da interface: CSS, cabecalho e rodape.
 
-O conteudo pesado mora em assets/: o logo do cabecalho (assets/logo_header.png, 351 KB) e a
-folha de estilo (assets/design.css, 65 KB). Embutidos no modulo, somavam 549 KB — uma linha
-sozinha tinha 478 mil caracteres, o que tornava o arquivo impraticavel de abrir e editar.
+O conteudo pesado mora em assets/: o logo do cabecalho (assets/logo_header.b64) e a folha de
+estilo (assets/design.css, 65 KB). Embutidos no modulo, somavam 549 KB — uma linha sozinha
+tinha 478 mil caracteres, o que tornava o arquivo impraticavel de abrir e editar.
+
+O logo fica em base64, como TEXTO, e nao como .png: o Hugging Face recusa push de arquivo
+binario fora do armazenamento LFS/Xet, e e esse mesmo base64 que o cabecalho embute como data
+URI. Para recuperar a imagem quando necessario:
+
+    python -c "import base64,pathlib; pathlib.Path('logo.png').write_bytes(base64.b64decode(pathlib.Path('assets/logo_header.b64').read_text()))"
 
 A extracao e so de armazenamento: o CSS e o HTML entregues ao Gradio sao identicos aos de
 antes, e tests/test_design_snapshot.py guarda a impressao digital das tres saidas. Os
 caminhos sao relativos a este modulo, nao ao diretorio de execucao, que no Space e outro.
 """
-import base64
 from pathlib import Path
 
 _ASSETS = Path(__file__).resolve().parent / 'assets'
-_LOGO_BASE64 = base64.b64encode((_ASSETS / 'logo_header.png').read_bytes()).decode('ascii')
+_LOGO_BASE64 = (_ASSETS / 'logo_header.b64').read_text(encoding='ascii').strip()
 
 CSS = (_ASSETS / 'design.css').read_text(encoding='utf-8')
 

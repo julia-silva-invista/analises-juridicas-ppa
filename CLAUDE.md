@@ -69,6 +69,19 @@ decisão é da Julia.
 Todos são sobrescrevíveis por variável de ambiente no Space. Ao mudar qualquer um, atualizar o
 `README.md` no mesmo commit.
 
+## Armadilha do Hugging Face: arquivo binário
+
+O Space **recusa push de arquivo binário** que não esteja em armazenamento LFS/Xet — a mensagem é
+`Your push was rejected because it contains binary files`. Vale para o Space de teste e para
+produção.
+
+O que passa hoje: `x.xlsx` (declarado como LFS no `.gitattributes`) e os `.docx` de `assets/`, que
+são pequenos. Um PNG de 351 KB solto foi rejeitado.
+
+Por isso o logo do cabeçalho é guardado como **texto** em `assets/logo_header.b64`, não como
+`.png`. Ao acrescentar imagem, fonte ou qualquer binário, escolher entre: guardar em base64 como
+texto, declarar em LFS no `.gitattributes`, ou remover no passo de publicação.
+
 ## Comandos
 
 ```bash
