@@ -113,8 +113,11 @@ usar 6; duas usam até 3 cada; três usam até 2 cada; quatro usam 1 cada. A qui
 fila. Quem coordena é o `AnalysisManager` (`analysis_runtime.py`); o paralelismo usa
 `concurrent.futures.ThreadPoolExecutor`.
 
-O cabeçalho da interface mostra em tempo real o estado do ambiente — "Estável", "Operacional" ou
-"Pico de demanda" — calculado pela soma das análises ativas e em fila.
+O cabeçalho da interface mostra em tempo real o estado do ambiente, calculado pela soma das análises
+ativas e em fila: até 2 é "Estável", 3 é "Operacional", 4 ou mais é "Pico de demanda".
+
+A fila é usada apenas por Processos e Recuperação Judicial (`analysis_runtime.ANALYSIS_MANAGER`);
+Matrículas, Timeline Societária e Coleta rodam fora dela.
 
 ### Segmentação de documentos extensos
 PDFs de processos e RJ podem ter milhares de páginas, muitas escaneadas. Em vez de uma chamada única,
@@ -162,7 +165,12 @@ GEMINI_MODEL_OCR=gemini-3.6-flash              # leitura visual de páginas esca
 GEMINI_MODEL_RELATORIO=gemini-3.6-flash        # consolidação e elaboração da análise jurídica
 GEMINI_MODEL_ESTRUTURADO=gemini-3.5-flash-lite # dados estruturados (JSON) de dossiês e cronologias
 GEMINI_MODEL_QA=gemini-3.6-flash               # perguntas sobre relatórios já consolidados
+GEMINI_MODEL_TIMELINE=gemini-2.5-pro           # leitura conjunta dos atos societários
 ```
+
+A Timeline Societária usa modelo próprio porque submete todos os atos em uma chamada só, e o
+default dela é de outra família (`gemini-2.5-pro`). Se o modelo configurado não existir na chave em
+uso, o módulo interrompe com a lista dos modelos disponíveis, em vez de falhar em silêncio.
 
 Em páginas com camada textual confiável, `GEMINI_MODEL_EXTRACAO` faz a leitura factual em alto
 volume. Se o detector local encontrar qualquer página digitalizada no trecho, `GEMINI_MODEL_OCR`
@@ -192,15 +200,23 @@ Também já são os defaults; só precisam ser cadastrados como Variables se hou
 alterá-los:
 
 ```text
-MAX_ACTIVE_ANALYSES=4
-TOTAL_EXTRACTION_WORKERS=6
-PDF_PREPARATION_CONCURRENCY=2
-PDF_CHUNK_MAX_MB=45
-ANALYSIS_CACHE_RETENTION_DAYS=7
+MAX_ACTIVE_ANALYSES=4                 # análises ativas em Processos e RJ; as demais vão para a fila
+TOTAL_EXTRACTION_WORKERS=6            # workers de extração compartilhados
+PDF_PREPARATION_CONCURRENCY=2         # preparações de PDF simultâneas
+PDF_CHUNK_MAX_MB=45                   # teto de tamanho por parte
+LIMITE_PROCESSAMENTO_PESADO_PDF=6     # chunks em compressão/rasterização ao mesmo tempo no container
+MATRICULAS_MAX_WORKERS=3              # matrículas processadas em paralelo
+ANALYSIS_CACHE_RETENTION_DAYS=7       # retenção do cache de análises
+RJ_CACHE_RETENCAO_DIAS=7              # retenção do cache de chunks de RJ
+RJ_CACHE_RETENCAO_DIAS_CONCLUIDO=2    # idem, para análise já concluída
 ```
 
+`LIMITE_PROCESSAMENTO_PESADO_PDF` limita só a etapa de compressão/rasterização, que é o gargalo real
+de CPU e memória — a espera pela resposta do Gemini, que é I/O, não passa por essa trava.
+
 O cache e o último estágio ficam em `/data/analysis_runtime` quando o Space tem storage persistente,
-ou em `resultados/analysis_runtime` no ambiente local.
+ou em `resultados/analysis_runtime` no ambiente local. `ANALYSIS_RUNTIME_DIR` e `RJ_CACHE_DIR`
+sobrescrevem esses caminhos, e `PORT` (default 7860) muda a porta em que o app sobe.
 
 ## Desenvolvimento
 
