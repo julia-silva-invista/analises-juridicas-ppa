@@ -17,10 +17,10 @@ import design  # noqa: E402
 
 # (tamanho em caracteres, sha256 do texto em UTF-8)
 # CSS atualizado deliberadamente: zoom do app de 0.8 para 0.696 (13% menor que o original),
-# com width e max-width compensando o zoom para o app seguir preenchendo a largura, como faz o
-# zoom do navegador. A trava acusou cada uma das mudanças, como deveria.
+# com a max-width acompanhando o zoom, como já era o desenho anterior. A trava acusou cada
+# uma das mudanças, como deveria.
 GOLDEN = {
-    "CSS": (66231, "9e61159083b76b7025f3ee60bd155223bfa020722d8efd7970bda401b72c3862"),
+    "CSS": (66195, "17607431b46b561d9769baba923159cc3ba95d916f39d206f3ec70c36cfd50cd"),
     "HEADER_HTML": (479890, "99404ab984ea8d21069d3689de09c9d83ed2757affa9e71680dba93782eabf7b"),
     "FOOTER_HTML": (81, "81f1b568511f1ef005d531eadc1f3318c126037e9ad17654a171cee0630d8eaa"),
 }

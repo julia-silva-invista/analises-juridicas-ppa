@@ -1638,13 +1638,12 @@ button[title*="copy"] {
    ajustar tamanho de fonte e espaçamento componente por componente.
    0.696 = os 0.8 originais reduzidos em 13%.
 
-   width e max-width compensam o zoom, para o app se comportar como o zoom do navegador:
-   conteúdo menor, mas ainda preenchendo a largura. Sem a compensação, o zoom encolhe
-   também a caixa (1280px de janela renderizariam 891px de app, com margem vazia dos lados).
-   100% / 0.696 = 143.68%  e  1320px / 0.696 = 1896.6px (largura real preservada). */
+   A max-width acompanha o zoom (1320 / 0.696 = 1896.6), como já acontecia antes com
+   1650 / 0.8: em tela larga o app ocupa os mesmos 1320px reais de sempre; em tela estreita
+   a caixa acompanha a janela. Não forçar `width` aqui — fixar a largura para compensar o
+   zoom faz o container passar da largura da janela e cria rolagem horizontal. */
 .gradio-container {
     zoom: 0.696 !important;
-    width: 143.68% !important;
     max-width: 1897px !important;
 }
 
