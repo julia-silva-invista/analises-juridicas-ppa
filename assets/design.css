@@ -1637,10 +1637,14 @@ button[title*="copy"] {
 /* Simula zoom sem alterar o desenho dos componentes: tudo encolhe junto, em vez de
    ajustar tamanho de fonte e espaçamento componente por componente.
    0.64 = os 0.8 anteriores reduzidos em mais 20%.
-   A max-width acompanha o zoom para o app seguir ocupando os mesmos 1320px reais
-   (1320 / 0.64 = 2062.5): sem isso, encolher o zoom encolheria também a largura útil. */
+
+   width e max-width compensam o zoom, para o app se comportar como o zoom do navegador:
+   conteúdo menor, mas ainda preenchendo a largura. Sem a compensação, o zoom encolhe
+   também a caixa (1280px de janela renderizariam 819px de app, com margem vazia dos lados).
+   100% / 0.64 = 156.25%  e  1320px / 0.64 = 2062.5px (largura real preservada). */
 .gradio-container {
     zoom: 0.64 !important;
+    width: 156.25% !important;
     max-width: 2063px !important;
 }
 
