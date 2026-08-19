@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "app",
+      "runtimeExecutable": "C:\\dev\\Análise de Matrículas\\Códigos - Análise de Matrículas\\.venv_test\\Scripts\\python.exe",
+      "runtimeArgs": ["app.py"],
+      "port": 7860
+    },
+    {
+      "name": "app (versão do Space)",
+      "runtimeExecutable": "C:\\dev\\Análise de Matrículas\\Códigos - Análise de Matrículas\\.venv_space\\Scripts\\python.exe",
+      "runtimeArgs": ["app.py"],
+      "port": 7860
+    }
+  ]
+}
