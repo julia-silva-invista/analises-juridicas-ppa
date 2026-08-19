@@ -16,11 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import design  # noqa: E402
 
 # (tamanho em caracteres, sha256 do texto em UTF-8)
-# CSS atualizado deliberadamente: zoom do app de 0.8 para 0.64 (20% menor), com width e
-# max-width compensando o zoom para o app seguir preenchendo a largura, como faz o zoom do
-# navegador. A trava acusou a mudança nas duas vezes, como deveria.
+# CSS atualizado deliberadamente: zoom do app de 0.8 para 0.696 (13% menor que o original),
+# com width e max-width compensando o zoom para o app seguir preenchendo a largura, como faz o
+# zoom do navegador. A trava acusou cada uma das mudanças, como deveria.
 GOLDEN = {
-    "CSS": (66233, "906934a7746bfe8856d03ec654b469291e197bf4c436b7f4b3444e7ca6c49d34"),
+    "CSS": (66231, "9e61159083b76b7025f3ee60bd155223bfa020722d8efd7970bda401b72c3862"),
     "HEADER_HTML": (479890, "99404ab984ea8d21069d3689de09c9d83ed2757affa9e71680dba93782eabf7b"),
     "FOOTER_HTML": (81, "81f1b568511f1ef005d531eadc1f3318c126037e9ad17654a171cee0630d8eaa"),
 }
