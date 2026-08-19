@@ -2128,3 +2128,24 @@ button[title*="copy"] {
     overflow-y: visible !important;
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   Caixa de upload com o mesmo acabamento do card de Instruções adicionais
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* O contêiner externo do Gradio vinha com canto de 4px, o que deixava a caixa
+   quadrada por fora mesmo com a área de soltar arredondada por dentro. Aqui ele
+   recebe a borda fina e o raio de 16px do card .instructions-with-gemini, e a área
+   interna perde a própria borda para não desenhar dois anéis concêntricos. */
+.inv-upload-box {
+    border: 1px solid #DCDCD7 !important;
+    border-radius: 16px !important;
+    background: #FFFFFF !important;
+    overflow: hidden !important;
+}
+
+.inv-upload-box [data-testid="file-upload"] {
+    border: 0 !important;
+    border-radius: 16px !important;
+    background: transparent !important;
+}

@@ -294,12 +294,14 @@ with gr.Blocks(
                         label="Processo principal",
                         file_types=[".pdf", ".PDF"],
                         file_count="multiple",
+                        elem_classes=["inv-upload-box"],
                     )
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
                     proc_pdf_relacionados = gr.File(
                         label="Processos relacionados (opcional)",
                         file_types=[".pdf", ".PDF"],
                         file_count="multiple",
+                        elem_classes=["inv-upload-box"],
                     )
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
                     with gr.Group(elem_classes=["instructions-with-gemini"]):
@@ -400,12 +402,14 @@ with gr.Blocks(
                         label="Processo de RJ",
                         file_types=[".pdf", ".PDF"],
                         file_count="multiple",
+                        elem_classes=["inv-upload-box"],
                     )
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
                     rj_pdf_relacionados = gr.File(
                         label="Processos relacionados (opcional)",
                         file_types=[".pdf", ".PDF", ".docx"],
                         file_count="multiple",
+                        elem_classes=["inv-upload-box"],
                     )
                 with gr.Column(scale=1, elem_classes=["analysis-input-col"]):
                     gr.Markdown(
@@ -511,6 +515,7 @@ with gr.Blocks(
                         label="PDFs das Matrículas",
                         file_types=[".pdf", ".PDF"],
                         file_count="multiple",
+                        elem_classes=["inv-upload-box"],
                     )
                 with gr.Column(scale=1):
                     gr.Markdown(
@@ -610,6 +615,7 @@ with gr.Blocks(
                         label="Atos societários (PDFs)",
                         file_types=[".pdf", ".PDF"],
                         file_count="multiple",
+                        elem_classes=["inv-upload-box"],
                     )
                 with gr.Column(scale=1):
                     gr.Markdown(
@@ -664,16 +670,19 @@ with gr.Blocks(
                         label="Excel(s) da Predictus",
                         file_types=[".xlsx", ".xls"],
                         file_count="multiple",
+                        elem_classes=["inv-upload-box"],
                     )
                 with gr.Column(scale=1):
                     coleta_excel_coleta_in = gr.File(
                         label="Excel da Coleta de Informações (Matrículas/Fiscal & Cível/Trabalhista)",
                         file_types=[".xlsx", ".xls"],
+                        elem_classes=["inv-upload-box"],
                     )
                 with gr.Column(scale=1):
                     coleta_dossie_in = gr.File(
                         label="Dossiê PPA em Word (opcional — para atualizar)",
                         file_types=[".docx"],
+                        elem_classes=["inv-upload-box"],
                     )
                 with gr.Column(scale=1):
                     gr.Markdown(

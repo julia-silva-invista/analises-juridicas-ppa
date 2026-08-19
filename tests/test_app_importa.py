@@ -51,3 +51,30 @@ def test_todas_as_abas_esperadas_existem(monkeypatch):
     }
     faltando = esperadas - rotulos
     assert not faltando, f"abas ausentes: {sorted(faltando)}"
+
+
+def test_toda_caixa_de_upload_tem_o_acabamento_padrao(monkeypatch):
+    """Upload de entrada usa `inv-upload-box`, que dá a borda e o raio do card de instruções.
+
+    Sem isso a caixa nasce com o canto quadrado do Gradio, e a aba nova sai diferente das
+    outras — o tipo de detalhe que costuma virar `fix:` no commit seguinte.
+    """
+    monkeypatch.setattr(gr.Blocks, "launch", lambda self, *a, **kw: self)
+    sys.modules.pop("app", None)
+
+    import app
+
+    entradas_sem_classe = []
+    for bloco in app.demo.blocks.values():
+        if type(bloco).__name__ != "File":
+            continue
+        classes = list(getattr(bloco, "elem_classes", None) or [])
+        # saídas de download têm acabamento próprio (compact-file-output)
+        if "compact-file-output" in classes:
+            continue
+        if "inv-upload-box" not in classes:
+            entradas_sem_classe.append(getattr(bloco, "label", "<sem rótulo>"))
+
+    assert not entradas_sem_classe, (
+        "caixas de upload sem 'inv-upload-box': " + ", ".join(map(str, entradas_sem_classe))
+    )
