@@ -78,3 +78,23 @@ def test_toda_caixa_de_upload_tem_o_acabamento_padrao(monkeypatch):
     assert not entradas_sem_classe, (
         "caixas de upload sem 'inv-upload-box': " + ", ".join(map(str, entradas_sem_classe))
     )
+
+
+def test_todo_modulo_tem_caixa_de_log_com_acabamento_padrao(monkeypatch):
+    """As caixas de progresso usam `log-area`, que dá o mesmo acabamento do card.
+
+    São cinco, uma por módulo. Rótulos variam ("Log de execução", "Status", "Log"), então a
+    classe é o que garante o desenho uniforme.
+    """
+    monkeypatch.setattr(gr.Blocks, "launch", lambda self, *a, **kw: self)
+    sys.modules.pop("app", None)
+
+    import app
+
+    com_classe = [
+        bloco
+        for bloco in app.demo.blocks.values()
+        if type(bloco).__name__ == "Textbox"
+        and "log-area" in list(getattr(bloco, "elem_classes", None) or [])
+    ]
+    assert len(com_classe) == 5, f"esperava 5 caixas de log, encontrei {len(com_classe)}"

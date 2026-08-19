@@ -2149,3 +2149,18 @@ button[title*="copy"] {
     border-radius: 16px !important;
     background: transparent !important;
 }
+
+/* A caixa de log tem o mesmo problema e recebe o mesmo tratamento: o contêiner externo
+   ganha a borda fina e o raio de 16px, e o textarea perde a borda própria (que era 1px
+   #E0E0DD com raio 12px) para não desenhar um retângulo dentro do outro. */
+.log-area {
+    border: 1px solid #DCDCD7 !important;
+    border-radius: 16px !important;
+    background: #FFFFFF !important;
+    overflow: hidden !important;
+}
+
+.log-area textarea {
+    border: 0 !important;
+    border-radius: 15px !important;
+}

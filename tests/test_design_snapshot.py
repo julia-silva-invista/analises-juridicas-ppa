@@ -19,9 +19,10 @@ import design  # noqa: E402
 # CSS atualizado deliberadamente: zoom do app de 0.8 para 0.696 (13% menor que o original),
 # com a max-width acompanhando o zoom, como já era o desenho anterior. A trava acusou cada
 # uma das mudanças, como deveria.
-# Segunda mudança deliberada: caixas de upload com a borda e o raio do card de instruções.
+# Mudanças deliberadas seguintes: caixas de upload e de log com a borda e o raio do card de
+# instruções.
 GOLDEN = {
-    "CSS": (67080, "358e2c840ab5aafdc48a91d4b585acf764631c9c6809f2bb663b61cad711dc2f"),
+    "CSS": (67581, "bfc268f6d1e9c7e203cd4de448a0580040e3a828c4a0108fcafd3ae287ae42d1"),
     "HEADER_HTML": (479890, "99404ab984ea8d21069d3689de09c9d83ed2757affa9e71680dba93782eabf7b"),
     "FOOTER_HTML": (81, "81f1b568511f1ef005d531eadc1f3318c126037e9ad17654a171cee0630d8eaa"),
 }
