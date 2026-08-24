@@ -100,9 +100,9 @@ antes de redesenhar. Exporta HTML interativo, PNG ou tabela em Word.
 
 ## Arquitetura
 
-O processamento é dividido em camadas: o frontend recebe arquivos e parâmetros; o backend prepara e
+A aplicação é monolítics: a interface em Gradio e os callbacks em python rodam ao mesmo tempo. Dentro desse processo, a organização é em m´dulos: o frontend recebe arquivos e parâmetros; o backend prepara e
 segmenta os documentos; os modelos extraem e consolidam; rotinas em Python verificam consistência,
-aplicam classificações e cálculos objetivos e organizam as entregas em Word, Excel, HTML ou PNG.
+aplicam classificações e cálculos objetivos e organizam as entregas em Word, Excel e HTML.
 
 ### Controle de carga
 Processos e RJ comportam **quatro análises ativas simultâneas**; as demais entram em fila visível,
@@ -144,7 +144,7 @@ trechos com páginas escaneadas vão ao modelo multimodal de OCR.
 As informações do relatório são vinculadas ao identificador real usado pelo tribunal e à **página
 absoluta do PDF original**, sem exibir divisões técnicas internas do processamento.
 
-Isso não depende só da instrução dada ao modelo. Uma camada determinística em Python, aplicada sobre
+A camada determinística em Python, aplicada sobre
 a resposta pronta (`legal_prompts.py`), elimina marcador interno de processamento eventualmente
 vazado e rebaixa citação de página não confirmada para a advertência "(referência processual não
 localizada)".
@@ -246,14 +246,3 @@ uv pip install --python .venv_space/Scripts/python.exe -r requirements.txt "grad
    **teste**
 4. Conferência no Space de teste
 5. Só então merge na `main`, que publica em **produção** pelo `sync.yml`
-
-## Estado atual
-
-- **Em produção:** Processos, Recuperação Judicial, Matrículas, Timeline Societária, Coleta de
-  Informações
-- **Em teste:** Excel consolidado de credores da RJ
-- **Em aperfeiçoamento:** Cronologia Processual
-- **Em desenvolvimento inicial:** Monitor de Safra — acompanhamento de áreas rurais ligadas a
-  devedores por séries temporais de índices de vegetação e sensoriamento remoto, para estimar plantio,
-  desenvolvimento e colheita e subsidiar o momento de requerer constrição sobre a produção (penhora
-  de safra)
