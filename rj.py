@@ -32,6 +32,7 @@ from analysis_runtime import (
     queue_message, record_status, save_chunk_cache, split_pdf_chunk_for_token_limit,
 )
 from checklist_rj import gerar_checklist_rj, gerar_checklist_creditos, _montar_fonte_rj
+from analise_resumida_rj import gerar_analise_resumida
 import rj_cache
 from legal_prompts import (
     REGRA_EXTRACAO_POR_PAGINA,
@@ -1477,6 +1478,36 @@ def rj_gerar_checklist(relatorio: str, texto_bruto: str = ""):
         return gr.update(value=path, visible=True), "✅ Checklist RJ gerado — clique no arquivo para baixar." + aviso
     except Exception:
         return gr.update(value=None, visible=False), "❌ Erro:\n\n" + traceback.format_exc()
+
+
+def rj_gerar_analise_resumida(relatorio: str, texto_bruto: str = "", *campos):
+    """Resumo em tópicos da RJ: texto para copiar + Word para anexar.
+
+    Usa o primeiro credor informado na tela, quando houver — o resumo tem um único
+    bloco de classe e valor, então precisa saber de qual credor está falando; sem
+    isso, a identificação fica com a extração.
+    """
+    fonte_ok = (relatorio or "").strip() or (texto_bruto or "").strip()
+    if not fonte_ok:
+        return (gr.update(value=None, visible=False), "Gere uma análise primeiro.",
+                gr.update(value="", visible=False))
+    meia = len(campos) // 2
+    nomes = [str(n).strip() for n in campos[:meia] if n and str(n).strip()]
+    try:
+        texto, caminho = _executar_com_failover_gemini(
+            _get_gemini_clients(),
+            lambda client, _indice: gerar_analise_resumida(
+                relatorio, texto_bruto, client, GEMINI_MODEL_ESTRUTURADO,
+                credor=nomes[0] if nomes else "",
+            ),
+        )
+        aviso = _aviso_truncamento(len(relatorio) + len(texto_bruto), LIMITE_TRUNCAMENTO_CHECKLIST)
+        return (gr.update(value=caminho, visible=True),
+                "✅ Análise resumida gerada — o texto abaixo é para copiar; o Word, para anexar." + aviso,
+                gr.update(value=texto, visible=True))
+    except Exception:
+        return (gr.update(value=None, visible=False), "❌ Erro:\n\n" + traceback.format_exc(),
+                gr.update(value="", visible=False))
 
 
 def rj_gerar_checklist_creditos(relatorio: str, texto_bruto: str = "", *campos):

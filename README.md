@@ -25,7 +25,7 @@ produção.
 | Aba | O que faz | Saídas |
 |---|---|---|
 | **Processos** | Analisa execução e processos relacionados (incidentes, recursos, correlatos) | Relatório em Word, Dossiê Prévia, Dossiê Desalinhado, Cronologia Processual (HTML/PNG), perguntas sobre o relatório |
-| **Recuperação Judicial** | Analisa a RJ e os créditos ligados a ela, cruzando com os processos correlatos | Relatório em Word, Checklist RJ, Checklist de Créditos por credor, Excel de credores (em testes) |
+| **Recuperação Judicial** | Analisa a RJ e os créditos ligados a ela, cruzando com os processos correlatos | Relatório em Word, Checklist RJ, Checklist de Créditos por credor, Análise resumida (texto e Word), Excel de credores (em testes) |
 | **Matrículas** | Consolida matrículas em planilha: cadeia dominial, ônus, garantias | Excel com destaques de risco |
 | **Timeline Societária** | Reconstrói em ordem cronológica a situação da empresa após cada ato societário | HTML interativo editável, PNG, tabela em Word |
 | **Coleta de Informações** | Preenche a planilha-modelo `x.xlsx` a partir de extrações da Predictus | Planilha preenchida, Dossiê atualizado |
@@ -47,6 +47,17 @@ sobre base de regras curada (`prescricao_intercorrente.py`), considerando CPC/19
 Lei 14.195/2021, CC/1916 e CC/2002. O reconhecimento da prescrição não é conclusão autônoma do
 modelo.
 
+Juntando mais de uma execução no mesmo caso, cada uma é tratada como um crédito próprio: a
+análise percorre todas e a Visão Jurídica é replicada por crédito, numerada e identificada pelo
+credor e pelo número do processo (1.1, 1.2, ...). Incidentes, embargos, exceções e recursos ficam
+dentro do crédito a que pertencem, sem virar crédito novo.
+
+Os dois dossiês nascem da mesma extração. O **Dossiê Prévia** mostra a triagem nos quadros dela e
+fecha com o capítulo **Opcional**, que traz o que só o Dossiê Desalinhado exibia — índices do
+contrato, planilha inicial, memória de cálculo, citação, embargos, andamentos, visão consolidada
+dos ativos e teses de recuperação. Nada que já esteja nos quadros da triagem se repete lá, e quadro
+que a análise não preencheu não é desenhado.
+
 Dossiês e cronologia usam o texto já extraído como fonte — não reabrem o PDF.
 
 ### Recuperação Judicial
@@ -60,6 +71,13 @@ substancial, RMA, QGC, PRJ, condições de pagamento por classe, AGC, stay perio
 bens. Por credor, reconstrói a evolução do crédito entre editais, divergência administrativa, posição
 do administrador judicial, impugnação, decisões, recursos, garantias e o confronto entre a
 classificação das recuperandas e a sustentada pelo credor.
+
+A **Análise resumida** condensa o caso em uma tela, sempre na mesma ordem: recuperandos,
+advogados, administrador judicial, status, classe e valor do credor analisado, lastros, garantias
+(com a pergunta de essencialidade em aberto) e ações relacionadas — impugnações de crédito e
+execuções com o SAT de cada uma. Sai em texto, para colar em e-mail ou anotação, e em Word. Campo
+sem informação nas fontes vira marcador (`*`) em vez de sumir: o resumo também serve de roteiro do
+que ainda falta apurar.
 
 O relatório consolidado pode ser reapresentado junto de novos processos relacionados, reaproveitando
 a análise já feita em vez de reextrair os autos inteiros.

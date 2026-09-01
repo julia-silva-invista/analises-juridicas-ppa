@@ -23,7 +23,9 @@ Commits: pt-BR, **sucintos**, sem `Co-Authored-By` e sem qualquer menção a IA.
 | Conteúdo/estrutura do relatório de processos | `processos.py`, `report_template_processos.py` |
 | Conteúdo/estrutura do relatório de RJ | `rj.py`, `report_template_rj.py` |
 | Checklists de RJ em Word | `checklist_rj.py` |
+| Análise resumida da RJ (tópicos para colar + Word) | `analise_resumida_rj.py` |
 | Dossiês em Word | `dossie_ppa.py` (completo), `dossie_previa.py` (triagem) |
+| Capítulo "Opcional" da Prévia (o que só o PPA mostrava) | `dossie_opcional.py` |
 | Matrículas: cadeia dominial, ônus, Excel, destaques | `matriculas.py` |
 | Timeline societária: extração, edição, export | `timeline_societaria.py` |
 | Cronologia processual (linha do tempo) | `cronologia_prescricao.py` |
@@ -43,7 +45,11 @@ Commits: pt-BR, **sucintos**, sem `Co-Authored-By` e sem qualquer menção a IA.
    "(referência processual não localizada)" — ver `legal_prompts.py:255`.
 4. **Fato, indício, hipótese e conclusão são coisas diferentes** e devem continuar distinguíveis na
    saída. Não presumir fraude, grupo econômico ou responsabilidade a partir de vínculo superficial.
-5. **Botão de análise novo nasce com `concurrency_limit`** e com feedback de progresso na tela.
+5. **Mais de uma execução = mais de um crédito.** A Visão Jurídica é replicada e numerada por
+   crédito (1.1, 1.2, ...), identificada por credor + número do processo. A regra é
+   `legal_prompts.REGRA_MULTIPLAS_EXECUCOES`, dentro de `REGRAS_CONSOLIDACAO_PROCESSUAL` —
+   alcança relatório de processos, relatório de RJ e os dois dossiês.
+6. **Botão de análise novo nasce com `concurrency_limit`** e com feedback de progresso na tela.
    Hoje os cinco botões de análise têm limite (`app.py`, linhas 726, 739, 764, 832, 844).
 
 ## Regras jurídicas: trava, com espaço para sugestão
