@@ -36,6 +36,7 @@ from dossie_ppa import (
     _texto_analise,
     _LARANJA,
     _TXT,
+    lastros_do_credito,
     rotulo_credito,
 )
 
@@ -45,7 +46,7 @@ TITULO_CAPITULO = "6. OPCIONAL"
 _W_ATIVOS = [1.48, 1.78, 2.22, 2.26, 2.16, 1.47, 1.19, 1.19, 1.36, 1.40]
 _COLS_ATIVOS = [
     "Mat.", "Comarca", "Proprietário Atual", "Descrição do Imóvel", "Ônus Vigentes",
-    "Fração", "VM (R$)", "VP (R$)", "Ônus Total (R$)", "Saldo (R$)",
+    "Fração", "VM (R$)", "VF (R$)", "Ônus Total (R$)", "Saldo (R$)",
 ]
 
 
@@ -152,7 +153,7 @@ def _secao_visao_geral(doc, numero: str, dados: dict) -> bool:
     ])
     pares = _pares_preenchidos([
         ("Total atingível mapeado — VM", dados.get("total_atingivel_vm")),
-        ("Total atingível mapeado — VP", dados.get("total_atingivel_vp")),
+        ("Total atingível mapeado — VF", dados.get("total_atingivel_vp")),
         ("Tese(s) principal(is)", _texto_analise(dados.get("teses_principais"))),
     ]) + passivos
     consideracoes = _consideracoes_alem_do_resumo(dados)
@@ -189,13 +190,59 @@ def _secao_ativos_consolidados(doc, numero: str, dados: dict) -> bool:
         "",
     ]
     _sub_orange(doc, f"{numero} Visão Consolidada dos Ativos")
-    _grid_table(doc, ["TESE", "VM (R$)", "VP (R$)", "ÔNUS (R$)", "OBSERVAÇÕES"],
+    _grid_table(doc, ["TESE", "VM (R$)", "VF (R$)", "ÔNUS (R$)", "OBSERVAÇÕES"],
                 linhas, [3.53, 2.56, 2.56, 2.56, 5.31], total_row=total)
     _spacer(doc, pts=2)
     return True
 
 
+# ── Redes sociais ─────────────────────────────────────────────────────────────
+
+def _secao_redes_sociais(doc, numero: str, dados: dict) -> bool:
+    """Perfis citados no material — rastro de padrão de vida e de patrimônio."""
+    linhas = [[_txt(r.get("plataforma")), str(r.get("link") or "").strip(),
+               _txt(r.get("observacoes"))]
+              for r in _dicts(dados.get("redes_sociais"))]
+    linhas = [linha for linha in linhas if linha[1]]
+    if not linhas:
+        return False
+    _sub_orange(doc, f"{numero} Redes Sociais")
+    _grid_table(doc, ["PLATAFORMA", "LINK", "OBSERVAÇÕES"], linhas, [3.4, 6.5, 7.0])
+    _spacer(doc, pts=2)
+    return True
+
+
 # ── 6.3 Complemento da visão jurídica ─────────────────────────────────────────
+
+def _lastros(doc, credito: dict) -> bool:
+    """Um quadro por título executivo.
+
+    Com um lastro só, instrumento e garantia já estão na linha correspondente do
+    quadro da triagem e não se repetem aqui. Com mais de um, a triagem os traz
+    numerados numa linha só — aí vale repetir, porque é o que separa um do outro.
+    """
+    itens = lastros_do_credito(credito)
+    escreveu = False
+    for ordem, lastro in enumerate(itens, 1):
+        pares = [
+            ("Data de Emissão", lastro.get("data_emissao")),
+            ("Data do Vencimento", lastro.get("data_vencimento")),
+            ("Partes", lastro.get("partes")),
+            ("Destinação do Lastro", lastro.get("destinacao")),
+            ("Assinaturas", lastro.get("assinaturas")),
+        ]
+        if len(itens) > 1:
+            pares = ([("Lastro / Instrumento", lastro.get("lastro"))] + pares
+                     + [("Garantia", lastro.get("garantia"))])
+        linhas = _pares_preenchidos(pares)
+        if not linhas:
+            continue
+        _sub_gray(doc, f"Lastro nº {ordem}" if len(itens) > 1 else "Lastro / Instrumento")
+        _kv_label_table(doc, linhas)
+        _spacer(doc, pts=2)
+        escreveu = True
+    return escreveu
+
 
 def _complemento_do_credito(doc, credito: dict) -> bool:
     """Só o que a Prévia NÃO mostra no quadro "Dados do Processo" dela."""
@@ -203,22 +250,30 @@ def _complemento_do_credito(doc, credito: dict) -> bool:
         ("Vara / Comarca", credito.get("vara_comarca")),
         ("Critério de atualização do SAT", credito.get("criterio_sat")),
         ("Honorários", credito.get("honorarios")),
-        ("Data de Emissão do lastro", credito.get("data_emissao")),
-        ("Data do Vencimento", credito.get("data_vencimento")),
-        ("Assinaturas", credito.get("assinaturas")),
+        ("Prescrição?", credito.get("prescricao")),
+        ("Sucumbência?", credito.get("sucumbencia")),
+        ("Riscos jurídicos gerais", _texto_analise(credito.get("riscos_juridicos"))),
     ])
-    escreveu |= _quadro_kv(doc, "Índices de Correção do Contrato", [
+    escreveu |= _lastros(doc, credito)
+    escreveu |= _quadro_kv(doc, "Índices de Correção do Contrato — Adimplemento", [
+        ("Correção monetária", credito.get("adimp_cm")),
+        ("Juros remuneratórios", credito.get("adimp_jr")),
+        ("Capitalização", credito.get("adimp_cap")),
+    ])
+    escreveu |= _quadro_kv(doc, "Índices de Correção do Contrato — Inadimplemento", [
         ("Correção monetária", credito.get("ind_cm")),
         ("Juros remuneratórios", credito.get("ind_jr")),
         ("Juros moratórios", credito.get("ind_jm")),
         ("Multa moratória", credito.get("ind_multa")),
         ("Capitalização", credito.get("ind_cap")),
+        ("Comissão de permanência", credito.get("ind_comissao")),
     ])
     escreveu |= _quadro_kv(doc, "Planilha Inicial", [
         ("Correção monetária", credito.get("plan_cm")),
         ("Juros remuneratórios", credito.get("plan_jr")),
         ("Multa moratória", credito.get("plan_multa")),
         ("Capitalização", credito.get("plan_cap")),
+        ("Comissão de permanência", credito.get("plan_comissao")),
         ("Ponderações", credito.get("plan_ponderacoes")),
     ])
     escreveu |= _quadro_kv(doc, "Última Memória de Cálculo", [
@@ -429,6 +484,7 @@ def montar_capitulo_opcional(doc, dados: dict) -> bool:
     secoes = [
         _secao_visao_geral,
         _secao_ativos_consolidados,
+        _secao_redes_sociais,
         _secao_visao_juridica,
         _secao_teses,
         _secao_quadros_extras,

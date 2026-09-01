@@ -25,6 +25,7 @@ Commits: pt-BR, **sucintos**, sem `Co-Authored-By` e sem qualquer menção a IA.
 | Checklists de RJ em Word | `checklist_rj.py` |
 | Análise resumida da RJ (tópicos para colar + Word) | `analise_resumida_rj.py` |
 | Dossiês em Word | `dossie_ppa.py` (completo), `dossie_previa.py` (triagem) |
+| Quadro do modelo saindo vazio depois que o .docx mudou | `dossie_ppa.py` — o preenchimento casa pelo RÓTULO do modelo |
 | Capítulo "Opcional" da Prévia (o que só o PPA mostrava) | `dossie_opcional.py` |
 | Matrículas: cadeia dominial, ônus, Excel, destaques | `matriculas.py` |
 | Timeline societária: extração, edição, export | `timeline_societaria.py` |
@@ -43,13 +44,17 @@ Commits: pt-BR, **sucintos**, sem `Co-Authored-By` e sem qualquer menção a IA.
 3. **Referência = identificador real do tribunal + página absoluta do PDF.** Marcador interno de
    parte/chunk jamais aparece no texto final; citação não confirmada é rebaixada para
    "(referência processual não localizada)" — ver `legal_prompts.py:255`.
-4. **Fato, indício, hipótese e conclusão são coisas diferentes** e devem continuar distinguíveis na
+4. **Quadro do modelo é localizado por rótulo, nunca por índice de tabela.** O modelo já mudou
+   uma vez (v3.0 → Desalinhado) e um quadro novo no meio desloca todos os índices seguintes,
+   sem erro nenhum: o documento abre igual, com os quadros vazios. Use `_tabela_por_titulo` /
+   `_iter_headings_tables` e trave o rótulo em `tests/test_dossie_ppa_template.py`.
+5. **Fato, indício, hipótese e conclusão são coisas diferentes** e devem continuar distinguíveis na
    saída. Não presumir fraude, grupo econômico ou responsabilidade a partir de vínculo superficial.
-5. **Mais de uma execução = mais de um crédito.** A Visão Jurídica é replicada e numerada por
+6. **Mais de uma execução = mais de um crédito.** A Visão Jurídica é replicada e numerada por
    crédito (1.1, 1.2, ...), identificada por credor + número do processo. A regra é
    `legal_prompts.REGRA_MULTIPLAS_EXECUCOES`, dentro de `REGRAS_CONSOLIDACAO_PROCESSUAL` —
    alcança relatório de processos, relatório de RJ e os dois dossiês.
-6. **Botão de análise novo nasce com `concurrency_limit`** e com feedback de progresso na tela.
+7. **Botão de análise novo nasce com `concurrency_limit`** e com feedback de progresso na tela.
    Hoje os cinco botões de análise têm limite (`app.py`, linhas 726, 739, 764, 832, 844).
 
 ## Regras jurídicas: trava, com espaço para sugestão

@@ -40,6 +40,7 @@ from dossie_ppa import (
     _sub_orange,
     _substituir_texto_celula,
     _texto_analise,
+    lastros_do_credito,
     normalizar_referencias_objeto,
     rotulo_credito,
 )
@@ -89,6 +90,19 @@ def _clonar(elementos: list) -> list:
 
 # ── Preenchimento de cada quadro ──────────────────────────────────────────────
 
+def _juntar_lastros(credito: dict, campo: str) -> str:
+    """Uma execução pode cobrar vários títulos; o quadro da triagem tem uma linha só.
+
+    O detalhe de cada lastro fica no capítulo Opcional — aqui os títulos entram
+    numerados na mesma linha, para a triagem já mostrar que são mais de um.
+    """
+    valores = [str(l.get(campo) or "").strip() for l in lastros_do_credito(credito)]
+    valores = [v for v in valores if v]
+    if len(valores) <= 1:
+        return valores[0] if valores else ""
+    return "; ".join(f"({indice}) {valor}" for indice, valor in enumerate(valores, 1))
+
+
 def _preencher_dados_do_processo(tabela, credito: dict) -> None:
     # "Risco de Prescrição Superficial" fica fora do mapa: é caixa de marcar (☐ Sim ☐ Não)
     # e a resposta é juízo do analista, não algo que se extraia do texto do processo.
@@ -99,8 +113,8 @@ def _preencher_dados_do_processo(tabela, credito: dict) -> None:
         "Data de distribuição": credito.get("data_distribuicao", ""),
         "SOP": credito.get("sop", ""),
         "SAT": credito.get("sat", ""),
-        "Lastro / Instrumento": credito.get("lastro", ""),
-        "Garantia": credito.get("garantia", ""),
+        "Lastro / Instrumento": _juntar_lastros(credito, "lastro"),
+        "Garantia": _juntar_lastros(credito, "garantia"),
         "Status": credito.get("status_processo", ""),
     })
     _manter_tabela_inteira(tabela)

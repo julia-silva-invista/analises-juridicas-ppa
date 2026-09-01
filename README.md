@@ -52,11 +52,16 @@ análise percorre todas e a Visão Jurídica é replicada por crédito, numerada
 credor e pelo número do processo (1.1, 1.2, ...). Incidentes, embargos, exceções e recursos ficam
 dentro do crédito a que pertencem, sem virar crédito novo.
 
-Os dois dossiês nascem da mesma extração. O **Dossiê Prévia** mostra a triagem nos quadros dela e
-fecha com o capítulo **Opcional**, que traz o que só o Dossiê Desalinhado exibia — índices do
-contrato, planilha inicial, memória de cálculo, citação, embargos, andamentos, visão consolidada
-dos ativos e teses de recuperação. Nada que já esteja nos quadros da triagem se repete lá, e quadro
-que a análise não preencheu não é desenhado.
+Os dois dossiês nascem da mesma extração. O **Dossiê Desalinhado** segue o modelo oficial do PPA:
+por crédito, resumo do processo (com prescrição, sucumbência e riscos), um quadro por título
+executivo — uma execução pode cobrar mais de um —, índices do contrato separados entre
+**adimplemento** e **inadimplemento**, planilha inicial, memória de cálculo, citação, defesas,
+recursos, constrições e andamentos; e, no caso, redes sociais citadas nos autos, visão consolidada
+dos ativos e as teses de recuperação.
+
+O **Dossiê Prévia** mostra a triagem nos quadros dela e fecha com o capítulo **Opcional**, que traz
+o que só o Desalinhado exibia. Nada que já esteja nos quadros da triagem se repete lá, e quadro que
+a análise não preencheu não é desenhado.
 
 Dossiês e cronologia usam o texto já extraído como fonte — não reabrem o PDF.
 

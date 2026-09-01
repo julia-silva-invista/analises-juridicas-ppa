@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Geração do Dossiê PPA Invista em Word — modelo Parecer_Invista_PPA_v2_Atualizada 3.0."""
+"""Geração do Dossiê PPA Invista em Word — modelo Parecer Desalinhado.
+
+O gerador preenche uma cópia do modelo oficial (`assets/Parecer_Desalinhado_PPA.docx`);
+não redesenha nada. Por isso ele depende do TEXTO dos rótulos e dos subtítulos do modelo —
+"Resumo do Processo", "Lastro nº 1", "Índices de Correção do Contrato Adimplemento" — e não
+de índice de tabela, que qualquer quadro novo no meio do documento desloca.
+"""
 
 import io
 import json
@@ -43,7 +49,7 @@ _TXT       = "555555"   # texto escuro padrão
 _TXT_MUTE  = "AAAAAA"   # notas/placeholder
 
 _LOGO_PATH = Path(__file__).parent / "assets" / "invista_logo.png"
-_TEMPLATE_PATH = Path(__file__).parent / "assets" / "Parecer_Invista_PPA_v2_Atualizada_3.0.docx"
+_TEMPLATE_PATH = Path(__file__).parent / "assets" / "Parecer_Desalinhado_PPA.docx"
 
 # Siglas que devem conservar a grafia técnica mesmo quando o restante do
 # texto vier integralmente em caixa alta.
@@ -54,7 +60,7 @@ _SIGLAS_PRESERVADAS = {
     "OAB", "OJ", "PA", "PB", "PE", "PI", "PPA", "PR", "RENAJUD", "RG", "RJ",
     "RN", "RO", "RR", "RS", "SA", "SAT", "SC", "SE", "SERASAJUD",
     "SISBAJUD", "SNIPER", "SOP", "SP", "STF", "STJ", "TJSP", "TO", "TRF",
-    "TST", "UF", "VM", "VP",
+    "TST", "UF", "VF", "VM", "VP",
 }
 
 # Regra de citação compartilhada entre Checklist RJ, Checklist de Créditos e Dossiê PPA
@@ -648,23 +654,44 @@ NÃO invente números, nomes ou datas. Responda SOMENTE com o JSON, sem texto ad
 As regras de referência/siglas/status acima (antes deste parágrafo) valem para TODOS os campos abaixo.
 
 ═══ REGRA 2 — CAMPOS QUE DEVEM SER PREENCHIDOS ═══
-- Índices de Correção do Contrato (ind_*): fonte é SEMPRE o LASTRO/TÍTULO EXECUTIVO em si — o
-  contrato, CCB, CPR, CPRF, duplicata etc. que disciplina a dívida. Esses instrumentos costumam
-  estar digitalizados/escaneados no INÍCIO do processo (aplique OCR visual se necessário) — NÃO
-  extraia esses campos de petições, decisões ou outras peças processuais, mesmo que elas
-  mencionem os índices de passagem; a fonte é sempre a cláusula contratual que os disciplina.
-  Cada campo (ind_cm/ind_jr/ind_jm/ind_multa/ind_cap) é o ÍNDICE OU A TAXA que o contrato prevê
-  — nunca um valor em R$. Exemplos corretos: "IPCA" (ind_cm), "1% ao mês" (ind_jr), "1% ao mês"
-  (ind_jm), "2% sobre o débito" (ind_multa), "capitalização mensal/anual" (ind_cap). Se o contrato
-  não disciplinar correção monetária, preencha ind_cm exatamente com "Não há". Para os demais itens
-  não disciplinados, deixe "". Nunca infira um valor calculado como se fosse o índice. Em todos os
-  campos encontrados, preserve também a cláusula contratual e a referência processual completa.
+- Lastros (lista "lastros"): UMA ENTRADA POR TÍTULO EXECUTIVO em cobrança naquela execução — CCB,
+  CPR, CPRF, contrato, duplicata, confissão de dívida etc. Uma execução pode ser instruída por
+  vários títulos; nesse caso liste TODOS, não só o primeiro. "partes" traz emitente, devedor
+  solidário, avalista e garantidor de cada título; "destinacao" é a finalidade declarada do
+  crédito no próprio instrumento (ex.: custeio de safra, capital de giro, aquisição de insumos),
+  quando o instrumento declarar. Cada entrada conserva a própria data de emissão, vencimento,
+  assinaturas e garantia — nunca repita o dado de um título em outro.
+- Índices de Correção do Contrato, dois blocos distintos e não intercambiáveis. A fonte dos dois é
+  SEMPRE o LASTRO/TÍTULO EXECUTIVO em si — o contrato, CCB, CPR, CPRF, duplicata etc. que
+  disciplina a dívida. Esses instrumentos costumam estar digitalizados/escaneados no INÍCIO do
+  processo (aplique OCR visual se necessário) — NÃO extraia esses campos de petições, decisões ou
+  outras peças processuais, mesmo que elas mencionem os índices de passagem; a fonte é sempre a
+  cláusula contratual que os disciplina.
+    · ADIMPLEMENTO (adimp_*): o que o contrato cobra enquanto a dívida está em dia — correção
+      monetária (adimp_cm), juros remuneratórios (adimp_jr) e capitalização (adimp_cap).
+    · INADIMPLEMENTO (ind_*): o que passa a incidir DEPOIS do vencimento/inadimplemento —
+      correção monetária (ind_cm), juros remuneratórios (ind_jr), juros moratórios (ind_jm),
+      multa moratória (ind_multa), capitalização (ind_cap) e comissão de permanência
+      (ind_comissao).
+  Cada campo dos dois blocos é o ÍNDICE OU A TAXA que o contrato prevê — nunca um valor em R$.
+  Exemplos corretos: "IPCA" (adimp_cm/ind_cm), "1% ao mês" (adimp_jr/ind_jr/ind_jm), "2% sobre o
+  débito" (ind_multa), "capitalização mensal/anual" (adimp_cap/ind_cap). Se o contrato não
+  disciplinar correção monetária no bloco, preencha o campo correspondente exatamente com
+  "Não há". Para os demais itens não disciplinados, deixe "". Nunca infira um valor calculado como
+  se fosse o índice. Em todos os campos encontrados, preserve também a cláusula contratual e a
+  referência processual completa.
 - Planilha Inicial (plan_*): fonte é a PRIMEIRA memória de cálculo/planilha que instruiu a petição
   inicial (a que embasou o valor da causa). Mesma regra de conteúdo dos campos ind_*: cada campo
-  (plan_cm/plan_jr/plan_multa/plan_cap) deve trazer o ÍNDICE OU A TAXA que essa planilha efetivamente
-  aplicou no cálculo (ex.: "INPC", "1,5% ao mês", "10% sobre o débito") — NUNCA o valor em R$
-  resultante do cálculo (isso NÃO é o que se quer aqui). "plan_ponderacoes" é o único campo de
-  texto livre deste bloco (ex.: alguma ressalva ou observação sobre a planilha).
+  (plan_cm/plan_jr/plan_multa/plan_cap/plan_comissao) deve trazer o ÍNDICE OU A TAXA que essa
+  planilha efetivamente aplicou no cálculo (ex.: "INPC", "1,5% ao mês", "10% sobre o débito") —
+  NUNCA o valor em R$ resultante do cálculo (isso NÃO é o que se quer aqui). "plan_ponderacoes" é o
+  único campo de texto livre deste bloco (ex.: alguma ressalva ou observação sobre a planilha).
+- Prescrição, sucumbência e riscos (prescricao/sucumbencia/riscos_juridicos): resposta objetiva
+  sobre AQUELE processo, com referência. Em "prescricao", diga se há prescrição ou prescrição
+  intercorrente discutida, reconhecida ou aparente, e desde quando corre o prazo; em
+  "sucumbencia", se há condenação em sucumbência e a favor de quem; em "riscos_juridicos", os
+  riscos daquela execução (nulidade de citação, excesso, vício do título, garantia frágil etc.).
+  Sem elemento no material, deixe "" — não conclua por plausibilidade.
 - Última Memória de Cálculo (memoria_*): a memória de débito GENUINAMENTE mais recente JUNTADA
   aos autos — confira a data de juntada de cada memória de cálculo encontrada no processo e use
   a de data MAIS RECENTE, não a que aparecer por último na leitura ou a mais citada. Aqui sim
@@ -698,7 +725,11 @@ campo "data" as datas das tentativas e no campo "fls" as páginas correspondente
   no material. Esses dados serão inseridos nos quadros já existentes do template; não invente outro layout.
 - Em cada item narrativo, diferencie fato comprovado, indício, fundamento jurídico, risco e conclusão.
 - Para ativos, informe matrícula, proprietário, ônus, fração atingível, VM, VP e saldo quando disponíveis.
+  ("vp" é o valor que o quadro do parecer exibe como VF — mantenha a chave "vp" no JSON.)
 - Não repita o mesmo fato em vários campos. Preserve a referência processual de cada afirmação.
+- "redes_sociais": só perfis que APAREÇAM no material (citados em petição, laudo, print, relatório
+  de investigação). É rastro de patrimônio e de padrão de vida — não pesquise, não deduza a partir
+  do nome da parte e não invente URL. Sem perfil citado, devolva lista vazia.
 
 ═══ REGRA 7 — UM ITEM EM "creditos" POR EXECUÇÃO ═══
 Se o material trouxer mais de uma execução (ou mais de um título executivo em cobrança), a lista
@@ -723,6 +754,10 @@ crédito a que pertencem, nas listas próprias — não viram crédito novo.
   "passivo_total": "",
   "risco_juridico": "resumo dos principais riscos (com refs)",
   "consideracoes_gerais": "2-4 parágrafos de análise geral (separe parágrafos com \\n)",
+  "redes_sociais": [
+    {"plataforma": "Instagram | Facebook | LinkedIn | X (Twitter) | TikTok | YouTube | Threads",
+     "link": "URL ou @perfil citado no material", "observacoes": "de quem é o perfil e o que ele indica"}
+  ],
   "visao_consolidada_ativos": [
     {"tese": "Penhora Direta | IDPJ | Fraude à Execução | outra", "vm": "R$ ...", "vp": "R$ ...", "onus": "R$ ...", "observacoes": ""}
   ],
@@ -766,11 +801,19 @@ crédito a que pertencem, nas listas próprias — não viram crédito novo.
       "data_distribuicao": "DD/MM/AAAA (fls.)",
       "sop": "R$ ... (fls.)", "sat": "R$ ... (fls.)", "criterio_sat": "ex: INPC + 12% a.a JM (fls.)",
       "honorarios": "ex: 10% (fls.)",
-      "lastro": "CCB nº / Contrato nº (fls.)", "data_emissao": "DD/MM/AAAA (fls.)", "data_vencimento": "DD/MM/AAAA (fls.)",
-      "assinaturas": "Nomes (fls.)", "garantia": "descrição da garantia (fls.)",
+      "prescricao": "ex: prescrição intercorrente em curso desde DD/MM/AAAA (Mov.)",
+      "sucumbencia": "ex: executada condenada em 10% (Mov.)",
+      "riscos_juridicos": "riscos desta execução, com refs",
+      "lastros": [
+        {"lastro": "CCB nº / Contrato nº (fls.)", "data_emissao": "DD/MM/AAAA (fls.)", "data_vencimento": "DD/MM/AAAA (fls.)",
+         "partes": "emitente, avalistas e garantidores deste título (fls.)",
+         "destinacao": "finalidade declarada do crédito no instrumento (fls.)",
+         "assinaturas": "Nomes (fls.)", "garantia": "descrição da garantia (fls.)"}
+      ],
       "status_processo": "ex: em fase de penhora (Mov.)",
-      "ind_cm": "índice do CONTRATO/lastro, ex: IPCA (fls.)", "ind_jr": "taxa do CONTRATO, ex: 1% ao mês (fls.)", "ind_jm": "taxa do CONTRATO, ex: 1% ao mês (fls.)", "ind_multa": "percentual do CONTRATO, ex: 2% (fls.)", "ind_cap": "ex: mensal/anual, conforme o CONTRATO (fls.)",
-      "plan_cm": "índice aplicado na PLANILHA INICIAL, ex: INPC (fls.) — nunca o valor em R$", "plan_jr": "taxa aplicada na planilha, ex: 1,5% ao mês (fls.)", "plan_multa": "percentual aplicado na planilha, ex: 10% (fls.)", "plan_cap": "ex: mensal/anual (fls.)", "plan_ponderacoes": "(fls.)",
+      "adimp_cm": "índice do CONTRATO enquanto adimplente, ex: IPCA (fls.)", "adimp_jr": "taxa do CONTRATO enquanto adimplente, ex: 1% ao mês (fls.)", "adimp_cap": "ex: mensal/anual, conforme o CONTRATO (fls.)",
+      "ind_cm": "índice do CONTRATO após o inadimplemento, ex: IPCA (fls.)", "ind_jr": "taxa do CONTRATO após o inadimplemento (fls.)", "ind_jm": "juros moratórios do CONTRATO, ex: 1% ao mês (fls.)", "ind_multa": "percentual do CONTRATO, ex: 2% (fls.)", "ind_cap": "ex: mensal/anual, conforme o CONTRATO (fls.)", "ind_comissao": "comissão de permanência prevista no CONTRATO (fls.)",
+      "plan_cm": "índice aplicado na PLANILHA INICIAL, ex: INPC (fls.) — nunca o valor em R$", "plan_jr": "taxa aplicada na planilha, ex: 1,5% ao mês (fls.)", "plan_multa": "percentual aplicado na planilha, ex: 10% (fls.)", "plan_cap": "ex: mensal/anual (fls.)", "plan_comissao": "comissão de permanência aplicada na planilha (fls.)", "plan_ponderacoes": "(fls.)",
       "memoria_data_juntada": "DD/MM/AAAA (fls.)", "memoria_total": "R$ ... (fls.)", "memoria_data_base": "DD/MM/AAAA",
       "memoria_indices": "índices aplicados (fls.)", "memoria_ponderacoes": "",
       "citacoes": [{"executado": "Nome", "modalidade": "AR/OJ/Edital ou Pendente", "data": "data citação OU datas das tentativas", "fls": "fls. citação OU fls. das tentativas"}],
@@ -1460,6 +1503,14 @@ def _indice_paragrafo(elementos, doc, prefixo, inicio=0):
     raise ValueError(f"Bloco obrigatório não localizado no template: {prefixo}")
 
 
+def _indice_paragrafo_opcional(elementos, doc, prefixo, inicio=0):
+    """Como `_indice_paragrafo`, mas devolve None quando o bloco não existe."""
+    try:
+        return _indice_paragrafo(elementos, doc, prefixo, inicio)
+    except ValueError:
+        return None
+
+
 def _primeira_tabela(elementos, doc):
     for elemento in elementos:
         if elemento.tag == qn("w:tbl"):
@@ -1470,16 +1521,23 @@ def _primeira_tabela(elementos, doc):
 def _expandir_quadros_repetidos(
     elementos, doc, prefixo_inicio, itens, titulo_item, preencher_item
 ):
-    """Replica o quadro original até a nota ⊕, sem criar outro componente."""
+    """Replica o quadro original (título + tabela), sem criar outro componente.
+
+    Embargo e recurso trazem a nota "⊕ Replicar o quadro acima..." logo abaixo; ela
+    fica fora do padrão clonado, para aparecer uma vez só no fim. O quadro de lastro
+    não tem essa nota — daí a busca ser opcional e limitada ao elemento seguinte, em
+    vez de varrer o documento até achar o ⊕ de outro bloco.
+    """
     inicio = _indice_paragrafo(elementos, doc, prefixo_inicio)
-    fim = None
-    for indice in range(inicio + 1, len(elementos)):
-        if _texto_elemento(elementos[indice], doc).startswith("⊕"):
-            fim = indice
-            break
-    if fim is None:
-        raise ValueError(f"Nota de replicação não localizada após {prefixo_inicio}.")
-    if prefixo_inicio.casefold().startswith("recurso"):
+    tabela = next(
+        (i for i in range(inicio + 1, len(elementos)) if elementos[i].tag == qn("w:tbl")),
+        None,
+    )
+    if tabela is None:
+        raise ValueError(f"Quadro não localizado após {prefixo_inicio} no template.")
+    fim = tabela + 1
+    tem_nota = fim < len(elementos) and _texto_elemento(elementos[fim], doc).startswith("⊕")
+    if tem_nota and prefixo_inicio.casefold().startswith("recurso"):
         _substituir_texto_paragrafo(
             _DocxParagraph(elementos[fim], doc),
             "⊕ Replicar o quadro acima para cada recurso adicional identificado.",
@@ -1503,6 +1561,41 @@ def _expandir_quadros_repetidos(
         preencher_item(_primeira_tabela(grupo, doc), item)
         novos.extend(grupo)
     elementos[inicio:fim] = novos
+
+
+def lastros_do_credito(credito) -> list:
+    """Lista de lastros do crédito, tolerando o formato antigo de campo solto.
+
+    Até o parecer v3.0 o título executivo era uma linha do quadro do processo
+    ("Lastro / Instrumento", "Data de Emissão"...). O modelo Desalinhado o promoveu a
+    quadro próprio e repetível — uma execução pode cobrar mais de um título. Dossiês e
+    extrações no formato antigo continuam abrindo, com um lastro só.
+    """
+    credito = credito if isinstance(credito, dict) else {}
+    lastros = [item for item in (credito.get("lastros") or []) if isinstance(item, dict)]
+    if lastros:
+        return lastros
+    antigo = {
+        "lastro": credito.get("lastro", ""),
+        "data_emissao": credito.get("data_emissao", ""),
+        "data_vencimento": credito.get("data_vencimento", ""),
+        "assinaturas": credito.get("assinaturas", ""),
+        "garantia": credito.get("garantia", ""),
+    }
+    return [antigo] if any(str(v or "").strip() for v in antigo.values()) else []
+
+
+def _preencher_lastro(table, lastro):
+    _preencher_tabela_chave_valor(table, {
+        "Lastro / Instrumento": lastro.get("lastro", ""),
+        "Data de Emissão": lastro.get("data_emissao", ""),
+        "Data do Vencimento": lastro.get("data_vencimento", ""),
+        "Partes": lastro.get("partes", ""),
+        "Destinação do Lastro": lastro.get("destinacao", ""),
+        "Assinaturas": lastro.get("assinaturas", ""),
+        "Garantia": lastro.get("garantia", ""),
+    })
+    _manter_tabela_inteira(table)
 
 
 def _preencher_embargo(table, embargo):
@@ -1589,10 +1682,18 @@ def _preencher_bloco_credito(elementos, doc, credito, indice_credito):
         lambda item, n: f"Recurso nº {n}",
         _preencher_recurso,
     )
+    _expandir_quadros_repetidos(
+        elementos,
+        doc,
+        "Lastro nº 1",
+        lastros_do_credito(credito),
+        lambda item, n: f"Lastro nº {n}",
+        _preencher_lastro,
+    )
 
     for titulo, table in _iterar_elementos_com_titulo(elementos, doc):
         chave = titulo.casefold()
-        if chave == "dados do processo":
+        if chave == "resumo do processo":
             _preencher_tabela_chave_valor(table, {
                 "Número do processo": credito.get("numero_processo", ""),
                 "Vara / Comarca": credito.get("vara_comarca", ""),
@@ -1603,20 +1704,25 @@ def _preencher_bloco_credito(elementos, doc, credito, indice_credito):
                 "SAT": credito.get("sat", ""),
                 "Critério de atualização do SAT": credito.get("criterio_sat", ""),
                 "Honorários": credito.get("honorarios", ""),
-                "Lastro / Instrumento": credito.get("lastro", ""),
-                "Data de Emissão": credito.get("data_emissao", ""),
-                "Data do Vencimento": credito.get("data_vencimento", ""),
-                "Assinaturas": credito.get("assinaturas", ""),
-                "Garantia": credito.get("garantia", ""),
+                "Prescrição?": credito.get("prescricao", ""),
+                "Sucumbência?": credito.get("sucumbencia", ""),
+                "Riscos jurídicos gerais": _texto_analise(credito.get("riscos_juridicos")),
                 "Status do Processo": credito.get("status_processo", ""),
             })
-        elif chave == "índices de correção do contrato":
+        elif chave.startswith("índices de correção do contrato adimplemento"):
+            _preencher_tabela_chave_valor(table, {
+                "Correção monetária": credito.get("adimp_cm", ""),
+                "Juros remuneratórios": credito.get("adimp_jr", ""),
+                "Capitalização": credito.get("adimp_cap", ""),
+            })
+        elif chave.startswith("índices de correção do contrato inadimplemento"):
             _preencher_tabela_chave_valor(table, {
                 "Correção monetária": credito.get("ind_cm", ""),
                 "Juros remuneratórios": credito.get("ind_jr", ""),
                 "Juros moratórios": credito.get("ind_jm", ""),
                 "Multa moratória": credito.get("ind_multa", ""),
                 "Capitalização": credito.get("ind_cap", ""),
+                "Comissão de permanência": credito.get("ind_comissao", ""),
             })
         elif chave == "planilha inicial":
             _preencher_tabela_chave_valor(table, {
@@ -1624,6 +1730,7 @@ def _preencher_bloco_credito(elementos, doc, credito, indice_credito):
                 "Juros remuneratórios": credito.get("plan_jr", ""),
                 "Multa moratória": credito.get("plan_multa", ""),
                 "Capitalização": credito.get("plan_cap", ""),
+                "Comissão de permanência": credito.get("plan_comissao", ""),
                 "Ponderações": credito.get("plan_ponderacoes", ""),
             })
         elif chave == "última memória de cálculo":
@@ -1954,7 +2061,7 @@ def _atualizar_titulo_valores(doc, prefixo, resumo, tese):
         if paragraph.text.strip().casefold().startswith(prefixo.casefold()):
             _substituir_texto_paragrafo(
                 paragraph,
-                f"{prefixo} — {vm or 'R$ [___]'} (VM) / {vp or 'R$ [___]'} (VP)",
+                f"{prefixo} — {vm or 'R$ [___]'} (VM) / {vp or 'R$ [___]'} (VF)",
             )
             paragraph.paragraph_format.keep_with_next = True
             break
@@ -1977,9 +2084,69 @@ def _preencher_visao_ativos_template(doc, dados):
         )
 
 
+def _tabela_por_titulo(doc, prefixo: str):
+    """Primeira tabela sob o subtítulo que começa com `prefixo`.
+
+    Substitui o índice fixo: o modelo Desalinhado acrescentou o quadro de REDES SOCIAIS
+    e o de lastro, e qualquer quadro novo no meio do documento voltaria a deslocar
+    todos os índices seguintes.
+    """
+    alvo = prefixo.casefold()
+    for titulo, table in _iter_headings_tables(doc):
+        if titulo.strip().casefold().startswith(alvo):
+            return table
+    return None
+
+
+def _escrever_caixa(doc, prefixo: str, texto: str) -> None:
+    """Caixa de texto de célula única (resumo de tese, upside, considerações)."""
+    if not texto:
+        return
+    table = _tabela_por_titulo(doc, prefixo)
+    if table is not None:
+        _substituir_texto_celula(table.cell(0, 0), texto, justificar=True)
+
+
+def _preencher_redes_sociais(doc, redes) -> None:
+    """Quadro de REDES SOCIAIS: preserva a lista de plataformas do modelo e preenche
+    a linha da plataforma correspondente; perfil de plataforma que não está no modelo
+    entra como linha nova, para não se perder."""
+    itens = [item for item in (redes or []) if isinstance(item, dict)]
+    itens = [item for item in itens if str(item.get("link") or "").strip()]
+    if not itens:
+        return
+    table = _tabela_por_titulo(doc, "REDES SOCIAIS")
+    if table is None:
+        return
+
+    restantes = list(itens)
+    for linha in table.rows[1:]:
+        plataforma = _chave_rotulo(linha.cells[0].text)
+        casado = next(
+            (item for item in restantes
+             if _chave_rotulo(item.get("plataforma", "")).startswith(plataforma)
+             or plataforma.startswith(_chave_rotulo(item.get("plataforma", "")))),
+            None,
+        )
+        if casado is None:
+            continue
+        restantes.remove(casado)
+        _substituir_texto_celula(linha.cells[1], casado.get("link", ""))
+        _substituir_texto_celula(linha.cells[2], casado.get("observacoes", ""))
+
+    for item in restantes:
+        linha = table.add_row()
+        for coluna, valor in enumerate([item.get("plataforma", ""), item.get("link", ""),
+                                        item.get("observacoes", "")]):
+            celula = linha.cells[coluna]
+            _set_bg(celula, _BRANCO)
+            _set_borders(celula)
+            _cell_pad(celula)
+            _substituir_texto_celula(celula, valor)
+    _manter_tabela_inteira(table)
+
+
 def _preencher_teses_template(doc, dados):
-    if len(doc.tables) < 25:
-        raise ValueError("Template oficial incompleto: quadros das teses não localizados.")
     teses = dados.get("teses_recuperacao") or {}
     ativos = dados.get("ativos") or []
     resumo_ativos = dados.get("visao_consolidada_ativos") or []
@@ -1987,19 +2154,17 @@ def _preencher_teses_template(doc, dados):
     idpj = teses.get("idpj") or {}
     fraude = teses.get("fraude_execucao") or {}
 
-    texto = _texto_analise(penhora.get("analise"))
-    if texto:
-        _substituir_texto_celula(doc.tables[16].cell(0, 0), texto, justificar=True)
+    _escrever_caixa(doc, "a. Ponderações e Observações Gerais",
+                    _texto_analise(penhora.get("analise")))
     penhora_ativos = _filtrar_ativos(ativos, "Penhora Direta")
     if penhora_ativos:
-        _preencher_ativos_detalhados(doc.tables[17], penhora_ativos)
+        _preencher_ativos_detalhados(_tabela_por_titulo(doc, "c. Matrículas Mapeadas"),
+                                     penhora_ativos)
 
-    texto = _texto_analise(idpj.get("resumo"))
-    if texto:
-        _substituir_texto_celula(doc.tables[18].cell(0, 0), texto, justificar=True)
+    _escrever_caixa(doc, "a. Resumo da Tese", _texto_analise(idpj.get("resumo")))
     empresa = idpj.get("empresa_alvo") or {}
     if empresa:
-        _preencher_tabela_chave_valor(doc.tables[19], {
+        _preencher_tabela_chave_valor(_tabela_por_titulo(doc, "b. Empresa-Alvo"), {
             "Razão social da empresa-alvo": empresa.get("razao_social", ""),
             "CNPJ": empresa.get("cnpj", ""),
             "CNAE principal": empresa.get("cnae_principal", ""),
@@ -2012,7 +2177,7 @@ def _preencher_teses_template(doc, dados):
     cronologia = idpj.get("cronologia") or []
     if cronologia:
         _preencher_tabela_grade(
-            doc.tables[20],
+            _tabela_por_titulo(doc, "c. Cronologia Societária"),
             [[
                 item.get("data", ""),
                 item.get("ato", ""),
@@ -2028,24 +2193,30 @@ def _preencher_teses_template(doc, dados):
     )
     idpj_ativos = _filtrar_ativos(ativos, "IDPJ")
     if idpj_ativos:
-        _preencher_ativos_detalhados(doc.tables[21], idpj_ativos)
+        _preencher_ativos_detalhados(
+            _tabela_por_titulo(doc, "e. Ativos Atingíveis via IDPJ"), idpj_ativos
+        )
     _atualizar_titulo_valores(
         doc, "e. Ativos Atingíveis via IDPJ", resumo_ativos, "IDPJ"
     )
-    texto = _texto_analise(idpj.get("upside"))
-    if texto:
-        _substituir_texto_celula(doc.tables[22].cell(0, 0), texto, justificar=True)
+    _escrever_caixa(doc, "f. Upside Identificado", _texto_analise(idpj.get("upside")))
 
+    # "a. Resumo da Tese" se repete em 2.2 e 2.3; a de fraude é a segunda ocorrência.
+    caixas_resumo = [t for titulo, t in _iter_headings_tables(doc)
+                     if titulo.strip().casefold().startswith("a. resumo da tese")]
     texto = _texto_analise(fraude.get("resumo"))
-    if texto:
-        _substituir_texto_celula(doc.tables[23].cell(0, 0), texto, justificar=True)
+    if texto and len(caixas_resumo) > 1:
+        _substituir_texto_celula(caixas_resumo[1].cell(0, 0), texto, justificar=True)
     _preencher_paragrafo_apos_titulo(
         doc, "b. Má-fé e Insolvência",
         _texto_analise(fraude.get("ma_fe_insolvencia")),
     )
     fraude_ativos = _filtrar_ativos(ativos, "Fraude à Execução")
     if fraude_ativos:
-        _preencher_ativos_detalhados(doc.tables[24], fraude_ativos)
+        _preencher_ativos_detalhados(
+            _tabela_por_titulo(doc, "c. Ativos Atingíveis via Fraude à Execução"),
+            fraude_ativos,
+        )
     _atualizar_titulo_valores(
         doc, "c. Ativos Atingíveis via Fraude à Execução",
         resumo_ativos,
@@ -2091,6 +2262,9 @@ def _build_doc(dados: dict) -> str:
         "Executado(s)": dados.get("executados", ""),
         "SAT": dados.get("sat_total", ""),
         "Total atingível mapeado — VM": dados.get("total_atingivel_vm", ""),
+        # O modelo Desalinhado renomeou VP para VF no quadro; a chave da extração
+        # continua "vp" — é a mesma usada pelo Excel de matrículas e pela Coleta.
+        "Total atingível mapeado — VF": dados.get("total_atingivel_vp", ""),
         "Total atingível mapeado — VP": dados.get("total_atingivel_vp", ""),
         "Tese(s) principal(is)": dados.get("teses_principais", ""),
         "Risco Jurídico": dados.get("risco_juridico", ""),
@@ -2114,12 +2288,13 @@ def _build_doc(dados: dict) -> str:
 
     consideracoes = (dados.get("consideracoes_gerais") or "").strip()
     if consideracoes:
-        _substituir_texto_celula(doc.tables[6].cell(0, 0), consideracoes, justificar=True)
+        _escrever_caixa(doc, "Campo livre para registro", consideracoes)
         for paragraph in doc.paragraphs:
             if paragraph.text.startswith("Campo livre para registro"):
                 _substituir_texto_paragrafo(paragraph, "")
                 break
 
+    _preencher_redes_sociais(doc, dados.get("redes_sociais"))
     _preencher_visao_ativos_template(doc, dados)
     _preencher_teses_template(doc, dados)
     _preencher_creditos_template(doc, dados.get("creditos") or [])
@@ -2324,7 +2499,15 @@ def _preencher_visao_geral_atingiveis_dinamica(doc, ativos_visao_geral: list):
     body = doc.element.body
     elementos = list(body.iterchildren())
     inicio = _indice_paragrafo(elementos, doc, "VISÃO GERAL DOS ATINGÍVEIS") + 1
-    fim = _indice_paragrafo(elementos, doc, "PRINCIPAIS CONSIDERAÇÕES", inicio)
+    # O bloco vai até o próximo capítulo do modelo. No Desalinhado, REDES SOCIAIS entrou
+    # entre os atingíveis e as considerações — sem pará-lo ali, a clonagem por tese
+    # engoliria aquele quadro.
+    fim = min(
+        indice for indice in (
+            _indice_paragrafo_opcional(elementos, doc, prefixo, inicio)
+            for prefixo in ("REDES SOCIAIS", "PRINCIPAIS CONSIDERAÇÕES")
+        ) if indice is not None
+    )
 
     padrao = [deepcopy(el) for el in elementos[inicio:inicio + 2]]  # 1 título + 1 tabela
 
