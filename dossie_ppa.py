@@ -27,6 +27,7 @@ from legal_prompts import (
     REGRA_FIDELIDADE_PROCESSUAL,
     REGRA_INDICES_E_ADITAMENTOS,
     REGRA_CRONOLOGIA_PROCESSUAL,
+    REGRA_MULTIPLAS_EXECUCOES,
     REGRA_AUDITORIA_FINAL,
     bloco_instrucao_adicional,
     normalizar_referencias_objeto,
@@ -115,6 +116,8 @@ REGRA_COMPLETUDE_PADRAO = (
     + REGRA_INDICES_E_ADITAMENTOS
     + "\n"
     + REGRA_CRONOLOGIA_PROCESSUAL
+    + "\n"
+    + REGRA_MULTIPLAS_EXECUCOES
     + "\n"
     + REGRA_AUDITORIA_FINAL
 )
@@ -223,6 +226,17 @@ _RE_TRECHO_MAIUSCULO = re.compile(
 )
 
 
+def _normalizar_cifrao(texto: str) -> str:
+    """Padroniza o cifrão: "r$1.000" vira "R$ 1.000".
+
+    O espaço só entra quando há valor logo depois. Sem essa ressalva, um rótulo
+    de coluna como "VM (R$)" saía "VM (R$ )", com o espaço colado no fecha-
+    parênteses.
+    """
+    texto = re.sub(r"\br\s*\$\s*(?=\d)", "R$ ", texto, flags=re.IGNORECASE)
+    return re.sub(r"\br\s*\$(?!\s*\d)", "R$", texto, flags=re.IGNORECASE)
+
+
 def _titlecase_palavra(match, indice_ref) -> str:
     """Normaliza uma palavra pra Title Case, preservando siglas e não
     capitalizando partículas de nome (de/da/dos/e/...) fora da 1ª posição."""
@@ -252,7 +266,7 @@ def _normalizar_trechos_maiusculos(texto: str) -> str:
 
     resultado = _RE_TRECHO_MAIUSCULO.sub(_sub_trecho, texto)
     resultado = re.sub(r"\be-CAC\b", "e-CAC", resultado, flags=re.IGNORECASE)
-    return re.sub(r"\br\s*\$\s*", "R$ ", resultado, flags=re.IGNORECASE)
+    return _normalizar_cifrao(resultado)
 
 
 def _normalizar_caixa_alta(texto) -> str:
@@ -279,7 +293,7 @@ def _normalizar_caixa_alta(texto) -> str:
     indice_ref = [0]
     resultado = _RE_PALAVRA.sub(lambda m: _titlecase_palavra(m, indice_ref), valor)
     resultado = re.sub(r"\be-CAC\b", "e-CAC", resultado, flags=re.IGNORECASE)
-    return re.sub(r"\br\s*\$\s*", "R$ ", resultado, flags=re.IGNORECASE)
+    return _normalizar_cifrao(resultado)
 
 
 def _normalizar_texto_narrativo(texto) -> str:
@@ -318,7 +332,7 @@ def _normalizar_texto_narrativo(texto) -> str:
 
     resultado = _RE_PALAVRA.sub(_ajustar, valor)
     resultado = re.sub(r"\be-CAC\b", "e-CAC", resultado, flags=re.IGNORECASE)
-    return re.sub(r"\br\s*\$\s*", "R$ ", resultado, flags=re.IGNORECASE)
+    return _normalizar_cifrao(resultado)
 
 
 def _normalizar_dados(valor, chave_atual=""):
@@ -391,11 +405,16 @@ def _apply_font(run, bold, size, color, italic):
         pass
 
 
-def _adicionar_runs_formatados(paragraph, texto, aplicar_formato):
-    """Adiciona texto preservando quebras e isolando referências em runs itálicos."""
+def _adicionar_runs_formatados(paragraph, texto, aplicar_formato, normalizar=True):
+    """Adiciona texto preservando quebras e isolando referências em runs itálicos.
+
+    `normalizar=False` desliga a conversão de caixa alta — serve para título de
+    capítulo e outros rótulos estruturais, que são grafia decidida no código e não
+    nome de parte vindo da extração.
+    """
     linhas = str(texto if texto is not None else "").split("\n")
     for indice, linha in enumerate(linhas):
-        normalizada = _normalizar_caixa_alta(linha)
+        normalizada = _normalizar_caixa_alta(linha) if normalizar else linha
         for trecho, eh_referencia in _segmentar_referencias(normalizada):
             if not trecho:
                 continue
@@ -426,6 +445,19 @@ def _write(cell, text, bold=False, size=9, color=_TXT, italic=False, align=None,
 # ══════════════════════════════════════════════════════════════════════════
 # Helpers de linha / tabela (médio nível)
 # ══════════════════════════════════════════════════════════════════════════
+
+def _aplicar_estilo_grade(table):
+    """Aplica "Table Grid" quando o documento declara esse estilo.
+
+    Os templates oficiais (PPA e Prévia) não o declaram — pedir o estilo neles
+    levantaria KeyError. As bordas não dependem disso: _set_borders pinta célula a
+    célula.
+    """
+    try:
+        table.style = "Table Grid"
+    except KeyError:
+        pass
+
 
 def _widths(row, ws):
     for i, w in enumerate(ws):
@@ -470,7 +502,7 @@ def _span_header(table, text):
 def _kv_table(doc, header, rows, w_label=5.9, w_value=11.0):
     """Tabela 2 col estilo 'header laranja' (CAMPO|INFORMAÇÃO) + labels/valores brancos."""
     t = doc.add_table(rows=0, cols=2)
-    t.style = "Table Grid"
+    _aplicar_estilo_grade(t)
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _lock_widths(t, [w_label, w_value])
     if header:
@@ -493,7 +525,7 @@ def _kv_table(doc, header, rows, w_label=5.9, w_value=11.0):
 def _kv_label_table(doc, rows, w_label=5.9, w_value=11.0):
     """Tabela 2 col com coluna-label cinza (embargo/recurso), sem header laranja."""
     t = doc.add_table(rows=0, cols=2)
-    t.style = "Table Grid"
+    _aplicar_estilo_grade(t)
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _lock_widths(t, [w_label, w_value])
     for label, value in rows:
@@ -511,13 +543,7 @@ def _kv_label_table(doc, rows, w_label=5.9, w_value=11.0):
 def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
     """Tabela multi-coluna: header laranja + linhas brancas (+ TOTAL cinza opcional)."""
     t = doc.add_table(rows=0, cols=len(headers))
-    try:
-        t.style = "Table Grid"
-    except KeyError:
-        # O template oficial do PPA não declara esse estilo — documentos abertos a
-        # partir dele levantariam KeyError. As bordas não dependem disso: _set_borders
-        # pinta célula a célula logo abaixo.
-        pass
+    _aplicar_estilo_grade(t)
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     _lock_widths(t, ws)
     _orange_header(t, headers, ws)
@@ -548,7 +574,7 @@ def _grid_table(doc, headers, rows, ws, total_row=None, min_rows=1):
 # ══════════════════════════════════════════════════════════════════════════
 
 def _para(doc, text, bold=False, size=9.5, color=_TXT, italic=False,
-          before=0, after=4, align=None):
+          before=0, after=4, align=None, normalizar=True):
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(before)
     p.paragraph_format.space_after = Pt(after)
@@ -558,6 +584,7 @@ def _para(doc, text, bold=False, size=9.5, color=_TXT, italic=False,
         p,
         text,
         lambda run, eh_ref: _apply_font(run, bold, size, color, italic or eh_ref),
+        normalizar=normalizar,
     )
     return p
 
@@ -591,7 +618,7 @@ def _body(doc, text):
 def _guidance(doc, text):
     """Caixa de orientação com fundo FEF0EB (célula única)."""
     t = doc.add_table(rows=1, cols=1)
-    t.style = "Table Grid"
+    _aplicar_estilo_grade(t)
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
     c = t.rows[0].cells[0]
     _set_bg(c, _DESTAQUE); _set_borders(c, color="F3D9CF"); _cell_pad(c, top=90, bottom=90)
@@ -672,6 +699,15 @@ campo "data" as datas das tentativas e no campo "fls" as páginas correspondente
 - Em cada item narrativo, diferencie fato comprovado, indício, fundamento jurídico, risco e conclusão.
 - Para ativos, informe matrícula, proprietário, ônus, fração atingível, VM, VP e saldo quando disponíveis.
 - Não repita o mesmo fato em vários campos. Preserve a referência processual de cada afirmação.
+
+═══ REGRA 7 — UM ITEM EM "creditos" POR EXECUÇÃO ═══
+Se o material trouxer mais de uma execução (ou mais de um título executivo em cobrança), a lista
+"creditos" precisa ter UMA ENTRADA POR EXECUÇÃO, cada uma com TODOS os campos preenchidos a partir
+do seu próprio processo — nunca uma entrada só resumindo as demais, nunca valor de uma execução
+repetido em outra. Em "id", identifique o crédito pelo credor e traga o número do processo
+(ex.: "Crédito BASF — 0001234-56.2019.8.16.0014"), para que a Visão Jurídica saia replicada e
+numerada (1.1, 1.2, ...) por crédito. Incidentes, embargos, exceções e recursos entram DENTRO do
+crédito a que pertencem, nas listas próprias — não viram crédito novo.
 
 {
   "nome_caso": "identificador curto (ex: BASF x São Lourenço)",
@@ -1508,9 +1544,23 @@ def _iterar_elementos_com_titulo(elementos, doc):
             yield titulo, _DocxTable(elemento, doc)
 
 
+def rotulo_credito(credito, indice_credito: int) -> str:
+    """Nome da subseção de um crédito: credor + número do processo.
+
+    Com mais de uma execução no mesmo caso, "Crédito 2" não diz qual execução é —
+    quem lê o dossiê precisa reconhecer o processo pelo número já no título.
+    """
+    credito = credito if isinstance(credito, dict) else {}
+    rotulo = str(credito.get("id") or "").strip() or f"Crédito {indice_credito}"
+    numero = str(credito.get("numero_processo") or "").strip()
+    if numero and re.sub(r"\D", "", numero) not in re.sub(r"\D", "", rotulo):
+        rotulo = f"{rotulo} — {numero}"
+    return rotulo
+
+
 def _preencher_bloco_credito(elementos, doc, credito, indice_credito):
     """Preenche uma cópia do bloco 1.1 e replica defesas/recursos existentes."""
-    cid = credito.get("id") or f"Crédito {indice_credito}"
+    cid = rotulo_credito(credito, indice_credito)
     titulo_idx = _indice_paragrafo(elementos, doc, "1.1 Crédito")
     titulo_credito = _substituir_texto_paragrafo(
         _DocxParagraph(elementos[titulo_idx], doc),

@@ -145,12 +145,37 @@ Antes de entregar:
 """
 
 
+REGRA_MULTIPLAS_EXECUCOES = """\
+======================================================================
+MAIS DE UMA EXECUÇÃO — UM CRÉDITO POR EXECUÇÃO, SEM FUNDIR
+======================================================================
+- Quando o material trouxer MAIS DE UMA execução (ou mais de um título executivo
+  em cobrança), cada uma é um CRÉDITO próprio. Analise TODAS: nenhuma pode ser
+  descartada, resumida em uma linha da outra, nem tratada como mero "processo
+  relacionado" da primeira.
+- A Visão Jurídica é REPLICADA por crédito, em subseções sequenciais, e cada uma
+  identificada pelo credor e pelo número do processo. O marcador da subseção é o
+  que o template do documento em questão definir — nos dossiês, "1.1 Crédito BASF
+  — 0001234-56.2019.8.16.0014", "1.2 Crédito FMC — 0009876-54.2021.8.16.0014";
+  no relatório de processos, a letra sequencial A., B., C. já prevista lá.
+- Cada crédito repete a estrutura inteira do primeiro: dados do processo, lastro,
+  índices, planilha, memória de cálculo, citação, defesas, recursos, constrições e
+  andamentos. Um campo vazio em um crédito não autoriza copiar o valor de outro.
+- Incidentes, embargos, exceções e recursos ficam DENTRO do crédito a que
+  pertencem — não viram crédito novo.
+- Sem material sobre uma das execuções, mantenha o crédito com os campos vazios e
+  registre o que falta; não a omita do documento.
+"""
+
+
 REGRAS_CONSOLIDACAO_PROCESSUAL = (
     REGRA_FIDELIDADE_PROCESSUAL
     + "\n"
     + REGRA_INDICES_E_ADITAMENTOS
     + "\n"
     + REGRA_CRONOLOGIA_PROCESSUAL
+    + "\n"
+    + REGRA_MULTIPLAS_EXECUCOES
     + "\n"
     + REGRA_AUDITORIA_FINAL
 )
