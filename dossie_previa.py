@@ -10,6 +10,11 @@ foi extraído.
 Campos que dependem de fonte externa ao processo (e-CAC, certidões, pesquisas de bens,
 escopo do negócio) ficam em branco de propósito: preenchê-los por inferência criaria
 fato onde há só o que o analista ainda vai apurar.
+
+Ao fim vem o capítulo "6. Opcional" (`dossie_opcional.py`): como a extração é a mesma,
+tudo que só o dossiê desalinhado mostrava — índices, planilha, memória de cálculo,
+citação, embargos, andamentos e as teses de recuperação — já estava disponível e agora
+aparece aqui, sem repetir o que os quadros da triagem já trazem.
 """
 
 from __future__ import annotations
@@ -25,15 +30,18 @@ from docx import Document
 from docx.oxml.ns import qn
 from docx.table import Table as _DocxTable
 
+from dossie_opcional import montar_capitulo_opcional
 from dossie_ppa import (
     _chave_rotulo,
     _completar_com_relatorio,
     _extrair_dados,
     _manter_tabela_inteira,
     _preencher_tabela_chave_valor,
+    _sub_orange,
     _substituir_texto_celula,
     _texto_analise,
     normalizar_referencias_objeto,
+    rotulo_credito,
 )
 
 _TEMPLATE_PREVIA = Path(__file__).parent / "assets" / "Parecer_Previa_PPA.docx"
@@ -188,6 +196,20 @@ def _fim_do_bloco(elementos, doc, inicio: int, rotulos: tuple) -> int:
     return fim
 
 
+def _titulo_do_credito(doc, credito: dict, numero: int):
+    """Abre o bloco de cada crédito com "2.N Credor — nº do processo".
+
+    O template não tem esse título: com uma execução só ele não fazia falta, mas
+    juntando várias os quadros ficavam empilhados sem dizer qual execução é qual.
+    O parágrafo nasce no fim do corpo (é o que `_sub_orange` sabe fazer) e sai de
+    lá na mesma hora — quem posiciona é `_substituir_intervalo`.
+    """
+    paragrafo = _sub_orange(doc, f"2.{numero} {rotulo_credito(credito, numero)}")
+    elemento = paragrafo._p
+    elemento.getparent().remove(elemento)
+    return elemento
+
+
 def _expandir_processos(doc, creditos: list) -> None:
     """O template traz o quadro do processo três vezes; vira um por crédito."""
     elementos = _elementos_corpo(doc)
@@ -203,10 +225,12 @@ def _expandir_processos(doc, creditos: list) -> None:
             break
     padrao = elementos[inicio:proximo]
 
+    lista = list(creditos) or [{}]
     novos = []
-    for numero, credito in enumerate(list(creditos) or [{}], 1):
+    for numero, credito in enumerate(lista, 1):
         grupo = _clonar(padrao)
         _preencher_grupo_processo(doc, grupo, credito, numero)
+        novos.append(_titulo_do_credito(doc, credito, numero))
         novos.extend(grupo)
     _substituir_intervalo(doc, inicio, fim, novos)
 
@@ -352,6 +376,8 @@ def _build_previa(dados: dict) -> str:
     _expandir_imoveis(doc, ativos)
 
     _preencher_passivo_fiscal(_quadro_fiscal(doc), _devedores(dados))
+
+    montar_capitulo_opcional(doc, dados)
 
     doc.save(caminho)
     return caminho

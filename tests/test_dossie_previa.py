@@ -88,6 +88,17 @@ def _quadros(doc, rotulo: str) -> list:
             if t.rows and dossie_previa._chave_rotulo(t.rows[0].cells[0].text).startswith(rotulo)]
 
 
+def _valor_da_linha(tabela, rotulo: str) -> str:
+    for linha in tabela.rows:
+        if linha.cells[0].text.strip() == rotulo:
+            return linha.cells[1].text.strip()
+    raise AssertionError(f"linha não encontrada no quadro: {rotulo}")
+
+
+def _titulos(doc) -> list:
+    return [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+
+
 @pytest.fixture(scope="module")
 def documento():
     return Document(dossie_previa._build_previa(DADOS))
@@ -105,9 +116,9 @@ def testar_capa_e_dados_gerais(documento):
     assert "Julia de Oliveira Bernardo da Silva" in texto
     assert "R$ 4.200.000,00" in texto
     assert "Prescrição intercorrente em discussão" in texto
-    # Resumo do caso usa o primeiro parágrafo das considerações gerais.
-    assert "Execução com penhora deferida sobre a futura sede." in texto
-    assert "Segundo parágrafo." not in texto
+    # Resumo do caso usa o primeiro parágrafo das considerações gerais — e só ele.
+    resumo = _valor_da_linha(documento.tables[2], "Resumo do caso")
+    assert resumo == "Execução com penhora deferida sobre a futura sede."
 
 
 def testar_um_quadro_de_processo_por_credito(documento):
@@ -216,3 +227,132 @@ def testar_gerar_previa_word_liga_extracao_e_documento():
     texto = _texto_inteiro(Document(caminho))
     assert "Banco do Brasil x Agropecuária Teste" in texto
     assert "0001234-56.2019.8.16.0014" in texto
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Capítulo "6. OPCIONAL" — o que só o Dossiê PPA mostrava
+# ══════════════════════════════════════════════════════════════════════════
+
+# Campos que a Prévia nunca desenhou nos quadros dela, mas que a extração já trazia
+# (é a MESMA de dossie_ppa). Somados a DADOS, exercitam o capítulo inteiro.
+DADOS_PPA = {
+    "total_atingivel_vm": "R$ 1.980.000,00",
+    "total_atingivel_vp": "R$ 1.400.000,00",
+    "teses_principais": "IDPJ e fraude à execução (Mov. 51).",
+    "visao_consolidada_ativos": [
+        {"tese": "Penhora Direta", "vm": "R$ 1.500.000,00", "vp": "R$ 1.000.000,00",
+         "onus": "R$ 300.000,00", "observacoes": "Hipoteca cedular"},
+        {"tese": "IDPJ", "vm": "R$ 480.000,00", "vp": "R$ 400.000,00", "onus": "R$ 0,00"},
+    ],
+    "teses_recuperacao": {
+        "penhora_direta": {"analise": [{"titulo": "Imóvel sede", "texto": "Penhora deferida.",
+                                        "referencia": "Mov. 44"}]},
+        "idpj": {
+            "resumo": [{"texto": "Confusão patrimonial com a holding.", "referencia": "fls. 300"}],
+            "empresa_alvo": {"razao_social": "Holding Teste Ltda", "cnpj": "22.333.444/0001-55"},
+            "cronologia": [{"data": "01/02/2020", "ato": "Alteração contratual",
+                            "detalhamento": "Saída do sócio", "referencia": "fls. 310"}],
+            "evidencias": [{"texto": "Mesma sede das duas empresas.", "referencia": "fls. 312"}],
+        },
+        "fraude_execucao": {},
+        "outras": [{"titulo": "Pauliana", "texto": "Doação em 2018.", "referencia": "fls. 400"}],
+    },
+    "quadros_extras": [
+        {"titulo": "Bens móveis", "colunas": ["Bem", "Valor"], "linhas": [["Trator", "R$ 120.000,00"]]}
+    ],
+}
+
+CREDITO_PPA = {
+    "id": "Crédito Banco do Brasil",
+    "vara_comarca": "1ª Vara Cível — Curitiba/PR",
+    "criterio_sat": "INPC + 12% a.a (fls. 12)",
+    "honorarios": "10% (fls. 3)",
+    "data_emissao": "10/01/2018", "data_vencimento": "10/01/2020",
+    "assinaturas": "João da Silva (fls. 20)",
+    "ind_cm": "IPCA", "ind_jr": "1% ao mês", "ind_jm": "1% ao mês",
+    "ind_multa": "2%", "ind_cap": "mensal",
+    "plan_cm": "INPC", "plan_jr": "1,5% ao mês", "plan_multa": "10%", "plan_cap": "mensal",
+    "memoria_data_juntada": "01/03/2026", "memoria_total": "R$ 4.200.000,00",
+    "memoria_data_base": "01/02/2026", "memoria_indices": "INPC + 1% a.m.",
+    "citacoes": [{"executado": "Agropecuária Teste Ltda", "modalidade": "AR",
+                  "data": "12/04/2019", "fls": "fls. 40"}],
+    "embargos": [{"tipo": "Embargos à Execução", "embargante": "Agropecuária Teste Ltda",
+                  "data_dist": "05/05/2019 (fls. 60)", "tese": "Excesso de execução",
+                  "andamentos_resumo": "Sentença de improcedência (Mov. 30)", "status": "Em recurso"}],
+    "andamentos": [{"data": "12/05/2024", "descricao": "Penhora deferida", "fls": "Mov. 44"}],
+}
+
+
+@pytest.fixture(scope="module")
+def documento_completo():
+    dados = json.loads(json.dumps(DADOS))  # cópia profunda barata
+    dados.update(json.loads(json.dumps(DADOS_PPA)))
+    dados["creditos"][0].update(CREDITO_PPA)
+    dados["creditos"][0]["recursos"][0].update({
+        "numero_processo": "0005555-11.2024.8.16.0000",
+        "data_dist": "20/06/2024",
+        "andamentos_resumo": "Concluso para julgamento (Mov. 8)",
+    })
+    dados["ativos"][0].update({"tese": "Penhora Direta", "fracao_atingivel": "100%",
+                               "onus_total": "R$ 300.000,00", "saldo": "R$ 1.200.000,00"})
+    dados["ativos"][1]["tese"] = "IDPJ"
+    return Document(dossie_previa._build_previa(dados))
+
+
+def testar_visao_juridica_numerada_por_credito(documento_completo):
+    """Juntando mais de uma execução, cada crédito abre com o próprio título —
+    credor e número do processo, para não confundir uma execução com a outra."""
+    titulos = _titulos(documento_completo)
+    assert "2.1 Crédito Banco do Brasil — 0001234-56.2019.8.16.0014" in titulos
+    assert "2.2 Crédito 2 — 0009876-54.2021.8.16.0014" in titulos
+
+
+def testar_capitulo_opcional_traz_o_que_so_o_ppa_tinha(documento_completo):
+    texto = _texto_inteiro(documento_completo)
+    assert "6. OPCIONAL" in _titulos(documento_completo)
+    for esperado in (
+        "R$ 1.980.000,00",                 # total atingível — visão geral
+        "Segundo parágrafo.",              # considerações além do resumo do caso
+        "1ª Vara Cível — Curitiba/PR",     # dados complementares do processo
+        "IPCA",                            # índices do contrato
+        "Data da Juntada",                 # memória de cálculo
+        "Modalidade",                      # citação
+        "Embargos à Execução nº 1",        # defesas
+        "Penhora deferida",                # andamentos
+        "Holding Teste Ltda",              # IDPJ
+        "Cronologia Societária",           # cronologia societária
+        "Pauliana",                        # outras teses
+        "Trator",                          # quadro pedido na instrução adicional
+    ):
+        assert esperado in texto, f"faltou no capítulo Opcional: {esperado}"
+
+
+def testar_opcional_nao_repete_o_que_a_previa_ja_mostra(documento_completo):
+    """"Sem duplicar" é regra do capítulo: o que já está nos quadros da triagem
+    não volta embaixo. Aqui isso é medido pela contagem no documento inteiro."""
+    texto = _texto_inteiro(documento_completo)
+    assert texto.count("CCB nº 40/00123-4") == 1          # lastro
+    assert texto.count("Hipoteca cedular sobre a matrícula 30.174") == 1  # garantia
+    assert texto.count("Em fase de penhora (Mov. 51)") == 1              # status
+    assert texto.count("Bloqueio de ativos") == 1                        # constrições
+    # O recurso reaparece só com os campos que a Prévia não tem.
+    assert texto.count("Concluso para julgamento (Mov. 8)") == 1
+    assert texto.count("Majoração de honorários") == 1
+
+
+def testar_opcional_nao_desenha_quadro_sem_conteudo(documento_completo):
+    """Passivo fiscal/trabalhista/cível, pendências e folha de revisão do PPA
+    dependem de e-CAC, certidões e diligências — quadro vazio não entra."""
+    titulos = _titulos(documento_completo)
+    assert "6.4.3 Fraude à Execução" not in titulos, "tese sem conteúdo não vira subseção"
+    corpo = "\n".join(titulos[titulos.index("6. OPCIONAL"):])
+    for ausente in ("Passivo identificado", "Execuções Fiscais", "Principais Credores",
+                    "PENDÊNCIAS", "ELABORAÇÃO E REVISÃO"):
+        assert ausente not in corpo, f"quadro sem preenchimento vazou pro Opcional: {ausente}"
+
+
+def testar_sem_dado_do_ppa_o_capitulo_nao_aparece(documento):
+    """DADOS não tem nenhum campo exclusivo do PPA além das considerações — o
+    capítulo entra, mas só com o que existe; sem nada, nem título é escrito."""
+    doc = Document(dossie_previa._build_previa({"nome_caso": "Só a capa"}))
+    assert "6. OPCIONAL" not in _titulos(doc)
