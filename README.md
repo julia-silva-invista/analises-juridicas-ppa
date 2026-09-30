@@ -218,6 +218,12 @@ default 600000); passado o intervalo, a tentativa é encerrada para a análise n
 Conforme a classificação do erro, a operação é repetida ou outra chave é acionada — e o log registra
 qual credencial recusou e por quê, distinguindo falha de transporte de problema no documento.
 
+Sobrecarga do modelo (`503 UNAVAILABLE`, "high demand") não troca de chave: afeta o modelo, não o
+projeto. Nesse caso, a extração de cada trecho espera mais antes de desistir: rodadas extras após
+30 s, 60 s, 120 s e 210 s (cerca de 7 minutos). Se o modelo continuar sobrecarregado, o trecho falha
+com o erro devolvido pela API e o relatório segue bloqueado. Os trechos já extraídos ficam em cache
+para a próxima tentativa.
+
 ### Limites de processamento
 Também já são os defaults; só precisam ser cadastrados como Variables se houver necessidade de
 alterá-los:

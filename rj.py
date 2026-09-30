@@ -21,7 +21,7 @@ from google.genai import types
 from report_template_rj import REPORT_TEMPLATE_RJ, SYSTEM_PROMPT_RJ
 from utils import (
     _retry, _gerar_docx, _responder_pergunta_generica, _get_gemini_clients,
-    _executar_com_failover_gemini,
+    _executar_com_failover_gemini, _com_paciencia_sobrecarga,
     _barra_progresso, _filtrar_arquivos_existentes, _paginas_digitalizadas_pdf,
     GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_OCR, GEMINI_MODEL_RELATORIO,
     GEMINI_MODEL_ESTRUTURADO, GEMINI_MODEL_QA,
@@ -330,7 +330,8 @@ def _rj_extrair_chunk_adaptativo(args) -> tuple:
                     raise
             raise
 
-    return _extrair(chunk_path, offset)
+    # Sobrecarga do modelo (503) dura minutos: espera mais antes de desistir do trecho.
+    return _com_paciencia_sobrecarga(lambda: _extrair(chunk_path, offset))
 
 
 def _rj_obter_cache(client, model_cons: str) -> Optional[str]:

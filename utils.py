@@ -251,6 +251,38 @@ def _retry(fn, tentativas=5, espera_base=20):
     raise RuntimeError("Falha após todas as tentativas.")
 
 
+def _erro_gemini_sobrecarga(exc: Exception) -> bool:
+    """503 UNAVAILABLE / 'high demand': o modelo está saturado, não a chamada errada.
+
+    Costuma durar minutos, bem mais do que as pausas curtas de ``_retry``.
+    """
+    msg = str(exc)
+    return _codigo_http_gemini(exc) == 503 or any(
+        t in msg for t in ("UNAVAILABLE", "high demand", "overloaded")
+    )
+
+
+# Pausas (s) entre rodadas extras quando o modelo está sobrecarregado: ~7 min no total.
+_ESPERAS_SOBRECARGA = (30, 60, 120, 210)
+
+
+def _com_paciencia_sobrecarga(fn, esperas=None, dormir=time.sleep):
+    """Roda ``fn`` e, só em caso de sobrecarga do Gemini, espera mais e tenta de novo.
+
+    Qualquer outro erro sobe na hora; esgotadas as rodadas, sobe o último erro da API
+    (o log continua mostrando o que o Gemini respondeu).
+    """
+    esperas = _ESPERAS_SOBRECARGA if esperas is None else esperas
+    for espera in esperas:
+        try:
+            return fn()
+        except Exception as exc:
+            if not _erro_gemini_sobrecarga(exc):
+                raise
+            dormir(espera)
+    return fn()
+
+
 def _gerar_docx(relatorio: str, titulo: str = "Análise Jurídica") -> str:
     caminho = os.path.join(tempfile.gettempdir(), f"{titulo.lower().replace(' ', '_')}.docx")
     doc = DocxDoc()

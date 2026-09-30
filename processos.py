@@ -18,7 +18,7 @@ from google.genai import types
 from report_template_processos import REPORT_TEMPLATE_INSTRUCTIONS, SYSTEM_PROMPT as SYSTEM_PROMPT_PROC
 from utils import (
     _retry, _gerar_docx, _responder_pergunta_generica, _get_gemini_clients,
-    _executar_com_failover_gemini,
+    _executar_com_failover_gemini, _com_paciencia_sobrecarga,
     _barra_progresso, _filtrar_arquivos_existentes, _paginas_digitalizadas_pdf,
     _erro_de_rede,
     GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_OCR, GEMINI_MODEL_RELATORIO,
@@ -343,7 +343,8 @@ def _proc_extrair_chunk_adaptativo(args) -> tuple:
                     raise
             raise
 
-    return _extrair(chunk_path, offset)
+    # Sobrecarga do modelo (503) dura minutos: espera mais antes de desistir do trecho.
+    return _com_paciencia_sobrecarga(lambda: _extrair(chunk_path, offset))
 
 
 # Conteúdo estático da consolidação: template + base de regras da prescrição. Vai junto

@@ -184,3 +184,47 @@ def testar_teto_de_gasto_continua_sem_retry(monkeypatch):
     except RuntimeError:
         pass
     assert len(tentativas) == 1
+
+
+def test_paciencia_sobrecarga_espera_e_recupera():
+    from utils import _com_paciencia_sobrecarga
+    pausas, chamadas = [], []
+
+    def fn():
+        chamadas.append(1)
+        if len(chamadas) < 3:
+            raise RuntimeError("503 UNAVAILABLE. This model is currently experiencing high demand.")
+        return "ok"
+
+    assert _com_paciencia_sobrecarga(fn, esperas=(1, 2, 3), dormir=pausas.append) == "ok"
+    assert pausas == [1, 2]
+
+
+def test_paciencia_sobrecarga_esgotada_sobe_o_erro_da_api():
+    from utils import _com_paciencia_sobrecarga
+    pausas = []
+
+    def fn():
+        raise RuntimeError("503 UNAVAILABLE. high demand")
+
+    try:
+        _com_paciencia_sobrecarga(fn, esperas=(1, 2), dormir=pausas.append)
+    except RuntimeError as exc:
+        assert "high demand" in str(exc)
+    else:
+        raise AssertionError("deveria ter subido o erro")
+    assert pausas == [1, 2]
+
+
+def test_paciencia_sobrecarga_ignora_outros_erros():
+    from utils import _com_paciencia_sobrecarga
+    pausas = []
+
+    def fn():
+        raise RuntimeError("400 INVALID_ARGUMENT")
+
+    try:
+        _com_paciencia_sobrecarga(fn, esperas=(1, 2), dormir=pausas.append)
+    except RuntimeError:
+        pass
+    assert pausas == []
