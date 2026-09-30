@@ -228,3 +228,93 @@ def test_paciencia_sobrecarga_ignora_outros_erros():
     except RuntimeError:
         pass
     assert pausas == []
+
+
+def test_503_troca_de_credencial():
+    assert _erro_gemini_permite_failover(RuntimeError("503 UNAVAILABLE. high demand"))
+
+
+def test_extrair_resiliente_troca_chave_antes_de_esperar():
+    from utils import _extrair_resiliente
+    chamadas, pausas = [], []
+
+    def extrair(client, modelo):
+        chamadas.append((client, modelo))
+        if client == "c1":
+            raise RuntimeError("503 UNAVAILABLE. high demand")
+        return (0, "texto", "nota")
+
+    resultado, notas, usado = _extrair_resiliente(
+        ["c1", "c2"], extrair, indice_inicial=0, modelo="lite",
+        esperas=(1, 2), dormir=pausas.append, modelo_reserva="flash",
+    )
+    assert resultado == (0, "texto", "nota")
+    assert chamadas == [("c1", None), ("c2", None)]
+    assert pausas == []
+    assert usado == "lite"
+    assert notas == ["credencial Gemini 1→2"]
+
+
+def test_extrair_resiliente_espera_e_termina_no_modelo_reserva():
+    from utils import _extrair_resiliente
+    chamadas, pausas, avisos = [], [], []
+
+    def extrair(client, modelo):
+        chamadas.append((client, modelo))
+        if modelo is None:
+            raise RuntimeError("503 UNAVAILABLE. high demand")
+        return (0, "texto reserva", "")
+
+    resultado, notas, usado = _extrair_resiliente(
+        ["c1", "c2"], extrair, indice_inicial=1, modelo="lite",
+        esperas=(1, 2), dormir=pausas.append, modelo_reserva="flash",
+        avisar=avisos.append,
+    )
+    assert resultado[1] == "texto reserva"
+    assert usado == "flash"
+    assert pausas == [1, 2]
+    # cada rodada passa pelas duas credenciais antes de esperar
+    assert chamadas[:2] == [("c2", None), ("c1", None)]
+    assert chamadas[-1] == ("c2", "flash")
+    assert len(avisos) == 3 and "reserva flash" in avisos[-1]
+    assert "modelo reserva flash" in notas
+
+
+def test_extrair_resiliente_sem_reserva_sobe_o_erro_da_api():
+    from utils import _extrair_resiliente
+
+    def extrair(client, modelo):
+        raise RuntimeError("503 UNAVAILABLE. high demand")
+
+    try:
+        _extrair_resiliente(
+            ["c1"], extrair, indice_inicial=0, modelo="flash",
+            esperas=(1,), dormir=lambda s: None, modelo_reserva="flash",
+        )
+    except RuntimeError as exc:
+        assert "high demand" in str(exc)
+    else:
+        raise AssertionError("deveria ter subido o erro")
+
+
+def test_concluidos_com_avisos_intercala_avisos():
+    import concurrent.futures
+    import queue
+    import threading
+    from utils import _concluidos_com_avisos
+    fila = queue.Queue()
+    liberar = threading.Event()
+
+    def trabalho():
+        fila.put("esperando")
+        liberar.wait(5)
+        return 1
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        futures = {ex.submit(trabalho): 0}
+        vistos = []
+        for tipo, item in _concluidos_com_avisos(futures, fila, intervalo=0.05):
+            vistos.append(tipo)
+            if tipo == "aviso":
+                liberar.set()
+    assert vistos == ["aviso", "futuro"]

@@ -2,6 +2,8 @@
 import os
 import re
 import time
+import queue
+import concurrent.futures
 import tempfile
 import threading
 from pathlib import Path
@@ -111,6 +113,7 @@ _TOKENS_FAILOVER = (
     "permission_denied", "api_key_invalid", "api key not valid",
     "resource_exhausted", "quota", "rate limit",
     "not_found", "model is no longer available",
+    "unavailable", "high demand",
 )
 
 
@@ -119,10 +122,13 @@ def _erro_gemini_permite_failover(exc: Exception) -> bool:
 
     Não inclui erros de schema, JSON ou programação: nesses casos trocar a chave
     apenas esconderia o defeito real. As chaves nunca são incluídas na mensagem.
+
+    503 (sobrecarga) entra porque a capacidade pode variar entre projetos: já houve
+    relato de uma conta recebendo 503 contínuo enquanto outra respondia normalmente.
     """
     codigo = _codigo_http_gemini(exc)
     if codigo is not None:
-        return codigo in (401, 403, 404, 429)
+        return codigo in (401, 403, 404, 429, 503)
     return any(token in str(exc).lower() for token in _TOKENS_FAILOVER)
 
 
@@ -266,11 +272,13 @@ def _erro_gemini_sobrecarga(exc: Exception) -> bool:
 _ESPERAS_SOBRECARGA = (30, 60, 120, 210)
 
 
-def _com_paciencia_sobrecarga(fn, esperas=None, dormir=time.sleep):
+def _com_paciencia_sobrecarga(fn, esperas=None, dormir=time.sleep, ao_esperar=None, reserva=None):
     """Roda ``fn`` e, só em caso de sobrecarga do Gemini, espera mais e tenta de novo.
 
-    Qualquer outro erro sobe na hora; esgotadas as rodadas, sobe o último erro da API
-    (o log continua mostrando o que o Gemini respondeu).
+    ``ao_esperar(segundos, exc)`` é chamado antes de cada pausa. Esgotadas as pausas, a
+    última tentativa usa ``reserva`` (se houver) em vez de ``fn``. Qualquer outro erro
+    sobe na hora; no fim, sobe o último erro da API, para o log mostrar o que o Gemini
+    respondeu.
     """
     esperas = _ESPERAS_SOBRECARGA if esperas is None else esperas
     for espera in esperas:
@@ -279,8 +287,83 @@ def _com_paciencia_sobrecarga(fn, esperas=None, dormir=time.sleep):
         except Exception as exc:
             if not _erro_gemini_sobrecarga(exc):
                 raise
+            if ao_esperar is not None:
+                ao_esperar(espera, exc)
             dormir(espera)
-    return fn()
+    return (reserva or fn)()
+
+
+# Modelo usado na última rodada de extração quando o normal segue sobrecarregado.
+# Vazio desliga a troca de modelo.
+GEMINI_MODEL_EXTRACAO_RESERVA = os.getenv("GEMINI_MODEL_EXTRACAO_RESERVA", GEMINI_MODEL_RELATORIO)
+
+
+def _extrair_resiliente(clients, extrair, *, indice_inicial, modelo, avisar=None,
+                        esperas=None, dormir=time.sleep, modelo_reserva=None):
+    """Extração de um trecho resistente a sobrecarga do Gemini.
+
+    Ordem: todas as credenciais → espera e nova rodada de credenciais (várias vezes)
+    → última rodada no modelo reserva. ``extrair(client, modelo_forcado)`` recebe
+    ``None`` enquanto deve usar a escolha normal de modelo.
+
+    Devolve ``(resultado, notas, modelo_usado)``; ``avisar(msg)`` recebe, na hora,
+    cada espera e a troca de modelo, para o log não parecer travado.
+    """
+    reserva_modelo = GEMINI_MODEL_EXTRACAO_RESERVA if modelo_reserva is None else modelo_reserva
+    notas: list[str] = []
+    usado = [modelo]
+
+    def _rodada(modelo_forcado):
+        return _executar_com_failover_gemini(
+            clients,
+            lambda client, _indice: extrair(client, modelo_forcado),
+            indice_inicial=indice_inicial,
+            ao_falhar=lambda atual, proximo, _exc: notas.append(
+                f"credencial Gemini {atual + 1}→{proximo + 1}"
+            ),
+        )
+
+    def _ao_esperar(segundos, exc):
+        notas.append(f"espera de {segundos}s por sobrecarga")
+        if avisar is not None:
+            avisar(
+                f"Gemini sobrecarregado em todas as credenciais "
+                f"({_detalhe_erro_gemini(exc)[:160]}); nova tentativa em {segundos}s"
+            )
+
+    reserva = None
+    if reserva_modelo and reserva_modelo != modelo:
+        def reserva():
+            usado[0] = reserva_modelo
+            notas.append(f"modelo reserva {reserva_modelo}")
+            if avisar is not None:
+                avisar(f"{modelo} segue sobrecarregado; última tentativa no modelo reserva {reserva_modelo}")
+            return _rodada(reserva_modelo)
+
+    resultado = _com_paciencia_sobrecarga(
+        lambda: _rodada(None), esperas=esperas, dormir=dormir,
+        ao_esperar=_ao_esperar, reserva=reserva,
+    )
+    return resultado, list(dict.fromkeys(notas)), usado[0]
+
+
+def _concluidos_com_avisos(futures, fila, intervalo=3):
+    """Como ``as_completed``, mas intercala avisos que os workers põem em ``fila``.
+
+    Produz ("aviso", texto) ou ("futuro", future).
+    """
+    pendentes = set(futures)
+    while pendentes:
+        feitos, pendentes = concurrent.futures.wait(
+            pendentes, timeout=intervalo, return_when=concurrent.futures.FIRST_COMPLETED,
+        )
+        while True:
+            try:
+                yield "aviso", fila.get_nowait()
+            except queue.Empty:
+                break
+        for future in feitos:
+            yield "futuro", future
 
 
 def _gerar_docx(relatorio: str, titulo: str = "Análise Jurídica") -> str:

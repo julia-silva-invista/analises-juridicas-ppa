@@ -74,7 +74,8 @@ decisão é da Julia.
 | Análises simultâneas | 4 | `analysis_runtime.py:88` (`MAX_ACTIVE_ANALYSES`) |
 | Workers de extração | 6 | `analysis_runtime.py:28` (`TOTAL_EXTRACTION_WORKERS`) |
 | Timeout por chamada ao Gemini | 600.000 ms (10 min) | `utils.py:20` (`GEMINI_TIMEOUT_MS`) |
-| Modelos por finalidade | 5 variáveis `GEMINI_MODEL_*` | `utils.py:25-32` |
+| Modelos por finalidade | 5 variáveis `GEMINI_MODEL_*` + `GEMINI_MODEL_EXTRACAO_RESERVA` | `utils.py:25-32` e `utils.py` (`_extrair_resiliente`) |
+| Espera por sobrecarga (503) na extração | 30, 60, 120, 210 s, depois modelo reserva | `utils.py` (`_ESPERAS_SOBRECARGA`) |
 | Chaves Gemini | `GEMINI_API_KEY_1..n`, em ordem, sem pular número | `utils.py:68+` |
 
 Todos são sobrescrevíveis por variável de ambiente no Space. Ao mudar qualquer um, atualizar o

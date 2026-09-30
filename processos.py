@@ -5,6 +5,7 @@ import time
 import tempfile
 import threading
 import traceback
+import queue
 import concurrent.futures
 import html as html_lib
 from contextlib import nullcontext
@@ -18,7 +19,7 @@ from google.genai import types
 from report_template_processos import REPORT_TEMPLATE_INSTRUCTIONS, SYSTEM_PROMPT as SYSTEM_PROMPT_PROC
 from utils import (
     _retry, _gerar_docx, _responder_pergunta_generica, _get_gemini_clients,
-    _executar_com_failover_gemini, _com_paciencia_sobrecarga,
+    _executar_com_failover_gemini, _extrair_resiliente, _concluidos_com_avisos,
     _barra_progresso, _filtrar_arquivos_existentes, _paginas_digitalizadas_pdf,
     _erro_de_rede,
     GEMINI_MODEL_EXTRACAO, GEMINI_MODEL_OCR, GEMINI_MODEL_RELATORIO,
@@ -290,8 +291,12 @@ def _proc_extrair_chunk_fileapi(args) -> tuple:
     return idx, resultado, f"File API · {modo} · {model_extracao}"
 
 
-def _proc_extrair_chunk_adaptativo(args) -> tuple:
-    """Extrai um trecho e o subdivide somente se o contexto do Gemini estourar."""
+def _proc_extrair_chunk_adaptativo(args, modelo_forcado: Optional[str] = None) -> tuple:
+    """Extrai um trecho e o subdivide somente se o contexto do Gemini estourar.
+
+    ``modelo_forcado`` substitui a escolha normal (OCR/extração) — usado na última
+    tentativa, com o modelo reserva, quando o normal segue sobrecarregado.
+    """
     idx, chunk_path, offset, total_pg, n_total, client, nome_origem, paginas_digitalizadas = args
 
     def _extrair(path: str, start: int) -> tuple:
@@ -299,7 +304,7 @@ def _proc_extrair_chunk_adaptativo(args) -> tuple:
             page_count = len(doc)
         end = start + page_count
         paginas_scan = [p for p in paginas_digitalizadas if start < p <= end]
-        model_extracao = GEMINI_MODEL_OCR if paginas_scan else GEMINI_MODEL_EXTRACAO
+        model_extracao = modelo_forcado or (GEMINI_MODEL_OCR if paginas_scan else GEMINI_MODEL_EXTRACAO)
         call_args = (
             idx, path, start, total_pg, n_total, client, model_extracao,
             nome_origem, paginas_scan,
@@ -343,8 +348,7 @@ def _proc_extrair_chunk_adaptativo(args) -> tuple:
                     raise
             raise
 
-    # Sobrecarga do modelo (503) dura minutos: espera mais antes de desistir do trecho.
-    return _com_paciencia_sobrecarga(lambda: _extrair(chunk_path, offset))
+    return _extrair(chunk_path, offset)
 
 
 # Conteúdo estático da consolidação: template + base de regras da prescrição. Vai junto
@@ -543,21 +547,16 @@ def _proc_processar_relacionados(pdf_paths: list, clients: list, instrucoes: str
                     runtime_job, "extraindo_chunk", arquivo=Path(original).name,
                     paginas=f"{offset + 1}-{chunk_end}", chunk=i + 1,
                 )
-                trocas = []
-
-                def _extrair_com(client, _indice):
-                    return _proc_extrair_chunk_adaptativo(
-                        (i, chunk_path, offset, total, len(todos_chunks), client,
-                         Path(original).name, paginas_scan)
-                    )
-
-                result = _executar_com_failover_gemini(
+                result, trocas, model_extracao = _extrair_resiliente(
                     clients,
-                    _extrair_com,
-                    indice_inicial=i % len(clients),
-                    ao_falhar=lambda atual, proximo, _exc: trocas.append(
-                        f"credencial Gemini {atual + 1}→{proximo + 1}"
+                    lambda client, modelo: _proc_extrair_chunk_adaptativo(
+                        (i, chunk_path, offset, total, len(todos_chunks), client,
+                         Path(original).name, paginas_scan),
+                        modelo,
                     ),
+                    indice_inicial=i % len(clients),
+                    modelo=model_extracao,
+                    avisar=None,
                 )
                 result = (
                     result[0], result[1],
@@ -807,6 +806,7 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
 
         parciais: dict = {}
         erros_chunks: list[str] = []
+        avisos_tempo_real: queue.Queue = queue.Queue()
 
         def _worker_proc(idx):
             cp, offset, total_pg, original, preparation_note = todos_chunks[idx]
@@ -829,21 +829,16 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
                     runtime_job, "extraindo_chunk", arquivo=Path(original).name,
                     paginas=f"{offset + 1}-{chunk_end}", chunk=idx + 1,
                 )
-                trocas = []
-
-                def _extrair_com(client, _indice):
-                    return _proc_extrair_chunk_adaptativo(
-                        (idx, cp, offset, total_pg, n, client,
-                         Path(original).name, paginas_scan)
-                    )
-
-                result = _executar_com_failover_gemini(
+                result, trocas, model_extracao = _extrair_resiliente(
                     clients,
-                    _extrair_com,
-                    indice_inicial=idx % len(clients),
-                    ao_falhar=lambda atual, proximo, _exc: trocas.append(
-                        f"credencial Gemini {atual + 1}→{proximo + 1}"
+                    lambda client, modelo: _proc_extrair_chunk_adaptativo(
+                        (idx, cp, offset, total_pg, n, client,
+                         Path(original).name, paginas_scan),
+                        modelo,
                     ),
+                    indice_inicial=idx % len(clients),
+                    modelo=model_extracao,
+                    avisar=lambda msg: avisos_tempo_real.put(f"   Chunk {idx+1}/{n}: {msg}"),
                 )
                 result = (
                     result[0], result[1],
@@ -857,7 +852,11 @@ def _proc_analisar_impl(pdf_files, pdf_relacionados, instrucoes: str, versao_res
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
             futures = {ex.submit(_worker_proc, i): i for i in range(n)}
-            for future in concurrent.futures.as_completed(futures):
+            for tipo, future in _concluidos_com_avisos(futures, avisos_tempo_real):
+                if tipo == "aviso":
+                    log.append(future)
+                    yield "\n".join(log), "", "", ""
+                    continue
                 try:
                     idx, res, nota = future.result()
                     parciais[idx] = res
