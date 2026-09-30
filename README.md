@@ -25,7 +25,7 @@ produção.
 | Aba | O que faz | Saídas |
 |---|---|---|
 | **Processos** | Analisa execução e processos relacionados (incidentes, recursos, correlatos) | Relatório em Word, Dossiê Prévia, Dossiê Desalinhado, Cronologia Processual (HTML/PNG), perguntas sobre o relatório |
-| **Recuperação Judicial** | Analisa a RJ e os créditos ligados a ela, cruzando com os processos correlatos | Relatório em Word, Checklist RJ, Checklist de Créditos por credor, Excel de credores (em testes) |
+| **Recuperação Judicial** | Analisa a RJ e os créditos ligados a ela, cruzando com os processos correlatos | Relatório em Word, Checklist RJ, Checklist de Créditos por credor, Análise resumida (texto e Word), Excel de credores (em testes) |
 | **Matrículas** | Consolida matrículas em planilha: cadeia dominial, ônus, garantias | Excel com destaques de risco |
 | **Timeline Societária** | Reconstrói em ordem cronológica a situação da empresa após cada ato societário | HTML interativo editável, PNG, tabela em Word |
 | **Coleta de Informações** | Preenche a planilha-modelo `x.xlsx` a partir de extrações da Predictus | Planilha preenchida, Dossiê atualizado |
@@ -47,6 +47,22 @@ sobre base de regras curada (`prescricao_intercorrente.py`), considerando CPC/19
 Lei 14.195/2021, CC/1916 e CC/2002. O reconhecimento da prescrição não é conclusão autônoma do
 modelo.
 
+Juntando mais de uma execução no mesmo caso, cada uma é tratada como um crédito próprio: a
+análise percorre todas e a Visão Jurídica é replicada por crédito, numerada e identificada pelo
+credor e pelo número do processo (1.1, 1.2, ...). Incidentes, embargos, exceções e recursos ficam
+dentro do crédito a que pertencem, sem virar crédito novo.
+
+Os dois dossiês nascem da mesma extração. O **Dossiê Desalinhado** segue o modelo oficial do PPA:
+por crédito, resumo do processo (com prescrição, sucumbência e riscos), um quadro por título
+executivo — uma execução pode cobrar mais de um —, índices do contrato separados entre
+**adimplemento** e **inadimplemento**, planilha inicial, memória de cálculo, citação, defesas,
+recursos, constrições e andamentos; e, no caso, redes sociais citadas nos autos, visão consolidada
+dos ativos e as teses de recuperação.
+
+O **Dossiê Prévia** mostra a triagem nos quadros dela e fecha com o capítulo **Opcional**, que traz
+o que só o Desalinhado exibia. Nada que já esteja nos quadros da triagem se repete lá, e quadro que
+a análise não preencheu não é desenhado.
+
 Dossiês e cronologia usam o texto já extraído como fonte — não reabrem o PDF.
 
 ### Recuperação Judicial
@@ -60,6 +76,13 @@ substancial, RMA, QGC, PRJ, condições de pagamento por classe, AGC, stay perio
 bens. Por credor, reconstrói a evolução do crédito entre editais, divergência administrativa, posição
 do administrador judicial, impugnação, decisões, recursos, garantias e o confronto entre a
 classificação das recuperandas e a sustentada pelo credor.
+
+A **Análise resumida** condensa o caso em uma tela, sempre na mesma ordem: recuperandos,
+advogados, administrador judicial, status, classe e valor do credor analisado, lastros, garantias
+(com a pergunta de essencialidade em aberto) e ações relacionadas — impugnações de crédito e
+execuções com o SAT de cada uma. Sai em texto, para colar em e-mail ou anotação, e em Word. Campo
+sem informação nas fontes vira marcador (`*`) em vez de sumir: o resumo também serve de roteiro do
+que ainda falta apurar.
 
 O relatório consolidado pode ser reapresentado junto de novos processos relacionados, reaproveitando
 a análise já feita em vez de reextrair os autos inteiros.
@@ -166,6 +189,7 @@ GEMINI_MODEL_RELATORIO=gemini-3.6-flash        # consolidação e elaboração d
 GEMINI_MODEL_ESTRUTURADO=gemini-3.5-flash-lite # dados estruturados (JSON) de dossiês e cronologias
 GEMINI_MODEL_QA=gemini-3.6-flash               # perguntas sobre relatórios já consolidados
 GEMINI_MODEL_TIMELINE=gemini-2.5-pro           # leitura conjunta dos atos societários
+GEMINI_MODEL_EXTRACAO_RESERVA=gemini-3.6-flash # última tentativa da extração quando o normal está sobrecarregado (503)
 ```
 
 A Timeline Societária usa modelo próprio porque submete todos os atos em uma chamada só, e o
@@ -194,6 +218,14 @@ chave e preserva o fluxo. Cada chamada tem espera máxima de **10 minutos** (`GE
 default 600000); passado o intervalo, a tentativa é encerrada para a análise não ficar travada.
 Conforme a classificação do erro, a operação é repetida ou outra chave é acionada — e o log registra
 qual credencial recusou e por quê, distinguindo falha de transporte de problema no documento.
+
+Sobrecarga do modelo (`503 UNAVAILABLE`, "high demand") também troca de chave, porque a capacidade
+pode variar entre projetos. Na extração de cada trecho, se todas as chaves responderem 503, o sistema
+espera e faz nova rodada por todas elas, após 30 s, 60 s, 120 s e 210 s (cerca de 7 minutos). O log
+avisa cada espera na hora. A última tentativa usa o modelo reserva (`GEMINI_MODEL_EXTRACAO_RESERVA`,
+default igual a `GEMINI_MODEL_RELATORIO`; vazio desliga a troca). O log registra que o trecho saiu
+do reserva. Se nem assim responder, o trecho falha com o erro devolvido pela API e o relatório segue
+bloqueado. Os trechos já extraídos ficam em cache para a próxima tentativa.
 
 ### Limites de processamento
 Também já são os defaults; só precisam ser cadastrados como Variables se houver necessidade de

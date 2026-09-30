@@ -19,7 +19,7 @@ from cronologia_prescricao import (
     cronologia_aplicar_html,
     exportar_html as presc_exportar_html,
 )
-from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores, rj_gerar_checklist, rj_gerar_checklist_creditos
+from rj import rj_analisar, rj_gerar_word, rj_responder, rj_gerar_excel_credores, rj_gerar_checklist, rj_gerar_checklist_creditos, rj_gerar_analise_resumida
 from matriculas import mat_gerar_excel, mat_responder
 from coleta import coleta_gerar, coleta_gerar_dossie_dispatch
 from analysis_runtime import environment_status_json
@@ -471,6 +471,7 @@ with gr.Blocks(
                 rj_excel_cred_btn     = gr.Button("Gerar Excel de Credores", variant="secondary", elem_classes=["word-download-btn"])
                 rj_checklist_btn      = gr.Button("Checklist RJ",            variant="secondary", elem_classes=["word-download-btn"])
                 rj_checklist_cred_btn = gr.Button("Gerar Checklist de Créditos", variant="secondary", elem_classes=["word-download-btn"])
+                rj_resumida_btn       = gr.Button("Análise resumida",        variant="secondary", elem_classes=["word-download-btn"])
             rj_word_file = gr.File(
                 label="", interactive=False, visible=False, height=72,
                 elem_classes=["word-file-output", "compact-file-output"],
@@ -491,6 +492,17 @@ with gr.Blocks(
                 elem_classes=["word-file-output", "compact-file-output"],
             )
             rj_checklist_cred_status = gr.Markdown("")
+            rj_resumida_file = gr.File(
+                label="Análise Resumida", interactive=False, visible=False, height=72,
+                elem_classes=["word-file-output", "compact-file-output"],
+            )
+            rj_resumida_status = gr.Markdown("")
+            # O resumo existe para ser colado em e-mail/anotação — por isso ele aparece
+            # na tela em texto, e não só como arquivo para baixar.
+            rj_resumida_texto = gr.Textbox(
+                label="Análise resumida — texto para copiar",
+                lines=20, interactive=False, visible=False,
+            )
 
             gr.HTML('<hr class="inv-divider">')
             with gr.Column(elem_classes=["qa-section"]):
@@ -817,6 +829,14 @@ with gr.Blocks(
         inputs=[rj_relatorio_state, rj_extracao_state] + rj_cred_nomes + rj_cred_docs,
         outputs=[rj_checklist_cred_file, rj_checklist_cred_status],
     ).then(_checklist_cred_fim, None, rj_checklist_cred_btn, queue=False)
+
+    _resumida_ini, _resumida_fim = _btn_gerando("Análise resumida")
+    rj_resumida_btn.click(_resumida_ini, None, rj_resumida_btn, queue=False).then(
+        fn=rj_gerar_analise_resumida,
+        inputs=[rj_relatorio_state, rj_extracao_state] + rj_cred_nomes + rj_cred_docs,
+        outputs=[rj_resumida_file, rj_resumida_status, rj_resumida_texto],
+    ).then(_resumida_fim, None, rj_resumida_btn, queue=False)
+
     rj_perguntar_btn.click(
         fn=rj_responder, inputs=[rj_pergunta, rj_relatorio_state], outputs=[rj_resposta]
     )

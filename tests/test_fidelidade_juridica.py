@@ -185,3 +185,42 @@ if __name__ == "__main__":
     test_fluxos_bloqueiam_relatorio_quando_um_chunk_falha()
     test_fluxos_redividem_recursivamente_apenas_quando_tokens_estouram()
     print("8 testes de fidelidade jurídica: OK")
+
+
+def test_replicacao_por_execucao_alcanca_relatorio_e_dossies():
+    """Juntando mais de uma execução, cada uma é um crédito próprio e a Visão
+    Jurídica é replicada — regra da Julia, que precisa chegar aos três prompts
+    (relatório de processos, relatório de RJ e dossiês)."""
+    import dossie_ppa
+    import report_template_processos as tpl
+    import report_template_rj as tpl_rj
+
+    regra = lp.REGRA_MULTIPLAS_EXECUCOES
+    assert "cada uma é um CRÉDITO próprio" in regra
+    assert "Visão Jurídica é REPLICADA por crédito" in regra
+    assert "não viram crédito novo" in regra
+
+    assert regra in lp.REGRAS_CONSOLIDACAO_PROCESSUAL
+    assert regra in tpl.SYSTEM_PROMPT
+    assert regra in tpl.REPORT_TEMPLATE_INSTRUCTIONS
+    assert regra in tpl_rj.REPORT_TEMPLATE_RJ
+    assert regra in dossie_ppa.REGRA_COMPLETUDE_PADRAO
+    assert "UM ITEM EM \"creditos\" POR EXECUÇÃO" in dossie_ppa._PROMPT_DOSSIE
+
+
+def test_rotulo_do_credito_identifica_a_execucao():
+    """"Crédito 2" não diz qual execução é — o número do processo entra no título,
+    sem duplicar quando o próprio id já o traz."""
+    from dossie_ppa import rotulo_credito
+
+    assert rotulo_credito(
+        {"id": "Crédito BASF", "numero_processo": "0001234-56.2019.8.16.0014"}, 1
+    ) == "Crédito BASF — 0001234-56.2019.8.16.0014"
+    assert rotulo_credito(
+        {"id": "Crédito BASF — 0001234-56.2019.8.16.0014",
+         "numero_processo": "0001234-56.2019.8.16.0014"}, 1
+    ) == "Crédito BASF — 0001234-56.2019.8.16.0014"
+    assert rotulo_credito({}, 3) == "Crédito 3"
+    assert rotulo_credito({"numero_processo": "0009876-54.2021.8.16.0014"}, 2) == (
+        "Crédito 2 — 0009876-54.2021.8.16.0014"
+    )
