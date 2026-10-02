@@ -189,7 +189,7 @@ GEMINI_MODEL_RELATORIO=gemini-3.6-flash        # consolidação e elaboração d
 GEMINI_MODEL_ESTRUTURADO=gemini-3.5-flash-lite # dados estruturados (JSON) de dossiês e cronologias
 GEMINI_MODEL_QA=gemini-3.6-flash               # perguntas sobre relatórios já consolidados
 GEMINI_MODEL_TIMELINE=gemini-2.5-pro           # leitura conjunta dos atos societários
-GEMINI_MODEL_EXTRACAO_RESERVA=gemini-3.6-flash # última tentativa da extração quando o normal está sobrecarregado (503)
+GEMINI_MODEL_EXTRACAO_RESERVA=gemini-3.6-flash,gemini-2.5-pro # última tentativa da extração sob sobrecarga (503)
 ```
 
 A Timeline Societária usa modelo próprio porque submete todos os atos em uma chamada só, e o
@@ -222,9 +222,11 @@ qual credencial recusou e por quê, distinguindo falha de transporte de problema
 Sobrecarga do modelo (`503 UNAVAILABLE`, "high demand") também troca de chave, porque a capacidade
 pode variar entre projetos. Na extração de cada trecho, se todas as chaves responderem 503, o sistema
 espera e faz nova rodada por todas elas, após 30 s, 60 s, 120 s e 210 s (cerca de 7 minutos). O log
-avisa cada espera na hora. A última tentativa usa o modelo reserva (`GEMINI_MODEL_EXTRACAO_RESERVA`,
-default igual a `GEMINI_MODEL_RELATORIO`; vazio desliga a troca). O log registra que o trecho saiu
-do reserva. Se nem assim responder, o trecho falha com o erro devolvido pela API e o relatório segue
+avisa cada espera na hora. A última tentativa usa um modelo reserva: o primeiro da lista
+`GEMINI_MODEL_EXTRACAO_RESERVA` (separada por vírgula; default `gemini-3.6-flash,gemini-2.5-pro`)
+que seja diferente do modelo que falhou. Assim, a extração normal cai no `3.6-flash`, e o OCR, que
+já roda nele, cai no `2.5-pro`. Lista vazia desliga a troca. O log registra que o trecho saiu do
+reserva. Se nem assim responder, o trecho falha com o erro devolvido pela API e o relatório segue
 bloqueado. Os trechos já extraídos ficam em cache para a próxima tentativa.
 
 ### Limites de processamento

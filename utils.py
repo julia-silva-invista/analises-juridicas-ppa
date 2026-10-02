@@ -293,9 +293,24 @@ def _com_paciencia_sobrecarga(fn, esperas=None, dormir=time.sleep, ao_esperar=No
     return (reserva or fn)()
 
 
-# Modelo usado na última rodada de extração quando o normal segue sobrecarregado.
+# Modelos reserva da última rodada de extração, em ordem de preferência (separados por
+# vírgula): vale o primeiro diferente do modelo que falhou. Precisa de mais de um porque
+# o OCR já usa o 3.6-flash — com reserva única, PDF escaneado nunca trocava de modelo.
 # Vazio desliga a troca de modelo.
-GEMINI_MODEL_EXTRACAO_RESERVA = os.getenv("GEMINI_MODEL_EXTRACAO_RESERVA", GEMINI_MODEL_RELATORIO)
+GEMINI_MODEL_EXTRACAO_RESERVA = os.getenv(
+    "GEMINI_MODEL_EXTRACAO_RESERVA", f"{GEMINI_MODEL_RELATORIO},gemini-2.5-pro"
+)
+
+
+def _escolher_modelo_reserva(reservas, modelo: str) -> str | None:
+    """Primeiro modelo da lista (str com vírgulas ou sequência) diferente de ``modelo``."""
+    if isinstance(reservas, str):
+        reservas = reservas.split(",")
+    for candidato in reservas or ():
+        candidato = candidato.strip()
+        if candidato and candidato != modelo:
+            return candidato
+    return None
 
 
 def _extrair_resiliente(clients, extrair, *, indice_inicial, modelo, avisar=None,
@@ -309,7 +324,9 @@ def _extrair_resiliente(clients, extrair, *, indice_inicial, modelo, avisar=None
     Devolve ``(resultado, notas, modelo_usado)``; ``avisar(msg)`` recebe, na hora,
     cada espera e a troca de modelo, para o log não parecer travado.
     """
-    reserva_modelo = GEMINI_MODEL_EXTRACAO_RESERVA if modelo_reserva is None else modelo_reserva
+    reserva_modelo = _escolher_modelo_reserva(
+        GEMINI_MODEL_EXTRACAO_RESERVA if modelo_reserva is None else modelo_reserva, modelo,
+    )
     notas: list[str] = []
     usado = [modelo]
 
@@ -332,7 +349,7 @@ def _extrair_resiliente(clients, extrair, *, indice_inicial, modelo, avisar=None
             )
 
     reserva = None
-    if reserva_modelo and reserva_modelo != modelo:
+    if reserva_modelo:
         def reserva():
             usado[0] = reserva_modelo
             notas.append(f"modelo reserva {reserva_modelo}")
