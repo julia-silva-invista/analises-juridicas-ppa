@@ -188,13 +188,16 @@ GEMINI_MODEL_OCR=gemini-3.6-flash              # leitura visual de páginas esca
 GEMINI_MODEL_RELATORIO=gemini-3.6-flash        # consolidação e elaboração da análise jurídica
 GEMINI_MODEL_ESTRUTURADO=gemini-3.5-flash-lite # dados estruturados (JSON) de dossiês e cronologias
 GEMINI_MODEL_QA=gemini-3.6-flash               # perguntas sobre relatórios já consolidados
-GEMINI_MODEL_TIMELINE=gemini-2.5-pro           # leitura conjunta dos atos societários
-GEMINI_MODEL_EXTRACAO_RESERVA=gemini-3.6-flash,gemini-2.5-pro # última tentativa da extração sob sobrecarga (503)
+GEMINI_MODEL_TIMELINE=gemini-3.6-flash         # leitura conjunta dos atos societários
+GEMINI_MODEL_EXTRACAO_RESERVA=gemini-3.6-flash,gemini-3.5-flash # última tentativa da extração sob sobrecarga (503)
 ```
 
-A Timeline Societária usa modelo próprio porque submete todos os atos em uma chamada só, e o
-default dela é de outra família (`gemini-2.5-pro`). Se o modelo configurado não existir na chave em
-uso, o módulo interrompe com a lista dos modelos disponíveis, em vez de falhar em silêncio.
+A Timeline Societária usa variável própria porque submete todos os atos em uma chamada só. O
+default era `gemini-2.5-pro`, descontinuado pela Google para chaves novas (o modelo segue no catálogo,
+mas a geração devolve 404 "no longer available"); hoje é `gemini-3.6-flash`. Se o Space tiver
+`GEMINI_MODEL_TIMELINE=gemini-2.5-pro` gravado, a variável vence o default e precisa ser trocada. Se o
+modelo configurado não existir ou tiver sido descontinuado, o módulo interrompe dizendo isso, em vez
+de falhar em silêncio.
 
 Em páginas com camada textual confiável, `GEMINI_MODEL_EXTRACAO` faz a leitura factual em alto
 volume. Se o detector local encontrar qualquer página digitalizada no trecho, `GEMINI_MODEL_OCR`
@@ -223,9 +226,9 @@ Sobrecarga do modelo (`503 UNAVAILABLE`, "high demand") também troca de chave, 
 pode variar entre projetos. Na extração de cada trecho, se todas as chaves responderem 503, o sistema
 espera e faz nova rodada por todas elas, após 30 s, 60 s, 120 s e 210 s (cerca de 7 minutos). O log
 avisa cada espera na hora. A última tentativa usa um modelo reserva: o primeiro da lista
-`GEMINI_MODEL_EXTRACAO_RESERVA` (separada por vírgula; default `gemini-3.6-flash,gemini-2.5-pro`)
+`GEMINI_MODEL_EXTRACAO_RESERVA` (separada por vírgula; default `gemini-3.6-flash,gemini-3.5-flash`)
 que seja diferente do modelo que falhou. Assim, a extração normal cai no `3.6-flash`, e o OCR, que
-já roda nele, cai no `2.5-pro`. Lista vazia desliga a troca. O log registra que o trecho saiu do
+já roda nele, cai no `3.5-flash`. Lista vazia desliga a troca. O log registra que o trecho saiu do
 reserva. Se nem assim responder, o trecho falha com o erro devolvido pela API e o relatório segue
 bloqueado. Os trechos já extraídos ficam em cache para a próxima tentativa.
 

@@ -298,7 +298,7 @@ def _com_paciencia_sobrecarga(fn, esperas=None, dormir=time.sleep, ao_esperar=No
 # o OCR já usa o 3.6-flash — com reserva única, PDF escaneado nunca trocava de modelo.
 # Vazio desliga a troca de modelo.
 GEMINI_MODEL_EXTRACAO_RESERVA = os.getenv(
-    "GEMINI_MODEL_EXTRACAO_RESERVA", f"{GEMINI_MODEL_RELATORIO},gemini-2.5-pro"
+    "GEMINI_MODEL_EXTRACAO_RESERVA", f"{GEMINI_MODEL_RELATORIO},gemini-3.5-flash"
 )
 
 

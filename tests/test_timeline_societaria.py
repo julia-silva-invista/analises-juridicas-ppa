@@ -139,7 +139,7 @@ def testar_404_lista_os_modelos_quando_o_configurado_nao_existe(monkeypatch, pdf
     registro = []
     erro_404 = "404 NOT_FOUND. {'error': {'code': 404, 'message': 'models/x is not found.'}}"
     monkeypatch.setattr(timeline, "_get_gemini_clients", lambda: [
-        _ClienteFalso(registro, "k1", erro=erro_404, catalogo=["gemini-3.6-flash", "gemini-3.5-flash"]),
+        _ClienteFalso(registro, "k1", erro=erro_404, catalogo=["gemini-3.5-flash", "gemini-3.5-flash-lite"]),
     ])
 
     with pytest.raises(gr.Error) as capturado:
@@ -147,7 +147,26 @@ def testar_404_lista_os_modelos_quando_o_configurado_nao_existe(monkeypatch, pdf
 
     aviso = str(capturado.value)
     assert "GEMINI_MODEL_TIMELINE" in aviso
-    assert "gemini-3.6-flash" in aviso and "gemini-3.5-flash" in aviso
+    assert "gemini-3.5-flash," in aviso and "gemini-3.5-flash-lite" in aviso
+
+
+def testar_404_de_modelo_descontinuado_manda_trocar_a_variavel(monkeypatch, pdf_qualquer):
+    """O 2.5-pro saiu de linha e continuou no catálogo: o aviso dizia "o 404 veio de
+    outra coisa" quando a causa era o próprio modelo."""
+    registro = []
+    erro_404 = ("404 NOT_FOUND. {'error': {'code': 404, 'message': 'This model "
+                "models/gemini-2.5-pro is no longer available to new users.'}}")
+    monkeypatch.setattr(timeline, "_get_gemini_clients", lambda: [
+        _ClienteFalso(registro, "k1", erro=erro_404, catalogo=[timeline.MODEL_TIMELINE]),
+    ])
+
+    with pytest.raises(gr.Error) as capturado:
+        list(timeline.timeline_analisar([pdf_qualquer]))
+
+    aviso = str(capturado.value)
+    assert "descontinuado" in aviso and "GEMINI_MODEL_TIMELINE" in aviso
+    assert "outra coisa" not in aviso
+    assert "no longer available" in aviso, "a resposta crua da API precisa aparecer"
 
 
 def testar_mensagem_mostra_o_que_cada_chave_respondeu(monkeypatch, pdf_qualquer):

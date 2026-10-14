@@ -322,10 +322,10 @@ def test_concluidos_com_avisos_intercala_avisos():
 
 def test_reserva_pula_o_modelo_que_falhou():
     from utils import _escolher_modelo_reserva
-    reservas = "gemini-3.6-flash,gemini-2.5-pro"
+    reservas = "gemini-3.6-flash,gemini-3.5-flash"
     assert _escolher_modelo_reserva(reservas, "gemini-3.5-flash-lite") == "gemini-3.6-flash"
     # OCR já roda no 3.6-flash: a reserva precisa ser outro modelo
-    assert _escolher_modelo_reserva(reservas, "gemini-3.6-flash") == "gemini-2.5-pro"
+    assert _escolher_modelo_reserva(reservas, "gemini-3.6-flash") == "gemini-3.5-flash"
     assert _escolher_modelo_reserva("", "gemini-3.6-flash") is None
     assert _escolher_modelo_reserva("gemini-3.6-flash", "gemini-3.6-flash") is None
 
@@ -336,14 +336,14 @@ def test_extrair_resiliente_ocr_cai_no_segundo_reserva():
 
     def extrair(client, modelo):
         chamadas.append(modelo)
-        if modelo != "gemini-2.5-pro":
+        if modelo != "gemini-3.5-flash":
             raise RuntimeError("503 UNAVAILABLE. high demand")
         return (0, "texto", "")
 
     _resultado, _notas, usado = _extrair_resiliente(
         ["c1"], extrair, indice_inicial=0, modelo="gemini-3.6-flash",
         esperas=(1,), dormir=lambda s: None,
-        modelo_reserva="gemini-3.6-flash,gemini-2.5-pro",
+        modelo_reserva="gemini-3.6-flash,gemini-3.5-flash",
     )
-    assert usado == "gemini-2.5-pro"
-    assert chamadas[-1] == "gemini-2.5-pro"
+    assert usado == "gemini-3.5-flash"
+    assert chamadas[-1] == "gemini-3.5-flash"

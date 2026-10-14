@@ -33,7 +33,9 @@ from utils import (
 )
 
 
-MODEL_TIMELINE = os.getenv("GEMINI_MODEL_TIMELINE", "gemini-2.5-pro")
+# O 2.5-pro foi aposentado pela Google para chaves novas: continua no catálogo, mas a
+# geração devolve 404 "no longer available to new users".
+MODEL_TIMELINE = os.getenv("GEMINI_MODEL_TIMELINE", "gemini-3.6-flash")
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "cronologia_societaria.docx"
 
 PROMPT_TIMELINE = """\
@@ -157,6 +159,12 @@ def _mensagem_erro_gemini(exc: Exception, clients: list | None = None) -> str:
             return (
                 f"O modelo '{MODEL_TIMELINE}' não existe nesta chave. Ajuste "
                 f"GEMINI_MODEL_TIMELINE nas variáveis do Space para um destes: {proximos}." + rodape
+            )
+        if "no longer available" in _detalhe_erro_gemini(exc).lower():
+            return (
+                f"O modelo '{MODEL_TIMELINE}' foi descontinuado pela Google para esta chave "
+                "(segue listado no catálogo, mas não gera mais). Ajuste GEMINI_MODEL_TIMELINE "
+                f"nas variáveis do Space. Resposta da API: {_resumo_erro_gemini(exc)}" + rodape
             )
         disponivel = " (o modelo existe nesta chave, então o 404 veio de outra coisa)" if modelos else ""
         return f"A API Gemini respondeu 404{disponivel}: {_resumo_erro_gemini(exc)}" + rodape
